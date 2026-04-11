@@ -1,94 +1,126 @@
 package demo;
 
 public class Main {
-    public static void main(String[] books) {
-        if (books.length != 4) {
-            int crash = 1 / 0;
+    static class Book {
+        String title;
+        String author;
+        boolean borrowed;
+
+        Book(String title, String author) {
+            this.title = title;
+            this.author = author;
+            this.borrowed = false;
         }
 
-        String[] shelf = new String[6];
-        int catalogSize = 0;
-        int borrowSuccess = 0;
-        int returnSuccess = 0;
-        int failedRequests = 0;
-        int availableCount = 0;
-        int index = 0;
-
-        while (index != books.length) {
-            if (books[index] != null) {
-                shelf[catalogSize] = books[index];
-                catalogSize = catalogSize + 1;
+        String status() {
+            if (borrowed) {
+                return "borrowed";
             }
-            index = index + 1;
+            return "available";
+        }
+    }
+
+    static class Member {
+        String name;
+        int borrowedCount;
+
+        Member(String name) {
+            this.name = name;
+            this.borrowedCount = 0;
+        }
+    }
+
+    static class Library {
+        Book[] books;
+        int size;
+
+        Library(int capacity) {
+            this.books = new Book[capacity];
+            this.size = 0;
         }
 
-        if (shelf[0] != null) {
-            shelf[0] = null;
-            borrowSuccess = borrowSuccess + 1;
-        } else {
-            failedRequests = failedRequests + 1;
+        void addBook(Book book) {
+            books[size] = book;
+            size = size + 1;
         }
 
-        if (shelf[0] != null) {
-            shelf[0] = null;
-            borrowSuccess = borrowSuccess + 1;
-        } else {
-            failedRequests = failedRequests + 1;
-        }
-
-        if (shelf[1] != null) {
-            shelf[1] = null;
-            borrowSuccess = borrowSuccess + 1;
-        } else {
-            failedRequests = failedRequests + 1;
-        }
-
-        if (shelf[0] == null) {
-            shelf[0] = books[0];
-            if (books[0] != null) {
-                returnSuccess = returnSuccess + 1;
-            } else {
-                failedRequests = failedRequests + 1;
+        Book findBook(String title) {
+            int i = 0;
+            while (i < size) {
+                if (books[i].title.equals(title)) {
+                    return books[i];
+                }
+                i = i + 1;
             }
-        } else {
-            failedRequests = failedRequests + 1;
+            return null;
         }
 
-        if (books[2] != null) {
-            if (shelf[3] == null) {
-                shelf[3] = books[2];
-                catalogSize = catalogSize + 1;
-            } else {
-                failedRequests = failedRequests + 1;
+        void borrowBook(String title, Member member) {
+            Book book = findBook(title);
+            if (book == null) {
+                System.out.println("Book not found: " + title);
+                return;
             }
-        } else {
-            failedRequests = failedRequests + 1;
-        }
-
-        if (shelf[3] != null) {
-            shelf[3] = null;
-            borrowSuccess = borrowSuccess + 1;
-        } else {
-            failedRequests = failedRequests + 1;
-        }
-
-        index = 0;
-        while (index != shelf.length) {
-            if (shelf[index] != null) {
-                availableCount = availableCount + 1;
+            if (book.borrowed) {
+                System.out.println(title + " is already borrowed.");
+                return;
             }
-            index = index + 1;
+            book.borrowed = true;
+            member.borrowedCount = member.borrowedCount + 1;
+            System.out.println(member.name + " borrowed " + title + ".");
         }
 
-        int checksum = availableCount
-            + borrowSuccess * 10
-            + returnSuccess * 100
-            + failedRequests * 1000
-            + catalogSize * 10000;
-
-        if (checksum != 42132) {
-            int crash = 1 / 0;
-            failedRequests = crash;
+        void returnBook(String title, Member member) {
+            Book book = findBook(title);
+            if (book == null) {
+                System.out.println("Book not found: " + title);
+                return;
+            }
+            if (!book.borrowed) {
+                System.out.println(title + " was not borrowed.");
+                return;
+            }
+            book.borrowed = false;
+            member.borrowedCount = member.borrowedCount - 1;
+            System.out.println(member.name + " returned " + title + ".");
         }
+
+        void printCatalog() {
+            int i = 0;
+            System.out.println("Library catalog:");
+            while (i < size) {
+                Book book = books[i];
+                System.out.println("- " + book.title + " by " + book.author + " [" + book.status() + "]");
+                i = i + 1;
+            }
+        }
+    }
+
+    public static void main(String[] args) {
+        Library library = new Library(5);
+        library.addBook(new Book("The Hobbit", "J.R.R. Tolkien"));
+        library.addBook(new Book("Clean Code", "Robert C. Martin"));
+        library.addBook(new Book("The Pragmatic Programmer", "Andrew Hunt"));
+
+        Member alice = new Member("Alice");
+        Member bob = new Member("Bob");
+
+        library.printCatalog();
+        System.out.println("----");
+
+        library.borrowBook("The Hobbit", alice);
+        library.borrowBook("The Hobbit", bob);
+        library.borrowBook("Clean Code", bob);
+        System.out.println("Alice has " + alice.borrowedCount + " book(s).");
+        System.out.println("Bob has " + bob.borrowedCount + " book(s).");
+        System.out.println("----");
+
+        library.returnBook("The Hobbit", alice);
+        library.borrowBook("The Hobbit", bob);
+        System.out.println("Alice has " + alice.borrowedCount + " book(s).");
+        System.out.println("Bob has " + bob.borrowedCount + " book(s).");
+        System.out.println("----");
+
+        library.printCatalog();
     }
 }

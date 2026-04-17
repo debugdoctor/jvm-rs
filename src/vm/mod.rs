@@ -1616,10 +1616,56 @@ impl Vm {
             Value::Float(v) => Ok(format_vm_float(v as f64)),
             Value::Double(v) => Ok(format_vm_float(v)),
             Value::Reference(Reference::Null) => Ok("null".to_string()),
-            Value::Reference(reference) => self
-                .stringify_reference(reference)
-                .or_else(|_| Ok(format!("Object@{reference:?}"))),
+            Value::Reference(reference) => self.stringify_heap(reference),
             Value::ReturnAddress(pc) => Ok(format!("ret@{pc}")),
+        }
+    }
+
+    /// Format a heap value for user-visible output (Object.toString equivalent
+    /// for built-in wrapper classes). Falls back to `class@ref` for unknown
+    /// object kinds so tracing still produces useful strings.
+    pub(super) fn stringify_heap(&self, reference: Reference) -> Result<String, VmError> {
+        match reference {
+            Reference::Null => Ok("null".to_string()),
+            _ => {
+                let heap = self.heap.lock().unwrap();
+                let value = heap.get(reference)?;
+                Ok(match value {
+                    HeapValue::String(s) => s.clone(),
+                    HeapValue::StringBuilder(s) => s.clone(),
+                    HeapValue::Object { class_name, fields } => match class_name.as_str() {
+                        "java/lang/Integer" => match fields.get("value") {
+                            Some(Value::Int(i)) => i.to_string(),
+                            _ => "0".to_string(),
+                        },
+                        "java/lang/Long" => match fields.get("value") {
+                            Some(Value::Long(i)) => i.to_string(),
+                            _ => "0".to_string(),
+                        },
+                        "java/lang/Boolean" => match fields.get("value") {
+                            Some(Value::Int(i)) if *i != 0 => "true".to_string(),
+                            _ => "false".to_string(),
+                        },
+                        other => format!("{other}@{reference:?}"),
+                    },
+                    other => format!("{}@{reference:?}", other.kind_name()),
+                })
+            }
+        }
+    }
+
+    /// Format a value per the single descriptor character used by
+    /// `StringConcatFactory.makeConcatWithConstants`. Promotes booleans to
+    /// `"true"/"false"` and chars to their `char` code point instead of the
+    /// raw int fallback.
+    fn stringify_concat_arg(&self, ty: u8, value: Value) -> Result<String, VmError> {
+        match ty {
+            b'Z' => Ok(if value.as_int()? != 0 { "true" } else { "false" }.to_string()),
+            b'C' => {
+                let ch = char::from_u32(value.as_int()? as u32).unwrap_or('\0');
+                Ok(ch.to_string())
+            }
+            _ => self.stringify_value(value),
         }
     }
 
@@ -1628,7 +1674,11 @@ impl Vm {
         recipe: Option<&str>,
         constants: &[String],
         args: &[Value],
+        descriptor: &str,
     ) -> Result<String, VmError> {
+        let arg_types = parse_arg_types(descriptor).unwrap_or_default();
+        let type_for = |index: usize| arg_types.get(index).copied().unwrap_or(b'L');
+
         if let Some(recipe) = recipe {
             let mut result = String::new();
             let mut arg_index = 0usize;
@@ -1641,7 +1691,9 @@ impl Vm {
                                 descriptor: format!("missing invokedynamic concat arg at {arg_index}"),
                             }
                         })?;
-                        result.push_str(&self.stringify_value(value)?);
+                        result.push_str(
+                            &self.stringify_concat_arg(type_for(arg_index), value)?,
+                        );
                         arg_index += 1;
                     }
                     '\u{0002}' => {
@@ -1662,8 +1714,8 @@ impl Vm {
         }
 
         let mut result = String::new();
-        for value in args {
-            result.push_str(&self.stringify_value(*value)?);
+        for (i, value) in args.iter().enumerate() {
+            result.push_str(&self.stringify_concat_arg(type_for(i), *value)?);
         }
         Ok(result)
     }
@@ -2958,7 +3010,12 @@ impl Vm {
                             thread.current_frame_mut().push(Value::Reference(proxy))?;
                         }
                         InvokeDynamicKind::StringConcat { recipe, constants } => {
-                            let concat = self.build_string_concat(recipe.as_deref(), constants, &args)?;
+                            let concat = self.build_string_concat(
+                                recipe.as_deref(),
+                                constants,
+                                &args,
+                                &site.descriptor,
+                            )?;
                             thread.current_frame_mut().push(self.new_string(concat))?;
                         }
                         InvokeDynamicKind::Unknown => {
@@ -3319,18 +3376,32 @@ impl Vm {
 
     /// Check whether `class_name` is the same as, or a sub-class of, `target`.
     fn is_instance_of(&mut self, class_name: &str, target: &str) -> Result<bool, VmError> {
-        let mut current = class_name.to_string();
-        loop {
+        // BFS over super-classes and all directly/transitively implemented interfaces.
+        let mut queue: Vec<String> = vec![class_name.to_string()];
+        let mut seen: Vec<String> = Vec::new();
+        while let Some(current) = queue.pop() {
             if current == target {
                 return Ok(true);
             }
-            self.ensure_class_loaded(&current)?;
-            let class = self.get_class(&current)?;
-            match &class.super_class {
-                Some(parent) => current = parent.clone(),
-                None => return Ok(false),
+            if seen.contains(&current) {
+                continue;
+            }
+            seen.push(current.clone());
+            if self.ensure_class_loaded(&current).is_err() {
+                continue;
+            }
+            let class = match self.get_class(&current) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            if let Some(parent) = &class.super_class {
+                queue.push(parent.clone());
+            }
+            for iface in &class.interfaces {
+                queue.push(iface.clone());
             }
         }
+        Ok(false)
     }
 
     /// Shared dispatch logic for `invokevirtual` and `invokespecial`.
@@ -3448,6 +3519,51 @@ fn default_value_for_descriptor(descriptor: &str) -> Value {
         Some(b'L') | Some(b'[') => Value::Reference(Reference::Null),
         _ => Value::Int(0),
     }
+}
+
+/// Parse the leading descriptor byte for every parameter in a method descriptor.
+/// Reference types collapse to `b'L'`, arrays to `b'['`; primitives keep their
+/// descriptor letter. Returns `None` for malformed descriptors.
+fn parse_arg_types(descriptor: &str) -> Option<Vec<u8>> {
+    let bytes = descriptor.as_bytes();
+    if bytes.first() != Some(&b'(') {
+        return None;
+    }
+    let mut out = Vec::new();
+    let mut i = 1;
+    while i < bytes.len() && bytes[i] != b')' {
+        match bytes[i] {
+            c @ (b'B' | b'C' | b'D' | b'F' | b'I' | b'J' | b'S' | b'Z') => {
+                out.push(c);
+                i += 1;
+            }
+            b'L' => {
+                out.push(b'L');
+                i += 1;
+                while i < bytes.len() && bytes[i] != b';' {
+                    i += 1;
+                }
+                i += 1;
+            }
+            b'[' => {
+                out.push(b'[');
+                while i < bytes.len() && bytes[i] == b'[' {
+                    i += 1;
+                }
+                if i < bytes.len() && bytes[i] == b'L' {
+                    i += 1;
+                    while i < bytes.len() && bytes[i] != b';' {
+                        i += 1;
+                    }
+                    i += 1;
+                } else if i < bytes.len() {
+                    i += 1;
+                }
+            }
+            _ => return None,
+        }
+    }
+    Some(out)
 }
 
 fn parse_arg_count(descriptor: &str) -> Result<usize, VmError> {

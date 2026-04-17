@@ -164,6 +164,8 @@ impl Vm {
             ("valueOf", "(I)Ljava/lang/Integer;"),
             ("parseInt", "(Ljava/lang/String;)I"),
             ("parseInt", "(Ljava/lang/String;I)I"),
+            ("compareTo", "(Ljava/lang/Integer;)I"),
+            ("compareTo", "(Ljava/lang/Object;)I"),
             ("toString", "(I)Ljava/lang/String;"),
             ("toString", "(II)Ljava/lang/String;"),
             ("toBinaryString", "(I)Ljava/lang/String;"),
@@ -385,6 +387,55 @@ impl Vm {
                 instance_fields: vec![],
                 interfaces: vec![],
             });
+
+        // java/lang/Comparable — marker-only; real dispatch lands on each
+        // implementing class's `compareTo` native via `resolve_method`.
+        self.register_class(RuntimeClass {
+                name: "java/lang/Comparable".to_string(),
+                super_class: None,
+                methods: BTreeMap::new(),
+                static_fields: BTreeMap::new(),
+                instance_fields: vec![],
+                interfaces: vec![],
+            });
+
+        // java/lang/CharSequence — used by `String.contains` and similar.
+        self.register_class(RuntimeClass {
+                name: "java/lang/CharSequence".to_string(),
+                super_class: None,
+                methods: BTreeMap::new(),
+                static_fields: BTreeMap::new(),
+                instance_fields: vec![],
+                interfaces: vec![],
+            });
+
+        // Mark built-in wrapper types as implementing Comparable so `checkcast`
+        // and interface dispatch both succeed.
+        for boxed in [
+            "java/lang/Integer",
+            "java/lang/Long",
+            "java/lang/Boolean",
+        ] {
+            if let Some(class) = self
+                .runtime
+                .lock()
+                .unwrap()
+                .classes
+                .get_mut(boxed)
+            {
+                class.interfaces.push("java/lang/Comparable".to_string());
+            }
+        }
+        if let Some(class) = self
+            .runtime
+            .lock()
+            .unwrap()
+            .classes
+            .get_mut("java/lang/String")
+        {
+            class.interfaces.push("java/lang/Comparable".to_string());
+            class.interfaces.push("java/lang/CharSequence".to_string());
+        }
 
         // java/lang/Thread
         let mut thread_methods = BTreeMap::new();
@@ -835,6 +886,12 @@ impl Vm {
             ("java/lang/Integer", "compare", "(II)I") => {
                 let a = args[0].as_int()?;
                 let b = args[1].as_int()?;
+                Ok(Some(Value::Int(a.cmp(&b) as i32)))
+            }
+            ("java/lang/Integer", "compareTo", "(Ljava/lang/Integer;)I")
+            | ("java/lang/Integer", "compareTo", "(Ljava/lang/Object;)I") => {
+                let a = self.integer_value(args[0].as_reference()?)?;
+                let b = self.integer_value(args[1].as_reference()?)?;
                 Ok(Some(Value::Int(a.cmp(&b) as i32)))
             }
 
@@ -1444,13 +1501,7 @@ impl Vm {
             "(D)Ljava/lang/StringBuilder;" => Ok(format_float(args[0].as_double()?)),
             "(Ljava/lang/Object;)Ljava/lang/StringBuilder;" => {
                 let r = args[0].as_reference()?;
-                if r == Reference::Null {
-                    Ok("null".to_string())
-                } else {
-                    // Try to stringify; fall back to class@hash
-                    self.stringify_reference(r)
-                        .or_else(|_| Ok(format!("Object@{r:?}")))
-                }
+                self.stringify_heap(r)
             }
             _ => Ok("?".to_string()),
         }
@@ -1473,6 +1524,17 @@ impl Vm {
     /// Whether `class_name` is `java/lang/Throwable` or one of its subclasses.
     fn is_throwable_class(&mut self, class_name: &str) -> Result<bool, VmError> {
         self.is_instance_of(class_name, "java/lang/Throwable")
+    }
+
+    /// Unbox an `Integer` heap reference to its primitive `i32`.
+    fn integer_value(&self, reference: Reference) -> Result<i32, VmError> {
+        match self.heap.lock().unwrap().get(reference)? {
+            HeapValue::Object { fields, .. } => Ok(fields
+                .get("value")
+                .and_then(|v| if let Value::Int(i) = v { Some(*i) } else { None })
+                .unwrap_or(0)),
+            _ => Ok(0),
+        }
     }
 
     /// Copy `length` elements between typed arrays, matching `System.arraycopy` semantics

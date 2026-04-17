@@ -64,6 +64,15 @@ impl ClassFile {
         self.constant_pool.class_name(self.super_class).map(Some)
     }
 
+    /// Names of every directly implemented interface. Returns an empty list for
+    /// classes that do not declare any interface.
+    pub fn interface_names(&self) -> Result<Vec<&str>, ClassFileError> {
+        self.interfaces
+            .iter()
+            .map(|&index| self.constant_pool.class_name(index))
+            .collect()
+    }
+
     pub fn bootstrap_methods(&self) -> &[BootstrapMethod] {
         for attr in &self.attributes {
             if let AttributeInfo::BootstrapMethods(methods) = attr {

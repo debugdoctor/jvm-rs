@@ -224,6 +224,11 @@ pub struct RuntimeClass {
     pub static_fields: BTreeMap<String, Value>,
     /// Instance field definitions: (name, descriptor).
     pub instance_fields: Vec<(String, String)>,
+    /// Names of directly implemented interfaces. Empty for built-in classes and for
+    /// classes that do not declare any interface. Used by `resolve_method` to find
+    /// interface `default` methods when no class-hierarchy method matches.
+    #[doc(hidden)]
+    pub interfaces: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -766,13 +771,42 @@ impl HeapValue {
     }
 }
 
-#[derive(Debug, Default, Clone)]
+/// Snapshot of garbage-collector counters for tooling / tests.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct GcStats {
+    /// Number of completed collections.
+    pub collections: u64,
+    /// Cumulative number of objects freed across all collections.
+    pub freed: u64,
+    /// Number of live heap slots after the most recent collection.
+    pub live: usize,
+    /// Total number of allocations observed since VM start.
+    pub total_allocations: u64,
+}
+
+#[derive(Debug, Clone)]
 struct Heap {
     values: Vec<Option<HeapValue>>,
     /// Number of live objects (approximate, updated by GC).
     live_count: usize,
     /// Number of allocations since last GC.
     allocs_since_gc: usize,
+    /// Allocation threshold that triggers collection. `usize::MAX` disables GC.
+    gc_threshold: usize,
+    /// Cumulative GC statistics.
+    stats: GcStats,
+}
+
+impl Default for Heap {
+    fn default() -> Self {
+        Self {
+            values: Vec::new(),
+            live_count: 0,
+            allocs_since_gc: 0,
+            gc_threshold: 1024,
+            stats: GcStats::default(),
+        }
+    }
 }
 
 impl Heap {
@@ -782,6 +816,7 @@ impl Heap {
 
     fn allocate(&mut self, value: HeapValue) -> Reference {
         self.allocs_since_gc += 1;
+        self.stats.total_allocations = self.stats.total_allocations.saturating_add(1);
         // Try to reuse a freed slot.
         for (i, slot) in self.values.iter_mut().enumerate() {
             if slot.is_none() {
@@ -1094,7 +1129,7 @@ impl Heap {
         }
 
         // Sweep: free unmarked objects.
-        let mut freed = 0;
+        let mut freed = 0u64;
         for (i, slot) in self.values.iter_mut().enumerate() {
             if slot.is_some() && !marked[i] {
                 *slot = None;
@@ -1109,7 +1144,13 @@ impl Heap {
             self.values.pop();
         }
 
-        let _ = freed; // available for tracing if needed
+        self.stats.collections = self.stats.collections.saturating_add(1);
+        self.stats.freed = self.stats.freed.saturating_add(freed);
+        self.stats.live = self.live_count;
+    }
+
+    fn should_collect(&self) -> bool {
+        self.gc_threshold != usize::MAX && self.allocs_since_gc >= self.gc_threshold
     }
 }
 
@@ -1297,6 +1338,33 @@ impl Vm {
 
     pub fn set_trace(&mut self, enabled: bool) {
         self.trace = enabled;
+    }
+
+    /// Set the number of allocations between automatic GC passes. Use
+    /// [`Self::disable_gc`] to switch automatic collection off entirely.
+    pub fn set_gc_threshold(&mut self, allocations: usize) {
+        self.heap.lock().unwrap().gc_threshold = allocations.max(1);
+    }
+
+    /// Turn off automatic GC. Programs can still call [`Self::request_gc`]
+    /// explicitly (for example after a workload that produces transient garbage).
+    pub fn disable_gc(&mut self) {
+        self.heap.lock().unwrap().gc_threshold = usize::MAX;
+    }
+
+    /// Force a GC pass using the current thread's root set. Intended for tests
+    /// and tools that want deterministic heap shape; production code should let
+    /// the VM trigger collections on its own.
+    pub fn request_gc(&mut self) {
+        let thread = Thread {
+            frames: Vec::new(),
+        };
+        self.collect_garbage(&thread);
+    }
+
+    /// Snapshot current GC counters.
+    pub fn gc_stats(&self) -> GcStats {
+        self.heap.lock().unwrap().stats
     }
 
     /// Set the classpath entries used for on-demand class loading.
@@ -1755,8 +1823,8 @@ impl Vm {
         let mut thread = Thread::new(method);
 
         loop {
-            // Trigger GC when allocation pressure is high.
-            if self.heap.lock().unwrap().allocs_since_gc >= 1024 {
+            // Trigger GC when allocation pressure crosses the configured threshold.
+            if self.heap.lock().unwrap().should_collect() {
                 self.collect_garbage(&thread);
             }
 
@@ -1810,6 +1878,13 @@ impl Vm {
                         &mut thread,
                         "java/lang/ClassCastException",
                     )?;
+                }
+                Err(VmError::UnhandledException { class_name }) => {
+                    // Native methods return `UnhandledException` to signal a Java-level
+                    // throw. Try to deliver it to a matching handler. If no frame
+                    // handles it, `throw_new_exception` re-returns `UnhandledException`
+                    // and it propagates out of `execute`.
+                    self.throw_new_exception(&mut thread, &class_name)?;
                 }
                 Err(err) => return Err(err),
             }
@@ -3176,6 +3251,11 @@ impl Vm {
 
     /// Resolve a method by walking the class hierarchy from `start_class` upward.
     ///
+    /// If no match is found along the super-class chain, fall back to searching
+    /// every interface implemented (directly or transitively) by any visited
+    /// class. This lets `invokeinterface` / `invokevirtual` pick up `default`
+    /// interface methods.
+    ///
     /// Returns `(resolved_class_name, class_method)`.
     fn resolve_method(
         &mut self,
@@ -3183,6 +3263,7 @@ impl Vm {
         method_name: &str,
         descriptor: &str,
     ) -> Result<(String, ClassMethod), VmError> {
+        let mut visited_interfaces: Vec<String> = Vec::new();
         let mut current = start_class.to_string();
         loop {
             self.ensure_class_loaded(&current)?;
@@ -3193,17 +3274,47 @@ impl Vm {
             {
                 return Ok((current, m.clone()));
             }
+            for iface in &class.interfaces {
+                if !visited_interfaces.contains(iface) {
+                    visited_interfaces.push(iface.clone());
+                }
+            }
             match &class.super_class {
                 Some(parent) => current = parent.clone(),
-                None => {
-                    return Err(VmError::MethodNotFound {
-                        class_name: start_class.to_string(),
-                        method_name: method_name.to_string(),
-                        descriptor: descriptor.to_string(),
-                    });
+                None => break,
+            }
+        }
+
+        // Expand with transitively-extended interfaces, then look for the method.
+        let mut i = 0;
+        while i < visited_interfaces.len() {
+            let iface = visited_interfaces[i].clone();
+            i += 1;
+            if self.ensure_class_loaded(&iface).is_err() {
+                continue;
+            }
+            let class = match self.get_class(&iface) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            if let Some(m) = class
+                .methods
+                .get(&(method_name.to_string(), descriptor.to_string()))
+            {
+                return Ok((iface, m.clone()));
+            }
+            for parent in &class.interfaces {
+                if !visited_interfaces.contains(parent) {
+                    visited_interfaces.push(parent.clone());
                 }
             }
         }
+
+        Err(VmError::MethodNotFound {
+            class_name: start_class.to_string(),
+            method_name: method_name.to_string(),
+            descriptor: descriptor.to_string(),
+        })
     }
 
     /// Check whether `class_name` is the same as, or a sub-class of, `target`.
@@ -3987,6 +4098,7 @@ mod tests {
             methods: BTreeMap::new(),
             static_fields: BTreeMap::from([("value".to_string(), Value::Int(0))]),
             instance_fields: vec![],
+            interfaces: vec![],
         });
 
         let child_method = Method::new(
@@ -4233,5 +4345,40 @@ mod tests {
                 code_len: 3,
             }
         );
+    }
+
+    #[test]
+    fn gc_threshold_and_stats_tracked() {
+        let mut vm = Vm::new();
+        vm.set_gc_threshold(1);
+
+        // Force a known number of string allocations. Each `new_string`
+        // bumps `total_allocations`; since the threshold is 1 and the
+        // strings are unreachable from any rooted frame, each one should
+        // trigger a collection that frees the prior string.
+        let _ = vm.new_string("one".to_string());
+        let _ = vm.new_string("two".to_string());
+        let _ = vm.new_string("three".to_string());
+
+        // Do one final manual pass to clean up whatever remains.
+        vm.request_gc();
+
+        let stats = vm.gc_stats();
+        assert!(stats.total_allocations >= 3, "stats: {stats:?}");
+        assert!(stats.collections >= 1, "stats: {stats:?}");
+    }
+
+    #[test]
+    fn disable_gc_stops_automatic_collections() {
+        let mut vm = Vm::new();
+        vm.disable_gc();
+        for i in 0..64 {
+            let _ = vm.new_string(format!("s{i}"));
+        }
+        // No automatic collection should have run.
+        assert_eq!(vm.gc_stats().collections, 0);
+        // But a manual request still works.
+        vm.request_gc();
+        assert_eq!(vm.gc_stats().collections, 1);
     }
 }

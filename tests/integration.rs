@@ -376,3 +376,450 @@ public class LambdaDemo {
     );
     assert_eq!(output, vec!["Hello, JVM"]);
 }
+
+// --- New: extended built-in library tests ---
+
+#[test]
+fn string_utility_methods() {
+    let (_, output) = compile_and_run(
+        "string_utility_methods",
+        &[("demo/Strings.java", r#"
+package demo;
+public class Strings {
+    public static void main(String[] args) {
+        String s = "  Hello, World!  ";
+        System.out.println(s.trim());
+        System.out.println(s.trim().toUpperCase());
+        System.out.println(s.trim().toLowerCase());
+        System.out.println("abcdef".substring(2));
+        System.out.println("abcdef".substring(1, 4));
+        System.out.println("banana".indexOf('n'));
+        System.out.println("banana".indexOf("na"));
+        System.out.println("Hello".startsWith("He"));
+        System.out.println("Hello".endsWith("lo"));
+        System.out.println("Hello".contains("ell"));
+        System.out.println("".isEmpty());
+        System.out.println("ab".concat("cd"));
+        System.out.println("foo.bar".replace('.', '/'));
+        System.out.println(String.valueOf(42));
+        System.out.println(String.valueOf(true));
+    }
+}
+"#)],
+    );
+    assert_eq!(
+        output,
+        vec![
+            "Hello, World!",
+            "HELLO, WORLD!",
+            "hello, world!",
+            "cdef",
+            "bcd",
+            "2",
+            "2",
+            "true",
+            "true",
+            "true",
+            "true",
+            "abcd",
+            "foo/bar",
+            "42",
+            "true",
+        ]
+    );
+}
+
+#[test]
+fn integer_long_character_boolean_utilities() {
+    let (_, output) = compile_and_run(
+        "integer_long_character_boolean_utilities",
+        &[("demo/Utils.java", r#"
+package demo;
+public class Utils {
+    public static void main(String[] args) {
+        System.out.println(Integer.parseInt("123"));
+        System.out.println(Integer.toString(42));
+        System.out.println(Integer.toBinaryString(10));
+        System.out.println(Integer.toHexString(255));
+        System.out.println(Long.parseLong("9999999999"));
+        System.out.println(Long.toString(-7L));
+        System.out.println(Character.isDigit('5'));
+        System.out.println(Character.isLetter('a'));
+        System.out.println(Character.toUpperCase('q'));
+        System.out.println(Boolean.parseBoolean("TRUE"));
+        System.out.println(Boolean.toString(false));
+    }
+}
+"#)],
+    );
+    assert_eq!(
+        output,
+        vec!["123", "42", "1010", "ff", "9999999999", "-7", "true", "true", "Q", "true", "false"]
+    );
+}
+
+#[test]
+fn math_extended_functions() {
+    let (_, output) = compile_and_run(
+        "math_extended_functions",
+        &[("demo/MathDemo.java", r#"
+package demo;
+public class MathDemo {
+    public static void main(String[] args) {
+        System.out.println(Math.floor(3.7));
+        System.out.println(Math.ceil(3.2));
+        System.out.println(Math.round(2.5));
+        System.out.println((long) Math.log(Math.exp(3.0) + 0.5));
+        double r = Math.random();
+        System.out.println(r >= 0.0 && r < 1.0);
+    }
+}
+"#)],
+    );
+    assert_eq!(output, vec!["3.0", "4.0", "3", "3", "true"]);
+}
+
+#[test]
+fn system_arraycopy_and_properties() {
+    let (_, output) = compile_and_run(
+        "system_arraycopy_and_properties",
+        &[("demo/SysDemo.java", r#"
+package demo;
+public class SysDemo {
+    public static void main(String[] args) {
+        int[] src = {1, 2, 3, 4, 5};
+        int[] dst = new int[5];
+        System.arraycopy(src, 1, dst, 0, 3);
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < dst.length; i++) {
+            if (i > 0) sb.append(',');
+            sb.append(dst[i]);
+        }
+        System.out.println(sb.toString());
+
+        long t1 = System.currentTimeMillis();
+        long t2 = System.currentTimeMillis();
+        System.out.println(t2 >= t1);
+    }
+}
+"#)],
+    );
+    assert_eq!(output, vec!["2,3,4,0,0", "true"]);
+}
+
+#[test]
+fn objects_utility_methods() {
+    let (_, output) = compile_and_run(
+        "objects_utility_methods",
+        &[("demo/ObjDemo.java", r#"
+package demo;
+import java.util.Objects;
+public class ObjDemo {
+    public static void main(String[] args) {
+        String a = "x";
+        System.out.println(Objects.requireNonNull(a));
+        System.out.println(Objects.equals("a", "a"));
+        System.out.println(Objects.equals("a", "b"));
+        System.out.println(Objects.equals(null, null));
+        System.out.println(Objects.isNull(null));
+        System.out.println(Objects.nonNull(a));
+        try {
+            Objects.requireNonNull(null);
+            System.out.println("no-exception");
+        } catch (NullPointerException e) {
+            System.out.println("npe-caught");
+        }
+    }
+}
+"#)],
+    );
+    assert_eq!(
+        output,
+        vec!["x", "true", "false", "true", "true", "true", "npe-caught"]
+    );
+}
+
+// --- New: compatibility tests for modern javac output ---
+
+#[test]
+fn modern_javac_enhanced_for_and_var() {
+    let (_, output) = compile_and_run_with_javac_args(
+        "modern_javac_enhanced_for_and_var",
+        &[],
+        &[("demo/Modern.java", r#"
+package demo;
+public class Modern {
+    public static void main(String[] args) {
+        int[] values = {1, 2, 3, 4};
+        int sum = 0;
+        for (var v : values) {
+            sum += v;
+        }
+        System.out.println(sum);
+    }
+}
+"#)],
+    );
+    assert_eq!(output, vec!["10"]);
+}
+
+#[test]
+fn modern_javac_try_with_resources_like_pattern() {
+    // Javac compiles try-with-resources into synthetic finally blocks that use
+    // the `athrow` / exception-table machinery. This exercises those paths
+    // without requiring AutoCloseable / Throwable.addSuppressed implementations.
+    let (_, output) = compile_and_run_with_javac_args(
+        "modern_javac_finally_unwind",
+        &[],
+        &[("demo/Finally.java", r#"
+package demo;
+public class Finally {
+    static int run() {
+        try {
+            return 1;
+        } finally {
+            System.out.println("finally");
+        }
+    }
+    public static void main(String[] args) {
+        System.out.println(run());
+        try {
+            try {
+                throw new RuntimeException("boom");
+            } finally {
+                System.out.println("inner-finally");
+            }
+        } catch (RuntimeException e) {
+            System.out.println("outer-caught");
+        }
+    }
+}
+"#)],
+    );
+    assert_eq!(
+        output,
+        vec!["finally", "1", "inner-finally", "outer-caught"]
+    );
+}
+
+#[test]
+fn modern_javac_nested_lambdas_and_concat() {
+    let (_, output) = compile_and_run_with_javac_args(
+        "modern_javac_nested_lambdas",
+        &[],
+        &[("demo/Nested.java", r#"
+package demo;
+
+public class Nested {
+    interface Op {
+        int apply(int x);
+    }
+
+    public static void main(String[] args) {
+        Op add1 = x -> x + 1;
+        Op add2 = x -> add1.apply(x) + 1;
+        int result = add2.apply(10);
+        System.out.println("result=" + result);
+    }
+}
+"#)],
+    );
+    assert_eq!(output, vec!["result=12"]);
+}
+
+#[test]
+fn modern_javac_interface_default_dispatch() {
+    let (_, output) = compile_and_run_with_javac_args(
+        "modern_javac_interface_default",
+        &[],
+        &[("demo/Defaults.java", r#"
+package demo;
+public class Defaults {
+    interface Named {
+        default String describe() { return "Named:" + name(); }
+        String name();
+    }
+    static class A implements Named {
+        public String name() { return "A"; }
+    }
+    public static void main(String[] args) {
+        Named n = new A();
+        System.out.println(n.describe());
+    }
+}
+"#)],
+    );
+    assert_eq!(output, vec!["Named:A"]);
+}
+
+// --- New: regression tests for partially supported JVMS features ---
+
+#[test]
+fn regression_deeply_nested_exceptions() {
+    let (_, output) = compile_and_run(
+        "regression_nested_exceptions",
+        &[("demo/Nested.java", r#"
+package demo;
+public class Nested {
+    static int compute(int x) {
+        try {
+            try {
+                if (x == 0) throw new ArithmeticException("inner");
+                return 100 / x;
+            } catch (NullPointerException e) {
+                return -1;
+            }
+        } catch (ArithmeticException e) {
+            return -2;
+        }
+    }
+    public static void main(String[] args) {
+        System.out.println(compute(5));
+        System.out.println(compute(0));
+    }
+}
+"#)],
+    );
+    assert_eq!(output, vec!["20", "-2"]);
+}
+
+#[test]
+fn regression_tableswitch_boundaries() {
+    let (_, output) = compile_and_run(
+        "regression_tableswitch",
+        &[("demo/Table.java", r#"
+package demo;
+public class Table {
+    static String label(int n) {
+        switch (n) {
+            case 0: return "zero";
+            case 1: return "one";
+            case 2: return "two";
+            case 3: return "three";
+            default: return "other";
+        }
+    }
+    public static void main(String[] args) {
+        System.out.println(label(-1));
+        System.out.println(label(0));
+        System.out.println(label(3));
+        System.out.println(label(100));
+    }
+}
+"#)],
+    );
+    assert_eq!(output, vec!["other", "zero", "three", "other"]);
+}
+
+#[test]
+fn regression_lookupswitch_sparse_keys() {
+    let (_, output) = compile_and_run(
+        "regression_lookupswitch",
+        &[("demo/Lookup.java", r#"
+package demo;
+public class Lookup {
+    static String sparse(int n) {
+        switch (n) {
+            case 1: return "a";
+            case 100: return "b";
+            case 10000: return "c";
+            default: return "?";
+        }
+    }
+    public static void main(String[] args) {
+        System.out.println(sparse(1));
+        System.out.println(sparse(100));
+        System.out.println(sparse(10000));
+        System.out.println(sparse(50));
+    }
+}
+"#)],
+    );
+    assert_eq!(output, vec!["a", "b", "c", "?"]);
+}
+
+#[test]
+fn regression_multidim_array_allocation() {
+    let (_, output) = compile_and_run(
+        "regression_multidim_array",
+        &[("demo/Multi.java", r#"
+package demo;
+public class Multi {
+    public static void main(String[] args) {
+        int[][] grid = new int[3][2];
+        grid[0][0] = 1; grid[0][1] = 2;
+        grid[1][0] = 3; grid[1][1] = 4;
+        grid[2][0] = 5; grid[2][1] = 6;
+        int sum = 0;
+        for (int i = 0; i < grid.length; i++) {
+            for (int j = 0; j < grid[i].length; j++) {
+                sum += grid[i][j];
+            }
+        }
+        System.out.println(sum);
+    }
+}
+"#)],
+    );
+    assert_eq!(output, vec!["21"]);
+}
+
+#[test]
+fn regression_long_arithmetic_and_shifts() {
+    let (_, output) = compile_and_run(
+        "regression_long_arithmetic",
+        &[("demo/Longs.java", r#"
+package demo;
+public class Longs {
+    public static void main(String[] args) {
+        long a = 0x1234567890ABCDEFL;
+        long b = a >> 16;
+        long c = a << 4;
+        long d = a >>> 1;
+        System.out.println(b);
+        System.out.println(c);
+        System.out.println(d > 0);
+        System.out.println(a & 0xFFL);
+        System.out.println(a | 0xF000L);
+    }
+}
+"#)],
+    );
+    // Constants below are computed against the same arithmetic a real JVM
+    // would perform, so they pin down shift/logic behavior for longs.
+    assert_eq!(
+        output,
+        vec![
+            "20015998341291",           // a >> 16
+            "2541551403008843504",      // a << 4
+            "true",                     // a >>> 1 > 0
+            "239",                      // a & 0xFF
+            "1311768467294911983",      // a | 0xF000
+        ]
+    );
+}
+
+#[test]
+fn regression_string_builder_reverse_and_insert() {
+    let (_, output) = compile_and_run(
+        "regression_stringbuilder_reverse_and_insert",
+        &[("demo/SB.java", r#"
+package demo;
+public class SB {
+    public static void main(String[] args) {
+        StringBuilder sb = new StringBuilder("world");
+        sb.insert(0, "hello, ");
+        System.out.println(sb.toString());
+        sb.reverse();
+        System.out.println(sb.toString());
+        sb.deleteCharAt(0);
+        System.out.println(sb.toString());
+    }
+}
+"#)],
+    );
+    assert_eq!(
+        output,
+        vec!["hello, world", "dlrow ,olleh", "lrow ,olleh"]
+    );
+}

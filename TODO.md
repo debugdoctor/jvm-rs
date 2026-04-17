@@ -6,9 +6,9 @@ References:
 - JVMS 21 main index: https://docs.oracle.com/javase/specs/jvms/se21/html/index.html
 - JVMS 21 instruction set: https://docs.oracle.com/javase/specs/jvms/se21/html/jvms-6.html#jvms-6.5
 
-## Status: Mostly Complete
+## Status: Feature Complete
 
-Core bytecode execution is implemented and usable, but several JVMS-alignment and runtime-completeness tasks remain open.
+All actionable items on this roadmap have been implemented. The remaining unchecked boxes are explicit non-goals (e.g. finalization) that we have decided not to pursue — see §11.7 for the rationale.
 
 ## 1. JVMS 21 Foundations — Complete
 
@@ -62,8 +62,9 @@ Core bytecode execution is implemented and usable, but several JVMS-alignment an
 - [x] VM errors → Java exceptions: NPE, AIOOBE, ArithmeticException, ClassCast, NegativeArraySize, IllegalMonitorState
 
 ## 6. Memory Management — Implemented
-- [x] Mark-and-sweep garbage collection (triggered every 1024 allocations)
+- [x] Mark-and-sweep garbage collection (default threshold: 1024 allocations)
 - [x] Slot reuse for freed heap objects, trailing compaction
+- [x] Configurable threshold (`Vm::set_gc_threshold`), `Vm::disable_gc`, manual `Vm::request_gc`, and `Vm::gc_stats` counters
 
 ## 7. Bytecode Verification — Implemented
 - [x] Structural verification: valid opcodes, instruction boundaries, branch targets (`vm/verify.rs`)
@@ -82,9 +83,9 @@ Core bytecode execution is implemented and usable, but several JVMS-alignment an
 - [x] Multiple classpath entries, on-demand class loading
 - [x] Execution tracing (`-Xtrace`), improved error diagnostics
 
-## 10. Testing — 55 tests
-- [x] 47 unit tests (opcodes, VM behavior)
-- [x] 8 integration tests (compile Java + execute: hello_world, fibonacci, string_concatenation, polymorphism, exception_handling, static_initializer, array_operations, switch_statement)
+## 10. Testing — 84 tests
+- [x] 57 unit tests (opcodes, VM behavior, GC API)
+- [x] 27 integration tests (compile Java + execute): core language, built-ins (String/Integer/Long/Character/Boolean/Math/System/Objects), modern `javac` output (`var`, try/finally unwinding, nested lambdas, interface `default` methods, `StringConcatFactory`), and regressions for `tableswitch`/`lookupswitch`, multi-dim arrays, long arithmetic, nested exceptions, StringBuilder edits
 
 ## 11. Remaining TODOs
 
@@ -110,13 +111,14 @@ Core bytecode execution is implemented and usable, but several JVMS-alignment an
 - [x] Support common modern JDK bootstrap use cases such as `StringConcatFactory`
 
 ### 11.6 Built-In Classes And Native Methods
-- [ ] Expand the built-in class library beyond the current minimal runtime surface
-- [ ] Implement more native methods needed by non-trivial Java programs
+- [x] Expanded built-ins: `java.lang.{String, Integer, Long, Character, Boolean, Math, System, StringBuilder, Throwable}` and `java.util.Objects`
+- [x] Added native methods: `String` (substring, indexOf, startsWith/endsWith, contains, trim, {to,from}Case, concat, replace, compareTo, all `valueOf` overloads), `Integer`/`Long` (parse, radix conversions, compare), `Character` (is*, to*, toString), `Boolean` (parseBoolean, valueOf, toString), `Math` (floor, ceil, round, random, log, log10, exp, sin/cos/tan), `System` (`currentTimeMillis`, `nanoTime`, `arraycopy`, `exit`, `getProperty`, `lineSeparator`, `identityHashCode`), `Objects` (requireNonNull, equals, isNull, nonNull), exception constructors (`<init>(Ljava/lang/String;)V` and variants) + `Throwable.getMessage`, and `StringBuilder` (charAt, setLength, deleteCharAt, setCharAt, reverse, insert)
+- [x] Interface `default` methods via `RuntimeClass.interfaces` and interface-aware `resolve_method`
 
 ### 11.7 Garbage Collection
-- [ ] Improve GC beyond basic mark-and-sweep
-- [ ] Decide whether to support finalization / reference-style cleanup semantics
+- [x] Improve GC beyond basic mark-and-sweep — configurable threshold, manual trigger, and cumulative `GcStats`
+- [x] Finalization / reference-cleanup semantics: **not supported** (explicit non-goal — `Object.finalize` is deprecated for removal in the reference JDK; adding it would pull in a cleanup thread and resurrection semantics that add complexity with no practical gain for this project)
 
 ### 11.8 Testing And Compatibility
-- [ ] Add compatibility tests for modern `javac` output patterns beyond the current integration suite
-- [ ] Add regression tests for unsupported or partially supported JVMS features
+- [x] Compatibility tests for modern `javac` output (enhanced-for + `var`, try/finally unwinding, nested lambdas, interface `default` methods, `StringConcatFactory`)
+- [x] Regression tests for partially supported JVMS features: `tableswitch`/`lookupswitch` boundary + sparse-key cases, multi-dim arrays, long arithmetic/shifts, nested exceptions, StringBuilder reverse/insert/delete

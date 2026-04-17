@@ -421,12 +421,20 @@ fn register_class(
         .flatten()
         .map(str::to_string);
 
+    let interfaces = class_file
+        .interface_names()
+        .unwrap_or_default()
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+
     vm.register_class(RuntimeClass {
         name: class_name.to_string(),
         super_class,
         methods,
         static_fields: std::collections::BTreeMap::new(),
         instance_fields,
+        interfaces,
     });
 
     Ok(())

@@ -76,14 +76,29 @@ jvm-rs -Xtrace -cp examples demo.Main
 | Class | Methods |
 |---|---|
 | `java.lang.Object` | `<init>`, `wait`, `notify`, `notifyAll` |
-| `java.lang.System` | `out` (static field) |
+| `java.lang.System` | `out`, `err` (static fields); `currentTimeMillis`, `nanoTime`, `arraycopy`, `exit`, `getProperty`, `lineSeparator`, `identityHashCode` |
 | `java.io.PrintStream` | `println`/`print` for void, int, long, float, double, boolean, char, String |
-| `java.lang.String` | `length`, `charAt`, `equals`, `hashCode` |
-| `java.lang.Integer` | `parseInt`, `valueOf`, `intValue` |
-| `java.lang.StringBuilder` | `<init>`, `append` (all types), `toString`, `length` |
-| `java.lang.Math` | `max`, `min`, `abs` (int/long/double), `sqrt`, `pow` |
+| `java.lang.String` | `length`, `charAt`, `equals`, `hashCode`, `isEmpty`, `trim`, `toLowerCase`/`toUpperCase`, `concat`, `substring`, `indexOf`, `startsWith`/`endsWith`, `contains`, `replace(CC)`, `compareTo`, `valueOf` (all overloads) |
+| `java.lang.Integer` | `parseInt`, `valueOf`, `intValue`, `toString` (int / radix), `toBinaryString`, `toHexString`, `toOctalString`, `compare` |
+| `java.lang.Long` | `parseLong`, `valueOf`, `longValue`, `toString`, `compare` |
+| `java.lang.Character` | `isDigit`, `isLetter`, `isLetterOrDigit`, `isWhitespace`, `isUpperCase`/`isLowerCase`, `toUpperCase`/`toLowerCase`, `toString` |
+| `java.lang.Boolean` | `parseBoolean`, `valueOf`, `booleanValue`, `toString` |
+| `java.lang.StringBuilder` | `<init>`, `append` (all types), `toString`, `length`, `charAt`, `setLength`, `deleteCharAt`, `setCharAt`, `reverse`, `insert(I,String)` |
+| `java.lang.Math` | `max`, `min`, `abs` (int/long/double), `sqrt`, `pow`, `floor`, `ceil`, `round`, `random`, `log`, `log10`, `exp`, `sin`, `cos`, `tan` |
+| `java.util.Objects` | `requireNonNull`, `equals`, `isNull`, `nonNull` |
 | `java.lang.Thread` / `java.lang.Runnable` | `Thread.<init>`, `Thread.start`, `Thread.run`, `Thread.join` |
-| Exception hierarchy | `Throwable` through `ArithmeticException`, `NullPointerException`, `ClassCastException`, etc. |
+| Exception hierarchy | `Throwable` through `ArithmeticException`, `NullPointerException`, `ClassCastException`, etc., with `<init>(Ljava/lang/String;)V` and `getMessage` |
+
+### Garbage Collection
+
+Mark-and-sweep GC with configurable behavior:
+
+- `Vm::set_gc_threshold(n)` — run a collection after every `n` allocations (default `1024`)
+- `Vm::disable_gc()` — turn automatic collection off entirely
+- `Vm::request_gc()` — force a collection using the current static-field root set
+- `Vm::gc_stats()` — read cumulative `collections`, `freed`, `live`, `total_allocations`
+
+Finalization (`Object.finalize`) and reference-style cleanup are **not supported**; this matches the direction of the reference JDK where `finalize` is deprecated for removal.
 
 ## Project Structure
 
@@ -104,7 +119,7 @@ tests/
 ## Testing
 
 ```sh
-# Run all tests (55 total: 47 unit + 8 integration)
+# Run all tests (84 total: 57 unit + 27 integration)
 cargo test
 
 # Run only integration tests

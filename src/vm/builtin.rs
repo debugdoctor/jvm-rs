@@ -1,7 +1,7 @@
 //! Built-in class registration and native method dispatch.
 //!
 //! This module bootstraps the core JDK classes (`java/lang/Object`,
-//! `java/io/PrintStream`, `java/lang/System`) and provides the native
+//! `java/io/PrintStream`, `java/lang/System`, `java/lang/Thread`) and provides the native
 //! method implementations that back them.
 
 use std::collections::BTreeMap;
@@ -17,20 +17,24 @@ impl Vm {
     pub(super) fn bootstrap(&mut self) {
         // java/lang/Object
         let mut object_methods = BTreeMap::new();
-        object_methods.insert(
-            ("<init>".to_string(), "()V".to_string()),
-            ClassMethod::Native,
-        );
-        self.classes.insert(
-            "java/lang/Object".to_string(),
-            RuntimeClass {
+        for (name, desc) in [
+            ("<init>", "()V"),
+            ("wait", "()V"),
+            ("notify", "()V"),
+            ("notifyAll", "()V"),
+        ] {
+            object_methods.insert(
+                (name.to_string(), desc.to_string()),
+                ClassMethod::Native,
+            );
+        }
+        self.register_class(RuntimeClass {
                 name: "java/lang/Object".to_string(),
                 super_class: None,
                 methods: object_methods,
                 static_fields: BTreeMap::new(),
                 instance_fields: vec![],
-            },
-        );
+            });
 
         // java/io/PrintStream
         let mut ps_methods = BTreeMap::new();
@@ -57,19 +61,16 @@ impl Vm {
             ("<init>".to_string(), "()V".to_string()),
             ClassMethod::Native,
         );
-        self.classes.insert(
-            "java/io/PrintStream".to_string(),
-            RuntimeClass {
+        self.register_class(RuntimeClass {
                 name: "java/io/PrintStream".to_string(),
                 super_class: Some("java/lang/Object".to_string()),
                 methods: ps_methods,
                 static_fields: BTreeMap::new(),
                 instance_fields: vec![],
-            },
-        );
+            });
 
         // Create the PrintStream instance for System.out
-        let print_stream_ref = self.heap.allocate(HeapValue::Object {
+        let print_stream_ref = self.heap.lock().unwrap().allocate(HeapValue::Object {
             class_name: "java/io/PrintStream".to_string(),
             fields: BTreeMap::new(),
         });
@@ -77,16 +78,13 @@ impl Vm {
         // java/lang/System
         let mut system_static = BTreeMap::new();
         system_static.insert("out".to_string(), Value::Reference(print_stream_ref));
-        self.classes.insert(
-            "java/lang/System".to_string(),
-            RuntimeClass {
+        self.register_class(RuntimeClass {
                 name: "java/lang/System".to_string(),
                 super_class: Some("java/lang/Object".to_string()),
                 methods: BTreeMap::new(),
                 static_fields: system_static,
                 instance_fields: vec![],
-            },
-        );
+            });
 
         // java/lang/String
         let mut string_methods = BTreeMap::new();
@@ -102,16 +100,13 @@ impl Vm {
                 ClassMethod::Native,
             );
         }
-        self.classes.insert(
-            "java/lang/String".to_string(),
-            RuntimeClass {
+        self.register_class(RuntimeClass {
                 name: "java/lang/String".to_string(),
                 super_class: Some("java/lang/Object".to_string()),
                 methods: string_methods,
                 static_fields: BTreeMap::new(),
                 instance_fields: vec![],
-            },
-        );
+            });
 
         // java/lang/Integer
         let mut integer_methods = BTreeMap::new();
@@ -126,16 +121,13 @@ impl Vm {
                 ClassMethod::Native,
             );
         }
-        self.classes.insert(
-            "java/lang/Integer".to_string(),
-            RuntimeClass {
+        self.register_class(RuntimeClass {
                 name: "java/lang/Integer".to_string(),
                 super_class: Some("java/lang/Object".to_string()),
                 methods: integer_methods,
                 static_fields: BTreeMap::new(),
                 instance_fields: vec![("value".to_string(), "I".to_string())],
-            },
-        );
+            });
 
         // java/lang/StringBuilder
         let mut sb_methods = BTreeMap::new();
@@ -170,16 +162,13 @@ impl Vm {
             ("length".to_string(), "()I".to_string()),
             ClassMethod::Native,
         );
-        self.classes.insert(
-            "java/lang/StringBuilder".to_string(),
-            RuntimeClass {
+        self.register_class(RuntimeClass {
                 name: "java/lang/StringBuilder".to_string(),
                 super_class: Some("java/lang/Object".to_string()),
                 methods: sb_methods,
                 static_fields: BTreeMap::new(),
                 instance_fields: vec![],
-            },
-        );
+            });
 
         // java/lang/Math
         let mut math_methods = BTreeMap::new();
@@ -201,22 +190,54 @@ impl Vm {
                 ClassMethod::Native,
             );
         }
-        self.classes.insert(
-            "java/lang/Math".to_string(),
-            RuntimeClass {
+        self.register_class(RuntimeClass {
                 name: "java/lang/Math".to_string(),
                 super_class: Some("java/lang/Object".to_string()),
                 methods: math_methods,
                 static_fields: BTreeMap::new(),
                 instance_fields: vec![],
-            },
-        );
+            });
+
+        // java/lang/Runnable
+        self.register_class(RuntimeClass {
+                name: "java/lang/Runnable".to_string(),
+                super_class: None,
+                methods: BTreeMap::new(),
+                static_fields: BTreeMap::new(),
+                instance_fields: vec![],
+            });
+
+        // java/lang/Thread
+        let mut thread_methods = BTreeMap::new();
+        for (name, desc) in [
+            ("<init>", "()V"),
+            ("<init>", "(Ljava/lang/Runnable;)V"),
+            ("start", "()V"),
+            ("run", "()V"),
+            ("join", "()V"),
+        ] {
+            thread_methods.insert(
+                (name.to_string(), desc.to_string()),
+                ClassMethod::Native,
+            );
+        }
+        self.register_class(RuntimeClass {
+                name: "java/lang/Thread".to_string(),
+                super_class: Some("java/lang/Object".to_string()),
+                methods: thread_methods,
+                static_fields: BTreeMap::new(),
+                instance_fields: vec![("target".to_string(), "Ljava/lang/Runnable;".to_string())],
+            });
 
         // Exception class hierarchy
         let exception_chain = [
             ("java/lang/Throwable", "java/lang/Object"),
             ("java/lang/Exception", "java/lang/Throwable"),
             ("java/lang/RuntimeException", "java/lang/Exception"),
+            (
+                "java/lang/IllegalThreadStateException",
+                "java/lang/RuntimeException",
+            ),
             (
                 "java/lang/ArithmeticException",
                 "java/lang/RuntimeException",
@@ -252,16 +273,13 @@ impl Vm {
                 ("<init>".to_string(), "()V".to_string()),
                 ClassMethod::Native,
             );
-            self.classes.insert(
-                name.to_string(),
-                RuntimeClass {
+            self.register_class(RuntimeClass {
                     name: name.to_string(),
                     super_class: Some(parent.to_string()),
                     methods,
                     static_fields: BTreeMap::new(),
                     instance_fields: vec![],
-                },
-            );
+                });
         }
     }
 
@@ -281,7 +299,7 @@ impl Vm {
             ("java/io/PrintStream", "println", "(I)V") => {
                 let line = args[1].as_int()?.to_string();
                 println!("{line}");
-                self.output.push(line);
+                self.output.lock().unwrap().push(line);
                 Ok(None)
             }
             ("java/io/PrintStream", "println", "(Z)V") => {
@@ -292,46 +310,46 @@ impl Vm {
                 }
                 .to_string();
                 println!("{line}");
-                self.output.push(line);
+                self.output.lock().unwrap().push(line);
                 Ok(None)
             }
             ("java/io/PrintStream", "println", "(C)V") => {
                 let ch = args[1].as_int()? as u8 as char;
                 let line = ch.to_string();
                 println!("{line}");
-                self.output.push(line);
+                self.output.lock().unwrap().push(line);
                 Ok(None)
             }
             ("java/io/PrintStream", "println", "(Ljava/lang/String;)V") => {
                 let reference = args[1].as_reference()?;
                 let line = self.stringify_reference(reference)?;
                 println!("{line}");
-                self.output.push(line);
+                self.output.lock().unwrap().push(line);
                 Ok(None)
             }
             ("java/io/PrintStream", "println", "(J)V") => {
                 let line = args[1].as_long()?.to_string();
                 println!("{line}");
-                self.output.push(line);
+                self.output.lock().unwrap().push(line);
                 Ok(None)
             }
             ("java/io/PrintStream", "println", "(F)V") => {
                 let v = args[1].as_float()?;
                 let line = format_float(v as f64);
                 println!("{line}");
-                self.output.push(line);
+                self.output.lock().unwrap().push(line);
                 Ok(None)
             }
             ("java/io/PrintStream", "println", "(D)V") => {
                 let v = args[1].as_double()?;
                 let line = format_float(v);
                 println!("{line}");
-                self.output.push(line);
+                self.output.lock().unwrap().push(line);
                 Ok(None)
             }
             ("java/io/PrintStream", "println", "()V") => {
                 println!();
-                self.output.push(String::new());
+                self.output.lock().unwrap().push(String::new());
                 Ok(None)
             }
 
@@ -379,6 +397,18 @@ impl Vm {
             ("java/io/PrintStream", "print", "()V") => Ok(None),
 
             // --- String methods ---
+            ("java/lang/Object", "wait", "()V") => {
+                self.wait_on_monitor(args[0].as_reference()?)?;
+                Ok(None)
+            }
+            ("java/lang/Object", "notify", "()V") => {
+                self.notify_monitor(args[0].as_reference()?, false)?;
+                Ok(None)
+            }
+            ("java/lang/Object", "notifyAll", "()V") => {
+                self.notify_monitor(args[0].as_reference()?, true)?;
+                Ok(None)
+            }
             ("java/lang/String", "length", "()I") => {
                 let s = self.stringify_reference(args[0].as_reference()?)?;
                 Ok(Some(Value::Int(s.len() as i32)))
@@ -416,7 +446,7 @@ impl Vm {
             // --- Integer methods ---
             ("java/lang/Integer", "intValue", "()I") => {
                 let obj_ref = args[0].as_reference()?;
-                match self.heap.get(obj_ref)? {
+                match self.heap.lock().unwrap().get(obj_ref)? {
                     HeapValue::Object { fields, .. } => {
                         let value = fields
                             .get("value")
@@ -431,7 +461,7 @@ impl Vm {
                 let value = args[0].as_int()?;
                 let mut fields = BTreeMap::new();
                 fields.insert("value".to_string(), Value::Int(value));
-                let reference = self.heap.allocate(HeapValue::Object {
+                let reference = self.heap.lock().unwrap().allocate(HeapValue::Object {
                     class_name: "java/lang/Integer".to_string(),
                     fields,
                 });
@@ -449,26 +479,27 @@ impl Vm {
                 // But `new` creates a HeapValue::Object. We need to replace it with a
                 // HeapValue::StringBuilder. Let's handle this by modifying the heap.
                 let obj_ref = args[0].as_reference()?;
-                *self.heap.get_mut(obj_ref)? = HeapValue::StringBuilder(std::string::String::new());
+                *self.heap.lock().unwrap().get_mut(obj_ref)? =
+                    HeapValue::StringBuilder(std::string::String::new());
                 Ok(None)
             }
             ("java/lang/StringBuilder", "<init>", "(Ljava/lang/String;)V") => {
                 let obj_ref = args[0].as_reference()?;
                 let s = self.stringify_reference(args[1].as_reference()?)?;
-                *self.heap.get_mut(obj_ref)? = HeapValue::StringBuilder(s);
+                *self.heap.lock().unwrap().get_mut(obj_ref)? = HeapValue::StringBuilder(s);
                 Ok(None)
             }
             ("java/lang/StringBuilder", "append", _) => {
                 let obj_ref = args[0].as_reference()?;
                 let text = self.format_value_for_append(descriptor, &args[1..])?;
-                if let HeapValue::StringBuilder(buf) = self.heap.get_mut(obj_ref)? {
+                if let HeapValue::StringBuilder(buf) = self.heap.lock().unwrap().get_mut(obj_ref)? {
                     buf.push_str(&text);
                 }
                 Ok(Some(Value::Reference(obj_ref)))
             }
             ("java/lang/StringBuilder", "toString", "()Ljava/lang/String;") => {
                 let obj_ref = args[0].as_reference()?;
-                let s = match self.heap.get(obj_ref)? {
+                let s = match self.heap.lock().unwrap().get(obj_ref)? {
                     HeapValue::StringBuilder(buf) => buf.clone(),
                     _ => std::string::String::new(),
                 };
@@ -476,7 +507,7 @@ impl Vm {
             }
             ("java/lang/StringBuilder", "length", "()I") => {
                 let obj_ref = args[0].as_reference()?;
-                let len = match self.heap.get(obj_ref)? {
+                let len = match self.heap.lock().unwrap().get(obj_ref)? {
                     HeapValue::StringBuilder(buf) => buf.len() as i32,
                     _ => 0,
                 };
@@ -522,9 +553,67 @@ impl Vm {
             ("java/lang/Integer", "<init>", "(I)V") => {
                 let obj_ref = args[0].as_reference()?;
                 let value = args[1].as_int()?;
-                if let Ok(HeapValue::Object { fields, .. }) = self.heap.get_mut(obj_ref) {
+                if let Ok(HeapValue::Object { fields, .. }) = self.heap.lock().unwrap().get_mut(obj_ref) {
                     fields.insert("value".to_string(), Value::Int(value));
                 }
+                Ok(None)
+            }
+            ("java/lang/Thread", "<init>", "()V") => {
+                let obj_ref = args[0].as_reference()?;
+                self.set_object_field(obj_ref, "target", Value::Reference(Reference::Null))?;
+                Ok(None)
+            }
+            ("java/lang/Thread", "<init>", "(Ljava/lang/Runnable;)V") => {
+                let obj_ref = args[0].as_reference()?;
+                self.set_object_field(obj_ref, "target", args[1])?;
+                Ok(None)
+            }
+            ("java/lang/Thread", "start", "()V") => {
+                let thread_ref = args[0].as_reference()?;
+                let target = self.get_object_field(thread_ref, "target")?.as_reference()?;
+                let receiver = if target == Reference::Null {
+                    thread_ref
+                } else {
+                    target
+                };
+                let class_name = self.get_object_class(receiver)?;
+                self.start_java_thread(
+                    thread_ref,
+                    &class_name,
+                    "run",
+                    "()V",
+                    vec![Value::Reference(receiver)],
+                )?;
+                Ok(None)
+            }
+            ("java/lang/Thread", "run", "()V") => {
+                let thread_ref = args[0].as_reference()?;
+                let target = self.get_object_field(thread_ref, "target")?.as_reference()?;
+                if target != Reference::Null {
+                    let class_name = self.get_object_class(target)?;
+                    let (resolved_class, class_method) =
+                        self.resolve_method(&class_name, "run", "()V")?;
+                    match class_method {
+                        ClassMethod::Native => {
+                            self.invoke_native(
+                                &resolved_class,
+                                "run",
+                                "()V",
+                                &[Value::Reference(target)],
+                            )?;
+                        }
+                        ClassMethod::Bytecode(method) => {
+                            let callee =
+                                method.with_initial_locals(vec![Some(Value::Reference(target))]);
+                            let _ = self.execute(callee)?;
+                        }
+                    }
+                }
+                Ok(None)
+            }
+            ("java/lang/Thread", "join", "()V") => {
+                let thread_ref = args[0].as_reference()?;
+                self.join_java_thread(thread_ref)?;
                 Ok(None)
             }
 
@@ -581,7 +670,7 @@ impl Vm {
     pub(super) fn stringify_reference(&self, reference: Reference) -> Result<String, VmError> {
         match reference {
             Reference::Null => Ok("null".to_string()),
-            _ => match self.heap.get(reference)? {
+            _ => match self.heap.lock().unwrap().get(reference)? {
                 HeapValue::String(value) => Ok(value.clone()),
                 value => Err(VmError::InvalidHeapValue {
                     expected: "string",

@@ -1,9 +1,10 @@
 mod builtin;
 pub mod verify;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt;
 use std::path::PathBuf;
+use std::sync::{Arc, Condvar, Mutex};
 
 use crate::bytecode::Opcode;
 
@@ -14,6 +15,7 @@ pub enum Value {
     Float(f32),
     Double(f64),
     Reference(Reference),
+    ReturnAddress(usize),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,6 +75,16 @@ impl Value {
         }
     }
 
+    fn as_return_address(self) -> Result<usize, VmError> {
+        match self {
+            Self::ReturnAddress(address) => Ok(address),
+            other => Err(VmError::TypeMismatch {
+                expected: "returnAddress",
+                actual: other.type_name(),
+            }),
+        }
+    }
+
     fn type_name(self) -> &'static str {
         match self {
             Self::Int(_) => "int",
@@ -80,6 +92,7 @@ impl Value {
             Self::Float(_) => "float",
             Self::Double(_) => "double",
             Self::Reference(_) => "reference",
+            Self::ReturnAddress(_) => "returnAddress",
         }
     }
 }
@@ -93,12 +106,17 @@ impl fmt::Display for Value {
             Self::Double(v) => write!(f, "{v}d"),
             Self::Reference(Reference::Null) => write!(f, "null"),
             Self::Reference(Reference::Heap(i)) => write!(f, "ref@{i}"),
+            Self::ReturnAddress(pc) => write!(f, "ret@{pc}"),
         }
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct Method {
+    pub class_name: String,
+    pub name: String,
+    pub descriptor: String,
+    pub access_flags: u16,
     pub code: Vec<u8>,
     pub max_locals: usize,
     pub max_stack: usize,
@@ -108,6 +126,7 @@ pub struct Method {
     pub method_refs: Vec<Option<MethodRef>>,
     pub exception_handlers: Vec<ExceptionHandler>,
     pub line_numbers: Vec<(u16, u16)>,
+    pub stack_map_frames: Vec<crate::classfile::StackMapFrame>,
     /// InvokeDynamic call site info: `(name, descriptor, bootstrap_index)` keyed by constant pool index.
     pub invoke_dynamic_sites: Vec<Option<InvokeDynamicSite>>,
     pub initial_locals: Vec<Option<Value>>,
@@ -119,9 +138,21 @@ pub struct InvokeDynamicSite {
     pub name: String,
     pub descriptor: String,
     pub bootstrap_method_index: u16,
-    /// The target method reference from the bootstrap method arguments:
-    /// `(class_name, method_name, method_descriptor)`.
-    pub target: Option<(String, String, String)>,
+    pub kind: InvokeDynamicKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InvokeDynamicKind {
+    Unknown,
+    LambdaProxy {
+        target_class: String,
+        target_method: String,
+        target_descriptor: String,
+    },
+    StringConcat {
+        recipe: Option<String>,
+        constants: Vec<String>,
+    },
 }
 
 /// A single entry from the Code attribute's exception_table.
@@ -146,6 +177,43 @@ pub struct MethodRef {
     pub class_name: String,
     pub method_name: String,
     pub descriptor: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ClassInitializationState {
+    Initializing(u64),
+    Initialized,
+}
+
+#[derive(Debug, Default)]
+struct RuntimeState {
+    classes: BTreeMap<String, RuntimeClass>,
+    initialized_classes: BTreeMap<String, ClassInitializationState>,
+}
+
+#[derive(Debug, Default)]
+struct SharedMonitors {
+    states: Mutex<BTreeMap<usize, MonitorState>>,
+    changed: Condvar,
+}
+
+#[derive(Default)]
+struct SharedThreads {
+    states: Mutex<BTreeMap<usize, JavaThreadState>>,
+}
+
+struct JavaThreadState {
+    started: bool,
+    handle: Option<JvmThread>,
+}
+
+impl fmt::Debug for SharedThreads {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let count = self.states.lock().unwrap().len();
+        f.debug_struct("SharedThreads")
+            .field("thread_count", &count)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -187,6 +255,10 @@ impl Method {
         constants: impl Into<Vec<Option<Value>>>,
     ) -> Self {
         Self {
+            class_name: String::new(),
+            name: String::new(),
+            descriptor: String::new(),
+            access_flags: 0,
             code: code.into(),
             max_locals,
             max_stack,
@@ -196,9 +268,24 @@ impl Method {
             method_refs: Vec::new(),
             exception_handlers: Vec::new(),
             line_numbers: Vec::new(),
+            stack_map_frames: Vec::new(),
             invoke_dynamic_sites: Vec::new(),
             initial_locals: Vec::new(),
         }
+    }
+
+    pub fn with_metadata(
+        mut self,
+        class_name: impl Into<String>,
+        name: impl Into<String>,
+        descriptor: impl Into<String>,
+        access_flags: u16,
+    ) -> Self {
+        self.class_name = class_name.into();
+        self.name = name.into();
+        self.descriptor = descriptor.into();
+        self.access_flags = access_flags;
+        self
     }
 
     pub fn with_initial_locals(mut self, locals: impl Into<Vec<Option<Value>>>) -> Self {
@@ -223,6 +310,14 @@ impl Method {
 
     pub fn with_line_numbers(mut self, line_numbers: impl Into<Vec<(u16, u16)>>) -> Self {
         self.line_numbers = line_numbers.into();
+        self
+    }
+
+    pub fn with_stack_map_frames(
+        mut self,
+        frames: impl Into<Vec<crate::classfile::StackMapFrame>>,
+    ) -> Self {
+        self.stack_map_frames = frames.into();
         self
     }
 
@@ -340,6 +435,10 @@ pub enum VmError {
         code_len: usize,
     },
     MissingReturn,
+    VerificationError {
+        pc: usize,
+        reason: String,
+    },
 }
 
 impl fmt::Display for VmError {
@@ -445,6 +544,9 @@ impl fmt::Display for VmError {
                 "invalid branch target {target} for bytecode length {code_len}"
             ),
             Self::MissingReturn => write!(f, "method completed without return instruction"),
+            Self::VerificationError { pc, reason } => {
+                write!(f, "verification failed at pc {pc}: {reason}")
+            }
         }
     }
 }
@@ -1052,6 +1154,10 @@ struct MonitorState {
     lock_count: usize,
     /// Thread ID of the owner (0 = unowned).
     owner_thread: u64,
+    /// Number of threads waiting in `Object.wait()`.
+    waiting_threads: usize,
+    /// Number of pending notifications that have not yet been consumed by a waiter.
+    pending_notifies: usize,
 }
 
 /// Handle to a spawned VM thread, allowing the caller to wait for completion.
@@ -1074,28 +1180,28 @@ static NEXT_THREAD_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU
 
 #[derive(Debug, Clone)]
 pub struct Vm {
-    heap: Heap,
-    classes: BTreeMap<String, RuntimeClass>,
-    initialized_classes: BTreeSet<String>,
+    heap: Arc<Mutex<Heap>>,
+    runtime: Arc<Mutex<RuntimeState>>,
     /// Object monitors keyed by heap index.
-    monitors: BTreeMap<usize, MonitorState>,
+    monitors: Arc<SharedMonitors>,
+    threads: Arc<SharedThreads>,
     class_path: Vec<PathBuf>,
     trace: bool,
     thread_id: u64,
-    output: Vec<String>,
+    output: Arc<Mutex<Vec<String>>>,
 }
 
 impl Vm {
     pub fn new() -> Self {
         let mut vm = Self {
-            heap: Heap::default(),
-            classes: BTreeMap::new(),
-            initialized_classes: BTreeSet::new(),
-            monitors: BTreeMap::new(),
+            heap: Arc::new(Mutex::new(Heap::default())),
+            runtime: Arc::new(Mutex::new(RuntimeState::default())),
+            monitors: Arc::new(SharedMonitors::default()),
+            threads: Arc::new(SharedThreads::default()),
             class_path: Vec::new(),
             trace: false,
             thread_id: NEXT_THREAD_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-            output: Vec::new(),
+            output: Arc::new(Mutex::new(Vec::new())),
         };
         vm.bootstrap();
         vm
@@ -1104,9 +1210,8 @@ impl Vm {
     /// Enable or disable execution tracing (prints pc, opcode, stack to stderr).
     /// Spawn a new thread that executes the given method.
     ///
-    /// The new thread gets a clone of the current VM state (heap, classes).
-    /// Note: heap changes in the spawned thread are NOT visible to the parent
-    /// (full shared-memory threading would require `Arc<Mutex<Heap>>`).
+    /// The new thread shares heap/monitor/output state with the parent VM,
+    /// while method-local execution state remains isolated per thread.
     pub fn spawn(&self, method: Method) -> JvmThread {
         let mut child_vm = self.clone();
         child_vm.thread_id =
@@ -1115,6 +1220,42 @@ impl Vm {
         JvmThread {
             handle: Some(handle),
         }
+    }
+
+    fn spawn_invocation(
+        &self,
+        start_class: &str,
+        method_name: &str,
+        descriptor: &str,
+        args: Vec<Value>,
+    ) -> Result<JvmThread, VmError> {
+        let mut child_vm = self.clone();
+        child_vm.thread_id =
+            NEXT_THREAD_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+        let start_class = start_class.to_string();
+        let method_name = method_name.to_string();
+        let descriptor = descriptor.to_string();
+
+        let handle = std::thread::spawn(move || {
+            let (resolved_class, class_method) =
+                child_vm.resolve_method(&start_class, &method_name, &descriptor)?;
+            match class_method {
+                ClassMethod::Native => {
+                    let result =
+                        child_vm.invoke_native(&resolved_class, &method_name, &descriptor, &args)?;
+                    Ok(result.map_or(ExecutionResult::Void, ExecutionResult::Value))
+                }
+                ClassMethod::Bytecode(method) => {
+                    let callee = method.with_initial_locals(args.into_iter().map(Some).collect::<Vec<_>>());
+                    child_vm.execute(callee)
+                }
+            }
+        });
+
+        Ok(JvmThread {
+            handle: Some(handle),
+        })
     }
 
     /// Run garbage collection, freeing unreachable heap objects.
@@ -1142,7 +1283,8 @@ impl Vm {
         }
 
         // Roots from static fields of all loaded classes.
-        for class in self.classes.values() {
+        let runtime = self.runtime.lock().unwrap();
+        for class in runtime.classes.values() {
             for value in class.static_fields.values() {
                 if let Value::Reference(r @ Reference::Heap(_)) = value {
                     roots.push(*r);
@@ -1150,7 +1292,7 @@ impl Vm {
             }
         }
 
-        self.heap.gc(&roots);
+        self.heap.lock().unwrap().gc(&roots);
     }
 
     pub fn set_trace(&mut self, enabled: bool) {
@@ -1164,12 +1306,22 @@ impl Vm {
 
     /// Register a class loaded from a `.class` file.
     pub fn register_class(&mut self, class: RuntimeClass) {
-        self.classes.insert(class.name.clone(), class);
+        self.runtime
+            .lock()
+            .unwrap()
+            .classes
+            .insert(class.name.clone(), class);
     }
 
     /// Ensure a class is loaded, loading it from the classpath on demand.
     fn ensure_class_loaded(&mut self, class_name: &str) -> Result<(), VmError> {
-        if self.classes.contains_key(class_name) {
+        if self
+            .runtime
+            .lock()
+            .unwrap()
+            .classes
+            .contains_key(class_name)
+        {
             return Ok(());
         }
         if self.class_path.is_empty() {
@@ -1178,12 +1330,12 @@ impl Vm {
             });
         }
         let class_path = self.class_path.clone();
-        let path = crate::launcher::resolve_class_path(&class_path, class_name).ok_or_else(
+        let source = crate::launcher::resolve_class_path(&class_path, class_name).ok_or_else(
             || VmError::ClassNotFound {
                 class_name: class_name.to_string(),
             },
         )?;
-        crate::launcher::load_and_register_class_from(&path, class_name, self).map_err(|_| {
+        crate::launcher::load_and_register_class_from(&source, class_name, self).map_err(|_| {
             VmError::ClassNotFound {
                 class_name: class_name.to_string(),
             }
@@ -1192,29 +1344,370 @@ impl Vm {
 
     /// Run `<clinit>` for a class if it hasn't been initialized yet.
     fn ensure_class_initialized(&mut self, class_name: &str) -> Result<(), VmError> {
-        if self.initialized_classes.contains(class_name) {
-            return Ok(());
-        }
-        // Mark as initialized *before* running <clinit> to prevent re-entrant initialization.
-        self.initialized_classes.insert(class_name.to_string());
+        loop {
+            enum InitializationAction {
+                Wait,
+                Run(Option<Method>),
+                Done,
+            }
 
-        let clinit = self
+            let action = {
+                let mut runtime = self.runtime.lock().unwrap();
+                match runtime.initialized_classes.get(class_name) {
+                    Some(ClassInitializationState::Initialized) => InitializationAction::Done,
+                    Some(ClassInitializationState::Initializing(owner))
+                        if *owner == self.thread_id =>
+                    {
+                        InitializationAction::Done
+                    }
+                    Some(ClassInitializationState::Initializing(_)) => InitializationAction::Wait,
+                    None => {
+                        runtime.initialized_classes.insert(
+                            class_name.to_string(),
+                            ClassInitializationState::Initializing(self.thread_id),
+                        );
+                        let clinit = runtime.classes.get(class_name).and_then(|class| {
+                            class
+                                .methods
+                                .get(&("<clinit>".to_string(), "()V".to_string()))
+                                .cloned()
+                        });
+                        match clinit {
+                            Some(ClassMethod::Bytecode(method)) => {
+                                InitializationAction::Run(Some(method))
+                            }
+                            _ => InitializationAction::Run(None),
+                        }
+                    }
+                }
+            };
+
+            match action {
+                InitializationAction::Done => return Ok(()),
+                InitializationAction::Wait => std::thread::yield_now(),
+                InitializationAction::Run(clinit) => {
+                    let result = if let Some(method) = clinit {
+                        self.execute(method).map(|_| ())
+                    } else {
+                        Ok(())
+                    };
+
+                    let mut runtime = self.runtime.lock().unwrap();
+                    match result {
+                        Ok(()) => {
+                            runtime.initialized_classes.insert(
+                                class_name.to_string(),
+                                ClassInitializationState::Initialized,
+                            );
+                            return Ok(());
+                        }
+                        Err(error) => {
+                            runtime.initialized_classes.remove(class_name);
+                            return Err(error);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn get_class(&self, class_name: &str) -> Result<RuntimeClass, VmError> {
+        self.runtime
+            .lock()
+            .unwrap()
             .classes
             .get(class_name)
-            .and_then(|c| {
-                c.methods
-                    .get(&("<clinit>".to_string(), "()V".to_string()))
-                    .cloned()
-            });
+            .cloned()
+            .ok_or_else(|| VmError::ClassNotFound {
+                class_name: class_name.to_string(),
+            })
+    }
 
-        if let Some(ClassMethod::Bytecode(method)) = clinit {
-            self.execute(method)?;
+    fn get_static_field(&self, class_name: &str, field_name: &str) -> Result<Value, VmError> {
+        let runtime = self.runtime.lock().unwrap();
+        let class = runtime
+            .classes
+            .get(class_name)
+            .ok_or_else(|| VmError::ClassNotFound {
+                class_name: class_name.to_string(),
+            })?;
+        class
+            .static_fields
+            .get(field_name)
+            .copied()
+            .ok_or_else(|| VmError::FieldNotFound {
+                class_name: class_name.to_string(),
+                field_name: field_name.to_string(),
+            })
+    }
+
+    fn put_static_field(
+        &mut self,
+        class_name: &str,
+        field_name: &str,
+        value: Value,
+    ) -> Result<(), VmError> {
+        let mut runtime = self.runtime.lock().unwrap();
+        let class = runtime
+            .classes
+            .get_mut(class_name)
+            .ok_or_else(|| VmError::ClassNotFound {
+                class_name: class_name.to_string(),
+            })?;
+        class.static_fields.insert(field_name.to_string(), value);
+        Ok(())
+    }
+
+    fn get_object_field(&self, reference: Reference, field_name: &str) -> Result<Value, VmError> {
+        let heap = self.heap.lock().unwrap();
+        match heap.get(reference)? {
+            HeapValue::Object { fields, .. } => {
+                Ok(*fields.get(field_name).unwrap_or(&Value::Reference(Reference::Null)))
+            }
+            value => Err(VmError::InvalidHeapValue {
+                expected: "object",
+                actual: value.kind_name(),
+            }),
+        }
+    }
+
+    fn set_object_field(
+        &mut self,
+        reference: Reference,
+        field_name: &str,
+        value: Value,
+    ) -> Result<(), VmError> {
+        let mut heap = self.heap.lock().unwrap();
+        match heap.get_mut(reference)? {
+            HeapValue::Object { fields, .. } => {
+                fields.insert(field_name.to_string(), value);
+                Ok(())
+            }
+            value => Err(VmError::InvalidHeapValue {
+                expected: "object",
+                actual: value.kind_name(),
+            }),
+        }
+    }
+
+    fn start_java_thread(
+        &mut self,
+        thread_ref: Reference,
+        start_class: &str,
+        method_name: &str,
+        descriptor: &str,
+        args: Vec<Value>,
+    ) -> Result<(), VmError> {
+        let index = match thread_ref {
+            Reference::Null => return Err(VmError::NullReference),
+            Reference::Heap(index) => index,
+        };
+
+        {
+            let threads = self.threads.states.lock().unwrap();
+            if threads.get(&index).is_some_and(|state| state.started) {
+                return Err(VmError::UnhandledException {
+                    class_name: "java/lang/IllegalThreadStateException".to_string(),
+                });
+            }
+        }
+
+        let handle = self.spawn_invocation(start_class, method_name, descriptor, args)?;
+        self.threads.states.lock().unwrap().insert(
+            index,
+            JavaThreadState {
+                started: true,
+                handle: Some(handle),
+            },
+        );
+        Ok(())
+    }
+
+    fn join_java_thread(&mut self, thread_ref: Reference) -> Result<(), VmError> {
+        let index = match thread_ref {
+            Reference::Null => return Err(VmError::NullReference),
+            Reference::Heap(index) => index,
+        };
+        let maybe_handle = self
+            .threads
+            .states
+            .lock()
+            .unwrap()
+            .get_mut(&index)
+            .and_then(|state| state.handle.take());
+        if let Some(handle) = maybe_handle {
+            let _ = handle.join()?;
+        }
+        Ok(())
+    }
+
+    fn stringify_value(&self, value: Value) -> Result<String, VmError> {
+        match value {
+            Value::Int(v) => Ok(v.to_string()),
+            Value::Long(v) => Ok(v.to_string()),
+            Value::Float(v) => Ok(format_vm_float(v as f64)),
+            Value::Double(v) => Ok(format_vm_float(v)),
+            Value::Reference(Reference::Null) => Ok("null".to_string()),
+            Value::Reference(reference) => self
+                .stringify_reference(reference)
+                .or_else(|_| Ok(format!("Object@{reference:?}"))),
+            Value::ReturnAddress(pc) => Ok(format!("ret@{pc}")),
+        }
+    }
+
+    fn build_string_concat(
+        &self,
+        recipe: Option<&str>,
+        constants: &[String],
+        args: &[Value],
+    ) -> Result<String, VmError> {
+        if let Some(recipe) = recipe {
+            let mut result = String::new();
+            let mut arg_index = 0usize;
+            let mut constant_index = 0usize;
+            for ch in recipe.chars() {
+                match ch {
+                    '\u{0001}' => {
+                        let value = args.get(arg_index).copied().ok_or_else(|| {
+                            VmError::InvalidDescriptor {
+                                descriptor: format!("missing invokedynamic concat arg at {arg_index}"),
+                            }
+                        })?;
+                        result.push_str(&self.stringify_value(value)?);
+                        arg_index += 1;
+                    }
+                    '\u{0002}' => {
+                        let value = constants.get(constant_index).ok_or_else(|| {
+                            VmError::InvalidDescriptor {
+                                descriptor: format!(
+                                    "missing invokedynamic concat constant at {constant_index}"
+                                ),
+                            }
+                        })?;
+                        result.push_str(value);
+                        constant_index += 1;
+                    }
+                    other => result.push(other),
+                }
+            }
+            return Ok(result);
+        }
+
+        let mut result = String::new();
+        for value in args {
+            result.push_str(&self.stringify_value(*value)?);
+        }
+        Ok(result)
+    }
+
+    fn enter_monitor(&self, reference: Reference) -> Result<(), VmError> {
+        let index = match reference {
+            Reference::Null => return Err(VmError::NullReference),
+            Reference::Heap(index) => index,
+        };
+        let tid = self.thread_id;
+        let mut states = self.monitors.states.lock().unwrap();
+        loop {
+            let monitor = states.entry(index).or_default();
+            if monitor.lock_count == 0 || monitor.owner_thread == tid {
+                monitor.owner_thread = tid;
+                monitor.lock_count += 1;
+                return Ok(());
+            }
+            states = self.monitors.changed.wait(states).unwrap();
+        }
+    }
+
+    fn exit_monitor(&self, reference: Reference) -> Result<(), VmError> {
+        let index = match reference {
+            Reference::Null => return Err(VmError::NullReference),
+            Reference::Heap(index) => index,
+        };
+        let tid = self.thread_id;
+        let mut states = self.monitors.states.lock().unwrap();
+        let monitor = states.entry(index).or_default();
+        if monitor.lock_count == 0 || monitor.owner_thread != tid {
+            return Err(VmError::UnhandledException {
+                class_name: "java/lang/IllegalMonitorStateException".to_string(),
+            });
+        }
+        monitor.lock_count -= 1;
+        if monitor.lock_count == 0 {
+            monitor.owner_thread = 0;
+            if monitor.waiting_threads == 0 && monitor.pending_notifies == 0 {
+                states.remove(&index);
+            }
+            self.monitors.changed.notify_all();
+        }
+        Ok(())
+    }
+
+    fn wait_on_monitor(&self, reference: Reference) -> Result<(), VmError> {
+        let index = match reference {
+            Reference::Null => return Err(VmError::NullReference),
+            Reference::Heap(index) => index,
+        };
+        let tid = self.thread_id;
+        let mut states = self.monitors.states.lock().unwrap();
+        let saved_lock_count = {
+            let monitor = states.entry(index).or_default();
+            if monitor.lock_count == 0 || monitor.owner_thread != tid {
+                return Err(VmError::UnhandledException {
+                    class_name: "java/lang/IllegalMonitorStateException".to_string(),
+                });
+            }
+            let saved_lock_count = monitor.lock_count;
+            monitor.lock_count = 0;
+            monitor.owner_thread = 0;
+            monitor.waiting_threads += 1;
+            saved_lock_count
+        };
+        self.monitors.changed.notify_all();
+
+        loop {
+            states = self.monitors.changed.wait(states).unwrap();
+            let monitor = states.entry(index).or_default();
+            if monitor.pending_notifies > 0
+                && (monitor.lock_count == 0 || monitor.owner_thread == tid)
+            {
+                monitor.pending_notifies -= 1;
+                monitor.waiting_threads -= 1;
+                monitor.owner_thread = tid;
+                monitor.lock_count = saved_lock_count;
+                return Ok(());
+            }
+        }
+    }
+
+    fn notify_monitor(&self, reference: Reference, notify_all: bool) -> Result<(), VmError> {
+        let index = match reference {
+            Reference::Null => return Err(VmError::NullReference),
+            Reference::Heap(index) => index,
+        };
+        let tid = self.thread_id;
+        let mut states = self.monitors.states.lock().unwrap();
+        let monitor = states.entry(index).or_default();
+        if monitor.lock_count == 0 || monitor.owner_thread != tid {
+            return Err(VmError::UnhandledException {
+                class_name: "java/lang/IllegalMonitorStateException".to_string(),
+            });
+        }
+        let newly_available = if notify_all {
+            monitor.waiting_threads.saturating_sub(monitor.pending_notifies)
+        } else if monitor.waiting_threads > monitor.pending_notifies {
+            1
+        } else {
+            0
+        };
+        monitor.pending_notifies += newly_available;
+        if newly_available > 0 {
+            self.monitors.changed.notify_all();
         }
         Ok(())
     }
 
     pub fn new_string(&mut self, value: impl Into<String>) -> Value {
-        Value::Reference(self.heap.allocate_string(value))
+        Value::Reference(self.heap.lock().unwrap().allocate_string(value))
     }
 
     pub fn new_string_array(&mut self, values: &[String]) -> Value {
@@ -1227,17 +1720,19 @@ impl Vm {
             .collect();
         Value::Reference(
             self.heap
+                .lock()
+                .unwrap()
                 .allocate_reference_array("java/lang/String", references),
         )
     }
 
     pub fn take_output(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.output)
+        std::mem::take(&mut self.output.lock().unwrap())
     }
 
     /// Get the class name of a heap value.
     fn get_object_class(&self, reference: Reference) -> Result<String, VmError> {
-        match self.heap.get(reference)? {
+        match self.heap.lock().unwrap().get(reference)? {
             HeapValue::Object { class_name, .. } => Ok(class_name.clone()),
             HeapValue::String(_) => Ok("java/lang/String".to_string()),
             HeapValue::StringBuilder(_) => Ok("java/lang/StringBuilder".to_string()),
@@ -1261,7 +1756,7 @@ impl Vm {
 
         loop {
             // Trigger GC when allocation pressure is high.
-            if self.heap.allocs_since_gc >= 1024 {
+            if self.heap.lock().unwrap().allocs_since_gc >= 1024 {
                 self.collect_garbage(&thread);
             }
 
@@ -1382,11 +1877,23 @@ impl Vm {
                     let reference = match atype {
                         4 | 5 | 8 | 9 | 10 => {
                             // boolean(4), char(5), byte(8), short(9), int(10)
-                            self.heap.allocate_int_array(vec![0; n])
+                            self.heap.lock().unwrap().allocate_int_array(vec![0; n])
                         }
-                        6 => self.heap.allocate(HeapValue::FloatArray { values: vec![0.0; n] }),
-                        7 => self.heap.allocate(HeapValue::DoubleArray { values: vec![0.0; n] }),
-                        11 => self.heap.allocate(HeapValue::LongArray { values: vec![0; n] }),
+                        6 => self
+                            .heap
+                            .lock()
+                            .unwrap()
+                            .allocate(HeapValue::FloatArray { values: vec![0.0; n] }),
+                        7 => self
+                            .heap
+                            .lock()
+                            .unwrap()
+                            .allocate(HeapValue::DoubleArray { values: vec![0.0; n] }),
+                        11 => self
+                            .heap
+                            .lock()
+                            .unwrap()
+                            .allocate(HeapValue::LongArray { values: vec![0; n] }),
                         _ => return Err(VmError::UnsupportedNewArrayType { atype }),
                     };
                     thread.current_frame_mut().push(Value::Reference(reference))?;
@@ -1402,6 +1909,8 @@ impl Vm {
                     let values = vec![Reference::Null; count as usize];
                     let reference = self
                         .heap
+                        .lock()
+                        .unwrap()
                         .allocate_reference_array(component_type, values);
                     thread.current_frame_mut().push(Value::Reference(reference))?;
                 }
@@ -1450,25 +1959,41 @@ impl Vm {
                 Opcode::Iaload => {
                     let index = thread.current_frame_mut().pop()?.as_int()?;
                     let array_ref = thread.current_frame_mut().pop()?.as_reference()?;
-                    let value = self.heap.load_int_array_element(array_ref, index)?;
+                    let value = self
+                        .heap
+                        .lock()
+                        .unwrap()
+                        .load_int_array_element(array_ref, index)?;
                     thread.current_frame_mut().push(Value::Int(value))?;
                 }
                 Opcode::Laload | Opcode::Faload | Opcode::Daload => {
                     let index = thread.current_frame_mut().pop()?.as_int()?;
                     let array_ref = thread.current_frame_mut().pop()?.as_reference()?;
-                    let value = self.heap.load_typed_array_element(array_ref, index)?;
+                    let value = self
+                        .heap
+                        .lock()
+                        .unwrap()
+                        .load_typed_array_element(array_ref, index)?;
                     thread.current_frame_mut().push(value)?;
                 }
                 Opcode::Baload | Opcode::Caload | Opcode::Saload => {
                     let index = thread.current_frame_mut().pop()?.as_int()?;
                     let array_ref = thread.current_frame_mut().pop()?.as_reference()?;
-                    let value = self.heap.load_int_array_element(array_ref, index)?;
+                    let value = self
+                        .heap
+                        .lock()
+                        .unwrap()
+                        .load_int_array_element(array_ref, index)?;
                     thread.current_frame_mut().push(Value::Int(value))?;
                 }
                 Opcode::Aaload => {
                     let index = thread.current_frame_mut().pop()?.as_int()?;
                     let array_ref = thread.current_frame_mut().pop()?.as_reference()?;
-                    let reference = self.heap.load_reference_array_element(array_ref, index)?;
+                    let reference = self
+                        .heap
+                        .lock()
+                        .unwrap()
+                        .load_reference_array_element(array_ref, index)?;
                     thread.current_frame_mut().push(Value::Reference(reference))?;
                 }
                 Opcode::Lastore | Opcode::Fastore | Opcode::Dastore => {
@@ -1476,19 +2001,26 @@ impl Vm {
                     let index = thread.current_frame_mut().pop()?.as_int()?;
                     let array_ref = thread.current_frame_mut().pop()?.as_reference()?;
                     self.heap
+                        .lock()
+                        .unwrap()
                         .store_typed_array_element(array_ref, index, value)?;
                 }
                 Opcode::Bastore | Opcode::Castore | Opcode::Sastore => {
                     let value = thread.current_frame_mut().pop()?.as_int()?;
                     let index = thread.current_frame_mut().pop()?.as_int()?;
                     let array_ref = thread.current_frame_mut().pop()?.as_reference()?;
-                    self.heap.store_int_array_element(array_ref, index, value)?;
+                    self.heap
+                        .lock()
+                        .unwrap()
+                        .store_int_array_element(array_ref, index, value)?;
                 }
                 Opcode::Aastore => {
                     let value = thread.current_frame_mut().pop()?.as_reference()?;
                     let index = thread.current_frame_mut().pop()?.as_int()?;
                     let array_ref = thread.current_frame_mut().pop()?.as_reference()?;
                     self.heap
+                        .lock()
+                        .unwrap()
                         .store_reference_array_element(array_ref, index, value)?;
                 }
                 Opcode::Astore => {
@@ -1537,7 +2069,10 @@ impl Vm {
                     let value = thread.current_frame_mut().pop()?.as_int()?;
                     let index = thread.current_frame_mut().pop()?.as_int()?;
                     let array_ref = thread.current_frame_mut().pop()?.as_reference()?;
-                    self.heap.store_int_array_element(array_ref, index, value)?;
+                    self.heap
+                        .lock()
+                        .unwrap()
+                        .store_int_array_element(array_ref, index, value)?;
                 }
                 Opcode::Pop => {
                     let _ = thread.current_frame_mut().pop()?;
@@ -2071,8 +2606,35 @@ impl Vm {
                     let offset = thread.current_frame_mut().read_i16()?;
                     thread.current_frame_mut().branch(opcode_pc, offset.into())?;
                 }
+                Opcode::Jsr => {
+                    let offset = thread.current_frame_mut().read_i16()?;
+                    let return_pc = thread.current_frame().pc;
+                    thread
+                        .current_frame_mut()
+                        .push(Value::ReturnAddress(return_pc))?;
+                    thread.current_frame_mut().branch(opcode_pc, offset.into())?;
+                }
+                Opcode::Ret => {
+                    let index = thread.current_frame_mut().read_u8()? as usize;
+                    let target = thread.current_frame().load_local(index)?.as_return_address()?;
+                    if target >= thread.current_frame().code.len() {
+                        return Err(VmError::InvalidBranchTarget {
+                            target: target as isize,
+                            code_len: thread.current_frame().code.len(),
+                        });
+                    }
+                    thread.current_frame_mut().pc = target;
+                }
                 Opcode::GotoW => {
                     let offset = thread.current_frame_mut().read_i32()?;
+                    thread.current_frame_mut().branch(opcode_pc, offset)?;
+                }
+                Opcode::JsrW => {
+                    let offset = thread.current_frame_mut().read_i32()?;
+                    let return_pc = thread.current_frame().pc;
+                    thread
+                        .current_frame_mut()
+                        .push(Value::ReturnAddress(return_pc))?;
                     thread.current_frame_mut().branch(opcode_pc, offset)?;
                 }
 
@@ -2083,19 +2645,8 @@ impl Vm {
                     let field_ref = thread.current_frame().load_field_ref(index)?.clone();
                     self.ensure_class_loaded(&field_ref.class_name)?;
                     self.ensure_class_initialized(&field_ref.class_name)?;
-                    let class = self.classes.get(&field_ref.class_name).ok_or_else(|| {
-                        VmError::ClassNotFound {
-                            class_name: field_ref.class_name.clone(),
-                        }
-                    })?;
-                    let value = class
-                        .static_fields
-                        .get(&field_ref.field_name)
-                        .copied()
-                        .ok_or_else(|| VmError::FieldNotFound {
-                            class_name: field_ref.class_name.clone(),
-                            field_name: field_ref.field_name.clone(),
-                        })?;
+                    let value =
+                        self.get_static_field(&field_ref.class_name, &field_ref.field_name)?;
                     thread.current_frame_mut().push(value)?;
                 }
                 Opcode::Putstatic => {
@@ -2104,19 +2655,13 @@ impl Vm {
                     let value = thread.current_frame_mut().pop()?;
                     self.ensure_class_loaded(&field_ref.class_name)?;
                     self.ensure_class_initialized(&field_ref.class_name)?;
-                    let class =
-                        self.classes
-                            .get_mut(&field_ref.class_name)
-                            .ok_or_else(|| VmError::ClassNotFound {
-                                class_name: field_ref.class_name.clone(),
-                            })?;
-                    class.static_fields.insert(field_ref.field_name, value);
+                    self.put_static_field(&field_ref.class_name, &field_ref.field_name, value)?;
                 }
                 Opcode::Getfield => {
                     let index = thread.current_frame_mut().read_u16()? as usize;
                     let field_ref = thread.current_frame().load_field_ref(index)?.clone();
                     let object_ref = thread.current_frame_mut().pop()?.as_reference()?;
-                    let value = match self.heap.get(object_ref)? {
+                    let value = match self.heap.lock().unwrap().get(object_ref)? {
                         HeapValue::Object { fields, .. } => fields
                             .get(&field_ref.field_name)
                             .copied()
@@ -2138,7 +2683,7 @@ impl Vm {
                     let field_ref = thread.current_frame().load_field_ref(index)?.clone();
                     let value = thread.current_frame_mut().pop()?;
                     let object_ref = thread.current_frame_mut().pop()?.as_reference()?;
-                    match self.heap.get_mut(object_ref)? {
+                    match self.heap.lock().unwrap().get_mut(object_ref)? {
                         HeapValue::Object { fields, .. } => {
                             fields.insert(field_ref.field_name, value);
                         }
@@ -2209,10 +2754,7 @@ impl Vm {
                     let class_name = &method_ref.class_name;
                     self.ensure_class_loaded(class_name)?;
                     self.ensure_class_initialized(class_name)?;
-                    let class =
-                        self.classes.get(class_name).ok_or_else(|| VmError::ClassNotFound {
-                            class_name: class_name.clone(),
-                        })?;
+                    let class = self.get_class(class_name)?;
                     let class_method = class
                         .methods
                         .get(&(
@@ -2287,43 +2829,69 @@ impl Vm {
                             pc: opcode_pc,
                         })?;
 
-                    if let Some((target_class, target_method, target_desc)) = &site.target {
-                        // LambdaMetafactory: create a lambda proxy object that stores the
-                        // target method reference and any captured arguments.
-                        let arg_count = parse_arg_count(&site.descriptor)?;
-                        let mut captured = Vec::with_capacity(arg_count);
-                        for _ in 0..arg_count {
-                            captured.push(thread.current_frame_mut().pop()?);
-                        }
-                        captured.reverse();
+                    let arg_count = parse_arg_count(&site.descriptor)?;
+                    let mut args = Vec::with_capacity(arg_count);
+                    for _ in 0..arg_count {
+                        args.push(thread.current_frame_mut().pop()?);
+                    }
+                    args.reverse();
 
-                        let mut fields = BTreeMap::new();
-                        fields.insert(
-                            "__target_class".to_string(),
-                            Value::Reference(self.heap.allocate_string(target_class.clone())),
-                        );
-                        fields.insert(
-                            "__target_method".to_string(),
-                            Value::Reference(self.heap.allocate_string(target_method.clone())),
-                        );
-                        fields.insert(
-                            "__target_desc".to_string(),
-                            Value::Reference(self.heap.allocate_string(target_desc.clone())),
-                        );
-                        for (i, val) in captured.into_iter().enumerate() {
-                            fields.insert(format!("__capture_{i}"), val);
-                        }
+                    match &site.kind {
+                        InvokeDynamicKind::LambdaProxy {
+                            target_class,
+                            target_method,
+                            target_descriptor,
+                        } => {
+                            // LambdaMetafactory: create a lambda proxy object that stores the
+                            // target method reference and any captured arguments.
+                            let mut fields = BTreeMap::new();
+                            fields.insert(
+                                "__target_class".to_string(),
+                                Value::Reference(
+                                    self.heap
+                                        .lock()
+                                        .unwrap()
+                                        .allocate_string(target_class.clone()),
+                                ),
+                            );
+                            fields.insert(
+                                "__target_method".to_string(),
+                                Value::Reference(
+                                    self.heap
+                                        .lock()
+                                        .unwrap()
+                                        .allocate_string(target_method.clone()),
+                                ),
+                            );
+                            fields.insert(
+                                "__target_desc".to_string(),
+                                Value::Reference(
+                                    self.heap
+                                        .lock()
+                                        .unwrap()
+                                        .allocate_string(target_descriptor.clone()),
+                                ),
+                            );
+                            for (i, val) in args.into_iter().enumerate() {
+                                fields.insert(format!("__capture_{i}"), val);
+                            }
 
-                        let proxy = self.heap.allocate(HeapValue::Object {
-                            class_name: format!("__lambda_proxy_{}", site.name),
-                            fields,
-                        });
-                        thread.current_frame_mut().push(Value::Reference(proxy))?;
-                    } else {
-                        // Unknown bootstrap method — push null as placeholder.
-                        thread
-                            .current_frame_mut()
-                            .push(Value::Reference(Reference::Null))?;
+                            let proxy = self.heap.lock().unwrap().allocate(HeapValue::Object {
+                                class_name: format!("__lambda_proxy_{}", site.name),
+                                fields,
+                            });
+                            thread.current_frame_mut().push(Value::Reference(proxy))?;
+                        }
+                        InvokeDynamicKind::StringConcat { recipe, constants } => {
+                            let concat = self.build_string_concat(recipe.as_deref(), constants, &args)?;
+                            thread.current_frame_mut().push(self.new_string(concat))?;
+                        }
+                        InvokeDynamicKind::Unknown => {
+                            // Unknown bootstrap method — push null as placeholder.
+                            thread
+                                .current_frame_mut()
+                                .push(Value::Reference(Reference::Null))?;
+                        }
                     }
                 }
 
@@ -2331,51 +2899,17 @@ impl Vm {
 
                 Opcode::Monitorenter => {
                     let obj_ref = thread.current_frame_mut().pop()?.as_reference()?;
-                    if obj_ref == Reference::Null {
-                        return Err(VmError::NullReference);
-                    }
-                    let index = match obj_ref {
-                        Reference::Heap(i) => i,
-                        Reference::Null => unreachable!(),
-                    };
-                    let tid = self.thread_id;
-                    let monitor = self.monitors.entry(index).or_default();
-                    if monitor.lock_count == 0 || monitor.owner_thread == tid {
-                        monitor.owner_thread = tid;
-                        monitor.lock_count += 1;
-                    } else {
-                        // In a full implementation this would block until the
-                        // monitor is released. For now, spin-yield.
-                        std::thread::yield_now();
-                        // Re-push the reference and retry on next iteration.
-                        thread
-                            .current_frame_mut()
-                            .push(Value::Reference(obj_ref))?;
-                        // Rewind pc to re-execute monitorenter.
-                        thread.current_frame_mut().pc = opcode_pc;
-                    }
+                    self.enter_monitor(obj_ref)?;
                 }
                 Opcode::Monitorexit => {
                     let obj_ref = thread.current_frame_mut().pop()?.as_reference()?;
-                    if obj_ref == Reference::Null {
-                        return Err(VmError::NullReference);
-                    }
-                    let index = match obj_ref {
-                        Reference::Heap(i) => i,
-                        Reference::Null => unreachable!(),
-                    };
-                    let tid = self.thread_id;
-                    let monitor = self.monitors.entry(index).or_default();
-                    if monitor.lock_count == 0 || monitor.owner_thread != tid {
-                        self.throw_new_exception(
-                            &mut thread,
-                            "java/lang/IllegalMonitorStateException",
-                        )?;
-                        return Ok(None);
-                    }
-                    monitor.lock_count -= 1;
-                    if monitor.lock_count == 0 {
-                        self.monitors.remove(&index);
+                    match self.exit_monitor(obj_ref) {
+                        Ok(()) => {}
+                        Err(VmError::UnhandledException { class_name }) => {
+                            self.throw_new_exception(&mut thread, &class_name)?;
+                            return Ok(None);
+                        }
+                        Err(error) => return Err(error),
                     }
                 }
 
@@ -2387,16 +2921,12 @@ impl Vm {
                         thread.current_frame().load_reference_class(index)?.to_string();
                     self.ensure_class_loaded(&class_name)?;
                     self.ensure_class_initialized(&class_name)?;
-                    let instance_fields = self
-                        .classes
-                        .get(&class_name)
-                        .map(|c| c.instance_fields.clone())
-                        .unwrap_or_default();
+                    let instance_fields = self.get_class(&class_name)?.instance_fields;
                     let mut fields = BTreeMap::new();
                     for (name, descriptor) in instance_fields {
                         fields.insert(name, default_value_for_descriptor(&descriptor));
                     }
-                    let reference = self.heap.allocate(HeapValue::Object {
+                    let reference = self.heap.lock().unwrap().allocate(HeapValue::Object {
                         class_name,
                         fields,
                     });
@@ -2448,6 +2978,17 @@ impl Vm {
                             thread
                                 .current_frame_mut()
                                 .store_local(index, Value::Int(value + delta))?;
+                        }
+                        Opcode::Ret => {
+                            let target =
+                                thread.current_frame().load_local(index)?.as_return_address()?;
+                            if target >= thread.current_frame().code.len() {
+                                return Err(VmError::InvalidBranchTarget {
+                                    target: target as isize,
+                                    code_len: thread.current_frame().code.len(),
+                                });
+                            }
+                            thread.current_frame_mut().pc = target;
                         }
                         _ => {
                             return Err(VmError::InvalidOpcode {
@@ -2529,7 +3070,7 @@ impl Vm {
 
                 Opcode::Arraylength => {
                     let reference = thread.current_frame_mut().pop()?.as_reference()?;
-                    let length = self.heap.array_length(reference)?;
+                    let length = self.heap.lock().unwrap().array_length(reference)?;
                     thread.current_frame_mut().push(Value::Int(length as i32))?;
                 }
             }
@@ -2554,7 +3095,7 @@ impl Vm {
         let n = count as usize;
         if depth + 1 == counts.len() {
             // Innermost dimension — allocate an int array (common case for int[][])
-            Ok(self.heap.allocate_int_array(vec![0; n]))
+            Ok(self.heap.lock().unwrap().allocate_int_array(vec![0; n]))
         } else {
             // Allocate sub-arrays recursively
             let mut elements = Vec::with_capacity(n);
@@ -2562,7 +3103,11 @@ impl Vm {
                 let sub = self.allocate_multi_array(counts, depth + 1)?;
                 elements.push(sub);
             }
-            Ok(self.heap.allocate_reference_array("array", elements))
+            Ok(self
+                .heap
+                .lock()
+                .unwrap()
+                .allocate_reference_array("array", elements))
         }
     }
 
@@ -2572,7 +3117,7 @@ impl Vm {
         thread: &mut Thread,
         class_name: &str,
     ) -> Result<(), VmError> {
-        let reference = self.heap.allocate(HeapValue::Object {
+        let reference = self.heap.lock().unwrap().allocate(HeapValue::Object {
             class_name: class_name.to_string(),
             fields: BTreeMap::new(),
         });
@@ -2641,9 +3186,7 @@ impl Vm {
         let mut current = start_class.to_string();
         loop {
             self.ensure_class_loaded(&current)?;
-            let class = self.classes.get(&current).ok_or_else(|| VmError::ClassNotFound {
-                class_name: current.clone(),
-            })?;
+            let class = self.get_class(&current)?;
             if let Some(m) = class
                 .methods
                 .get(&(method_name.to_string(), descriptor.to_string()))
@@ -2671,9 +3214,7 @@ impl Vm {
                 return Ok(true);
             }
             self.ensure_class_loaded(&current)?;
-            let class = self.classes.get(&current).ok_or_else(|| VmError::ClassNotFound {
-                class_name: current.clone(),
-            })?;
+            let class = self.get_class(&current)?;
             match &class.super_class {
                 Some(parent) => current = parent.clone(),
                 None => return Ok(false),
@@ -2730,13 +3271,13 @@ impl Vm {
         args: Vec<Value>,
     ) -> Result<(), VmError> {
         let (target_class, target_method, target_desc, captures) = {
-            let obj = match self.heap.get(receiver)? {
-                HeapValue::Object { fields, .. } => fields,
+            let fields = match self.heap.lock().unwrap().get(receiver)? {
+                HeapValue::Object { fields, .. } => fields.clone(),
                 _ => return Err(VmError::NullReference),
             };
 
             let get_str = |key: &str| -> Result<std::string::String, VmError> {
-                match obj.get(key) {
+                match fields.get(key) {
                     Some(Value::Reference(r)) => self.stringify_reference(*r),
                     _ => Ok(std::string::String::new()),
                 }
@@ -2748,7 +3289,7 @@ impl Vm {
 
             let mut captures = Vec::new();
             let mut i = 0;
-            while let Some(val) = obj.get(&format!("__capture_{i}")) {
+            while let Some(val) = fields.get(&format!("__capture_{i}")) {
                 captures.push(*val);
                 i += 1;
             }
@@ -2846,9 +3387,38 @@ fn parse_arg_count(descriptor: &str) -> Result<usize, VmError> {
     Ok(count)
 }
 
+fn format_vm_float(v: f64) -> String {
+    if v.is_nan() {
+        "NaN".to_string()
+    } else if v.is_infinite() {
+        if v > 0.0 {
+            "Infinity".to_string()
+        } else {
+            "-Infinity".to_string()
+        }
+    } else if v == 0.0 && v.is_sign_negative() {
+        "-0.0".to_string()
+    } else {
+        let s = format!("{v}");
+        if s.contains('.') {
+            s
+        } else {
+            format!("{v}.0")
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{ExecutionResult, FieldRef, Method, MethodRef, Reference, Value, Vm, VmError};
+    use std::collections::BTreeMap;
+    use std::sync::atomic::Ordering;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    use super::{
+        ExecutionResult, FieldRef, HeapValue, Method, MethodRef, Reference, RuntimeClass, Value,
+        Vm, VmError, NEXT_THREAD_ID,
+    };
 
     #[test]
     fn executes_basic_integer_bytecode() {
@@ -3385,6 +3955,109 @@ mod tests {
 
         let result = Vm::new().execute(method).unwrap();
         assert_eq!(result, ExecutionResult::Value(Value::Int(42)));
+    }
+
+    #[test]
+    fn supports_jsr_and_ret() {
+        let method = Method::new(
+            [
+                0x08, // iconst_5
+                0x3b, // istore_0
+                0xa8, 0x00, 0x05, // jsr +5 -> pc 7
+                0x1a, // iload_0
+                0xac, // ireturn
+                0x4c, // astore_1
+                0x84, 0x00, 0x01, // iinc 0 by 1
+                0xa9, 0x01, // ret 1
+            ],
+            2,
+            1,
+        );
+
+        let result = Vm::new().execute(method).unwrap();
+        assert_eq!(result, ExecutionResult::Value(Value::Int(6)));
+    }
+
+    #[test]
+    fn shares_static_fields_across_spawned_threads() {
+        let mut vm = Vm::new();
+        vm.register_class(RuntimeClass {
+            name: "demo/Counter".to_string(),
+            super_class: Some("java/lang/Object".to_string()),
+            methods: BTreeMap::new(),
+            static_fields: BTreeMap::from([("value".to_string(), Value::Int(0))]),
+            instance_fields: vec![],
+        });
+
+        let child_method = Method::new(
+            [
+                0x10, 0x2a, // bipush 42
+                0xb3, 0x00, 0x01, // putstatic #1
+                0xb1, // return
+            ],
+            0,
+            1,
+        )
+        .with_field_refs(vec![
+            None,
+            Some(FieldRef {
+                class_name: "demo/Counter".to_string(),
+                field_name: "value".to_string(),
+                descriptor: "I".to_string(),
+            }),
+        ]);
+
+        vm.spawn(child_method).join().unwrap();
+
+        let read_method = Method::new(
+            [
+                0xb2, 0x00, 0x01, // getstatic #1
+                0xac, // ireturn
+            ],
+            0,
+            1,
+        )
+        .with_field_refs(vec![
+            None,
+            Some(FieldRef {
+                class_name: "demo/Counter".to_string(),
+                field_name: "value".to_string(),
+                descriptor: "I".to_string(),
+            }),
+        ]);
+
+        let result = vm.execute(read_method).unwrap();
+        assert_eq!(result, ExecutionResult::Value(Value::Int(42)));
+    }
+
+    #[test]
+    fn blocks_monitorenter_until_owner_releases_monitor() {
+        let vm = Vm::new();
+        let monitor_ref = vm.heap.lock().unwrap().allocate(HeapValue::Object {
+            class_name: "java/lang/Object".to_string(),
+            fields: BTreeMap::new(),
+        });
+        vm.enter_monitor(monitor_ref).unwrap();
+
+        let mut child_vm = vm.clone();
+        child_vm.thread_id = NEXT_THREAD_ID.fetch_add(1, Ordering::Relaxed);
+
+        let (started_tx, started_rx) = mpsc::channel();
+        let (acquired_tx, acquired_rx) = mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            child_vm.enter_monitor(monitor_ref).unwrap();
+            acquired_tx.send(()).unwrap();
+            child_vm.exit_monitor(monitor_ref).unwrap();
+        });
+
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(acquired_rx.recv_timeout(Duration::from_millis(50)).is_err());
+
+        vm.exit_monitor(monitor_ref).unwrap();
+
+        acquired_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        handle.join().unwrap();
     }
 
     #[test]

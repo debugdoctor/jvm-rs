@@ -51,6 +51,9 @@ fn run_main_class(args: &[String]) -> Result<(), String> {
             println!("{reference:?}");
             Ok(())
         }
+        ExecutionResult::Value(Value::ReturnAddress(_)) => {
+            Err("internal error: top-level execution returned a legacy returnAddress".to_string())
+        }
     }
 }
 

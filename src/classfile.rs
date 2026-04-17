@@ -338,7 +338,15 @@ pub struct CodeAttribute {
 pub enum AttributeInfo {
     Code(CodeAttribute),
     LineNumberTable(Vec<LineNumberEntry>),
+    StackMapTable(Vec<StackMapFrame>),
     SourceFile(String),
+    Signature(String),
+    ConstantValue(u16),
+    Exceptions(Vec<u16>),
+    InnerClasses(Vec<InnerClassInfo>),
+    EnclosingMethod(EnclosingMethodInfo),
+    Synthetic,
+    Deprecated,
     BootstrapMethods(Vec<BootstrapMethod>),
     Raw(RawAttribute),
 }
@@ -353,6 +361,40 @@ pub struct BootstrapMethod {
 pub struct LineNumberEntry {
     pub start_pc: u16,
     pub line_number: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InnerClassInfo {
+    pub inner_class_info_index: u16,
+    pub outer_class_info_index: u16,
+    pub inner_name_index: u16,
+    pub inner_class_access_flags: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnclosingMethodInfo {
+    pub class_index: u16,
+    pub method_index: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StackMapFrame {
+    pub offset_delta: u16,
+    pub locals: Vec<VerificationTypeInfo>,
+    pub stack: Vec<VerificationTypeInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VerificationTypeInfo {
+    Top,
+    Integer,
+    Float,
+    Double,
+    Long,
+    Null,
+    UninitializedThis,
+    Object(u16),
+    Uninitialized(u16),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -386,6 +428,10 @@ pub enum ClassFileError {
         actual: &'static str,
     },
     InvalidModifiedUtf8,
+    InvalidAttribute {
+        attribute: String,
+        reason: String,
+    },
 }
 
 impl fmt::Display for ClassFileError {
@@ -416,6 +462,9 @@ impl fmt::Display for ClassFileError {
                 "constant pool entry {index} has type {actual}, expected {expected}"
             ),
             Self::InvalidModifiedUtf8 => write!(f, "invalid modified UTF-8 in class file"),
+            Self::InvalidAttribute { attribute, reason } => {
+                write!(f, "invalid {attribute} attribute: {reason}")
+            }
         }
     }
 }
@@ -499,6 +548,151 @@ fn parse_attributes(
                 });
             }
             attributes.push(AttributeInfo::LineNumberTable(entries));
+        } else if name == "Signature" {
+            let bytes = reader.read_bytes(attribute_length)?.to_vec();
+            let mut sig_reader = ClassReader::new(&bytes);
+            let signature_index = sig_reader.read_u2()?;
+            let signature = constant_pool.utf8(signature_index)?.to_string();
+            attributes.push(AttributeInfo::Signature(signature));
+        } else if name == "ConstantValue" {
+            let bytes = reader.read_bytes(attribute_length)?.to_vec();
+            let mut cv_reader = ClassReader::new(&bytes);
+            let value_index = cv_reader.read_u2()?;
+            attributes.push(AttributeInfo::ConstantValue(value_index));
+        } else if name == "Exceptions" {
+            let bytes = reader.read_bytes(attribute_length)?.to_vec();
+            let mut ex_reader = ClassReader::new(&bytes);
+            let count = ex_reader.read_u2()? as usize;
+            let mut exceptions = Vec::with_capacity(count);
+            for _ in 0..count {
+                exceptions.push(ex_reader.read_u2()?);
+            }
+            attributes.push(AttributeInfo::Exceptions(exceptions));
+        } else if name == "InnerClasses" {
+            let bytes = reader.read_bytes(attribute_length)?.to_vec();
+            let mut ic_reader = ClassReader::new(&bytes);
+            let count = ic_reader.read_u2()? as usize;
+            let mut classes = Vec::with_capacity(count);
+            for _ in 0..count {
+                classes.push(InnerClassInfo {
+                    inner_class_info_index: ic_reader.read_u2()?,
+                    outer_class_info_index: ic_reader.read_u2()?,
+                    inner_name_index: ic_reader.read_u2()?,
+                    inner_class_access_flags: ic_reader.read_u2()?,
+                });
+            }
+            attributes.push(AttributeInfo::InnerClasses(classes));
+        } else if name == "EnclosingMethod" {
+            let bytes = reader.read_bytes(attribute_length)?.to_vec();
+            let mut em_reader = ClassReader::new(&bytes);
+            attributes.push(AttributeInfo::EnclosingMethod(EnclosingMethodInfo {
+                class_index: em_reader.read_u2()?,
+                method_index: em_reader.read_u2()?,
+            }));
+        } else if name == "Synthetic" {
+            let _ = reader.read_bytes(attribute_length)?;
+            attributes.push(AttributeInfo::Synthetic);
+        } else if name == "Deprecated" {
+            let _ = reader.read_bytes(attribute_length)?;
+            attributes.push(AttributeInfo::Deprecated);
+        } else if name == "StackMapTable" {
+            let bytes = reader.read_bytes(attribute_length)?.to_vec();
+            let mut smt_reader = ClassReader::new(&bytes);
+            let entries = smt_reader.read_u2()? as usize;
+            let mut frames = Vec::with_capacity(entries);
+            let mut previous_locals: Vec<VerificationTypeInfo> = Vec::new();
+
+            for _ in 0..entries {
+                let frame_type = smt_reader.read_u1()?;
+                let frame = match frame_type {
+                    0..=63 => StackMapFrame {
+                        offset_delta: frame_type as u16,
+                        locals: previous_locals.clone(),
+                        stack: Vec::new(),
+                    },
+                    64..=127 => StackMapFrame {
+                        offset_delta: (frame_type - 64) as u16,
+                        locals: previous_locals.clone(),
+                        stack: vec![parse_verification_type_info(&mut smt_reader)?],
+                    },
+                    247 => StackMapFrame {
+                        offset_delta: smt_reader.read_u2()?,
+                        locals: previous_locals.clone(),
+                        stack: vec![parse_verification_type_info(&mut smt_reader)?],
+                    },
+                    248..=250 => {
+                        let offset_delta = smt_reader.read_u2()?;
+                        let chop = (251 - frame_type) as usize;
+                        if chop > previous_locals.len() {
+                            return Err(ClassFileError::InvalidAttribute {
+                                attribute: "StackMapTable".to_string(),
+                                reason: format!(
+                                    "chop frame removes {chop} locals from only {} entries",
+                                    previous_locals.len()
+                                ),
+                            });
+                        }
+                        let locals = previous_locals[..previous_locals.len() - chop].to_vec();
+                        StackMapFrame {
+                            offset_delta,
+                            locals,
+                            stack: Vec::new(),
+                        }
+                    }
+                    251 => StackMapFrame {
+                        offset_delta: smt_reader.read_u2()?,
+                        locals: previous_locals.clone(),
+                        stack: Vec::new(),
+                    },
+                    252..=254 => {
+                        let offset_delta = smt_reader.read_u2()?;
+                        let append = (frame_type - 251) as usize;
+                        let mut locals = previous_locals.clone();
+                        for _ in 0..append {
+                            locals.push(parse_verification_type_info(&mut smt_reader)?);
+                        }
+                        StackMapFrame {
+                            offset_delta,
+                            locals,
+                            stack: Vec::new(),
+                        }
+                    }
+                    255 => {
+                        let offset_delta = smt_reader.read_u2()?;
+                        let locals_len = smt_reader.read_u2()? as usize;
+                        let mut locals = Vec::with_capacity(locals_len);
+                        for _ in 0..locals_len {
+                            locals.push(parse_verification_type_info(&mut smt_reader)?);
+                        }
+                        let stack_len = smt_reader.read_u2()? as usize;
+                        let mut stack = Vec::with_capacity(stack_len);
+                        for _ in 0..stack_len {
+                            stack.push(parse_verification_type_info(&mut smt_reader)?);
+                        }
+                        StackMapFrame {
+                            offset_delta,
+                            locals,
+                            stack,
+                        }
+                    }
+                    other => {
+                        return Err(ClassFileError::InvalidAttribute {
+                            attribute: "StackMapTable".to_string(),
+                            reason: format!("unsupported frame type {other}"),
+                        });
+                    }
+                };
+                previous_locals = frame.locals.clone();
+                frames.push(frame);
+            }
+
+            if !smt_reader.is_finished() {
+                return Err(ClassFileError::TrailingBytes {
+                    remaining: smt_reader.remaining(),
+                });
+            }
+
+            attributes.push(AttributeInfo::StackMapTable(frames));
         } else if name == "BootstrapMethods" {
             let bytes = reader.read_bytes(attribute_length)?.to_vec();
             let mut bm_reader = ClassReader::new(&bytes);
@@ -533,6 +727,27 @@ fn parse_attributes(
     }
 
     Ok(attributes)
+}
+
+fn parse_verification_type_info(
+    reader: &mut ClassReader<'_>,
+) -> Result<VerificationTypeInfo, ClassFileError> {
+    let tag = reader.read_u1()?;
+    match tag {
+        0 => Ok(VerificationTypeInfo::Top),
+        1 => Ok(VerificationTypeInfo::Integer),
+        2 => Ok(VerificationTypeInfo::Float),
+        3 => Ok(VerificationTypeInfo::Double),
+        4 => Ok(VerificationTypeInfo::Long),
+        5 => Ok(VerificationTypeInfo::Null),
+        6 => Ok(VerificationTypeInfo::UninitializedThis),
+        7 => Ok(VerificationTypeInfo::Object(reader.read_u2()?)),
+        8 => Ok(VerificationTypeInfo::Uninitialized(reader.read_u2()?)),
+        other => Err(ClassFileError::InvalidAttribute {
+            attribute: "StackMapTable".to_string(),
+            reason: format!("unsupported verification_type_info tag {other}"),
+        }),
+    }
 }
 
 struct ClassReader<'a> {
@@ -606,6 +821,10 @@ impl<'a> ClassReader<'a> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::process::Command;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
     use super::{AttributeInfo, ClassFile, ClassFileError, ConstantPoolEntry};
 
     #[test]
@@ -658,12 +877,93 @@ mod tests {
         let method = class_file.find_method("main", "()I").unwrap().unwrap();
 
         match &method.attributes[1] {
-            AttributeInfo::Raw(attribute) => {
-                assert_eq!(attribute.name, "Synthetic");
-                assert_eq!(attribute.info, vec![]);
-            }
-            other => panic!("expected raw attribute, got {other:?}"),
+            AttributeInfo::Synthetic => {}
+            other => panic!("expected Synthetic attribute, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parses_common_non_raw_attributes_from_javac_output() {
+        let root = temp_dir("parses_common_non_raw_attributes_from_javac_output");
+        let source = root.join("demo").join("Box.java");
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        fs::write(
+            &source,
+            r#"package demo;
+
+public class Box<T> {
+    public static final int MAGIC = 42;
+
+    public T id(T value) throws Exception {
+        return value;
+    }
+
+    public class Inner {
+    }
+}
+"#,
+        )
+        .unwrap();
+
+        let output = Command::new("javac")
+            .arg("--release")
+            .arg("8")
+            .arg("-d")
+            .arg(&root)
+            .arg(&source)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "javac failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let class_bytes = fs::read(root.join("demo").join("Box.class")).unwrap();
+        let class_file = ClassFile::parse(&class_bytes).unwrap();
+
+        assert!(class_file
+            .attributes
+            .iter()
+            .any(|attr| matches!(attr, AttributeInfo::Signature(_))));
+        assert!(class_file
+            .attributes
+            .iter()
+            .any(|attr| matches!(attr, AttributeInfo::InnerClasses(_))));
+
+        let field = class_file
+            .fields
+            .iter()
+            .find(|field| field.name(&class_file.constant_pool).unwrap() == "MAGIC")
+            .unwrap();
+        assert!(field
+            .attributes
+            .iter()
+            .any(|attr| matches!(attr, AttributeInfo::ConstantValue(_))));
+
+        let method = class_file
+            .methods
+            .iter()
+            .find(|method| method.name(&class_file.constant_pool).unwrap() == "id")
+            .unwrap();
+        assert!(method
+            .attributes
+            .iter()
+            .any(|attr| matches!(attr, AttributeInfo::Signature(_))));
+        assert!(method
+            .attributes
+            .iter()
+            .any(|attr| matches!(attr, AttributeInfo::Exceptions(_))));
+    }
+
+    fn temp_dir(test_name: &str) -> std::path::PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("jvm-rs-classfile-{test_name}-{nanos}"));
+        fs::create_dir_all(&path).unwrap();
+        path
     }
 
     fn minimal_class_bytes() -> Vec<u8> {

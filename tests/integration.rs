@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use jvm_rs::launcher::{LaunchOptions, launch};
+use jvm_rs::launcher::LaunchOptions;
 use jvm_rs::vm::ExecutionResult;
 
 fn temp_dir(test_name: &str) -> PathBuf {
@@ -19,7 +19,11 @@ fn temp_dir(test_name: &str) -> PathBuf {
     path
 }
 
-fn compile_and_run(test_name: &str, files: &[(&str, &str)]) -> (ExecutionResult, Vec<String>) {
+fn compile_and_run_with_javac_args(
+    test_name: &str,
+    javac_args: &[&str],
+    files: &[(&str, &str)],
+) -> (ExecutionResult, Vec<String>) {
     let root = temp_dir(test_name);
     for (name, source) in files {
         let path = root.join(name);
@@ -29,7 +33,7 @@ fn compile_and_run(test_name: &str, files: &[(&str, &str)]) -> (ExecutionResult,
 
     let source_files: Vec<PathBuf> = files.iter().map(|(name, _)| root.join(name)).collect();
     let mut cmd = Command::new("javac");
-    cmd.arg("--release").arg("8").arg("-d").arg(&root);
+    cmd.args(javac_args).arg("-d").arg(&root);
     for source in &source_files {
         cmd.arg(source);
     }
@@ -49,8 +53,9 @@ fn compile_and_run(test_name: &str, files: &[(&str, &str)]) -> (ExecutionResult,
     let options = LaunchOptions::new(&root, &main_class, vec![]);
     let mut vm = jvm_rs::vm::Vm::new();
     vm.set_class_path(options.class_path.clone());
+    let source = jvm_rs::launcher::resolve_class_path(&options.class_path, &main_class).unwrap();
     let method = jvm_rs::launcher::load_main_method(
-        &jvm_rs::launcher::main_class_path(&root, &main_class),
+        &source,
         &main_class,
         &[],
         &mut vm,
@@ -59,6 +64,10 @@ fn compile_and_run(test_name: &str, files: &[(&str, &str)]) -> (ExecutionResult,
     let result = vm.execute(method).unwrap();
     let output = vm.take_output();
     (result, output)
+}
+
+fn compile_and_run(test_name: &str, files: &[(&str, &str)]) -> (ExecutionResult, Vec<String>) {
+    compile_and_run_with_javac_args(test_name, &["--release", "8"], files)
 }
 
 #[test]
@@ -262,4 +271,108 @@ public class Switch {
 "#)],
     );
     assert_eq!(output, vec!["Mon", "Tue", "?"]);
+}
+
+#[test]
+fn thread_start_and_join() {
+    let (_, output) = compile_and_run(
+        "thread_start_and_join",
+        &[("demo/ThreadDemo.java", r#"
+package demo;
+
+public class ThreadDemo {
+    static class Worker implements Runnable {
+        public void run() {
+            System.out.println("worker");
+        }
+    }
+
+    public static void main(String[] args) throws Exception {
+        Thread thread = new Thread(new Worker());
+        thread.start();
+        thread.join();
+        System.out.println("done");
+    }
+}
+"#)],
+    );
+    assert_eq!(output, vec!["worker", "done"]);
+}
+
+#[test]
+fn object_wait_and_notify() {
+    let (_, output) = compile_and_run(
+        "object_wait_and_notify",
+        &[("demo/WaitNotifyDemo.java", r#"
+package demo;
+
+public class WaitNotifyDemo {
+    static final Object LOCK = new Object();
+
+    static class Worker implements Runnable {
+        public void run() {
+            synchronized (LOCK) {
+                System.out.println("worker-ready");
+                LOCK.notify();
+            }
+        }
+    }
+
+    public static void main(String[] args) throws Exception {
+        synchronized (LOCK) {
+            Thread thread = new Thread(new Worker());
+            thread.start();
+            LOCK.wait();
+            System.out.println("main-resumed");
+            thread.join();
+        }
+        System.out.println("done");
+    }
+}
+"#)],
+    );
+    assert_eq!(output, vec!["worker-ready", "main-resumed", "done"]);
+}
+
+#[test]
+fn modern_string_concat_factory() {
+    let (_, output) = compile_and_run_with_javac_args(
+        "modern_string_concat_factory",
+        &[],
+        &[("demo/ModernConcat.java", r#"
+package demo;
+
+public class ModernConcat {
+    public static void main(String[] args) {
+        int n = 42;
+        String label = "items";
+        System.out.println("count=" + n + ", label=" + label);
+    }
+}
+"#)],
+    );
+    assert_eq!(output, vec!["count=42, label=items"]);
+}
+
+#[test]
+fn lambda_metafactory() {
+    let (_, output) = compile_and_run_with_javac_args(
+        "lambda_metafactory",
+        &["--release", "8"],
+        &[("demo/LambdaDemo.java", r#"
+package demo;
+
+public class LambdaDemo {
+    interface Greeter {
+        String greet(String name);
+    }
+
+    public static void main(String[] args) {
+        Greeter greeter = name -> "Hello, " + name;
+        System.out.println(greeter.greet("JVM"));
+    }
+}
+"#)],
+    );
+    assert_eq!(output, vec!["Hello, JVM"]);
 }

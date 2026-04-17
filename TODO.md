@@ -6,15 +6,16 @@ References:
 - JVMS 21 main index: https://docs.oracle.com/javase/specs/jvms/se21/html/index.html
 - JVMS 21 instruction set: https://docs.oracle.com/javase/specs/jvms/se21/html/jvms-6.html#jvms-6.5
 
-## Status: Feature Complete
+## Status: Mostly Complete
 
-All planned items have been implemented. See the Remaining Limitations section for known gaps.
+Core bytecode execution is implemented and usable, but several JVMS-alignment and runtime-completeness tasks remain open.
 
 ## 1. JVMS 21 Foundations — Complete
 
 ### 1.1 Class File Format
 - [x] Parse `ClassFile`, constant pool, fields, methods, attributes
 - [x] Parse `Code`, `ExceptionTable`, `LineNumberTable`, `SourceFile`, `BootstrapMethods`
+- [x] Parse `StackMapTable`
 - [x] Remaining standard attributes stored as `RawAttribute`
 
 ### 1.2 Run-Time Data Areas
@@ -25,13 +26,13 @@ All planned items have been implemented. See the Remaining Limitations section f
 ### 1.3 Loading, Linking, And Initialization
 - [x] On-demand class loading from multiple classpath entries
 - [x] `<clinit>` static initializers, `super_class` hierarchy resolution
-- [x] Linking resolution at execution time; bytecode structural verification (`vm/verify.rs`)
+- [x] Linking resolution at execution time; bytecode verification (`vm/verify.rs`)
 
 ### 1.4 Built-In Classes
 - [x] `Object`, `System`, `PrintStream`, `String`, `Integer`, `StringBuilder`, `Math`
 - [x] Exception hierarchy: `Throwable` → `RuntimeException` → `ArithmeticException`, `NullPointerException`, `ClassCastException`, `ArrayIndexOutOfBoundsException`, `NegativeArraySizeException`, `IllegalMonitorStateException`
 
-## 2. Instruction Set — Complete (199/201 JVMS opcodes)
+## 2. Instruction Set — Complete
 
 ### Implemented (199 opcodes)
 - **Constants**: `aconst_null`, `iconst_m1`..`iconst_5`, `lconst_0/1`, `fconst_0/1/2`, `dconst_0/1`, `bipush`, `sipush`, `ldc`, `ldc_w`, `ldc2_w`
@@ -41,12 +42,9 @@ All planned items have been implemented. See the Remaining Limitations section f
 - **Math**: all int/long/float/double arithmetic, shifts, bitwise, `iinc`
 - **Conversions**: all 15 type conversions
 - **Comparisons**: all int/reference branches, `lcmp`, `fcmpl/g`, `dcmpl/g`, `instanceof`
-- **Control**: `goto`, `goto_w`, `tableswitch`, `lookupswitch`, all typed returns
+- **Control**: `goto`, `goto_w`, `jsr`, `jsr_w`, `ret`, `tableswitch`, `lookupswitch`, all typed returns
 - **References**: `getstatic`, `putstatic`, `getfield`, `putfield`, `invokevirtual`, `invokespecial`, `invokestatic`, `invokeinterface`, `invokedynamic`, `new`, `newarray` (all types), `anewarray`, `multianewarray`, `arraylength`, `athrow`, `checkcast`, `instanceof`, `monitorenter`, `monitorexit`, `ifnull`, `ifnonnull`
 - **Extended**: `wide`
-
-### Not implemented (2 opcodes)
-- `jsr`, `ret`: deprecated since Java 6, no modern compiler emits these
 
 ## 3. Method Invocation — Complete
 - [x] Call stack, argument passing, return values
@@ -69,6 +67,8 @@ All planned items have been implemented. See the Remaining Limitations section f
 
 ## 7. Bytecode Verification — Implemented
 - [x] Structural verification: valid opcodes, instruction boundaries, branch targets (`vm/verify.rs`)
+- [x] Data-flow verification: locals / operand stack type-state propagation
+- [x] `StackMapTable` parsing and consistency checks
 - [x] Runtime checks: stack underflow/overflow, local bounds, null references
 
 ## 8. Multi-Threading — Implemented
@@ -86,12 +86,37 @@ All planned items have been implemented. See the Remaining Limitations section f
 - [x] 47 unit tests (opcodes, VM behavior)
 - [x] 8 integration tests (compile Java + execute: hello_world, fibonacci, string_concatenation, polymorphism, exception_handling, static_initializer, array_operations, switch_statement)
 
-## Remaining Limitations
+## 11. Remaining TODOs
 
-| Item | Notes |
-|---|---|
-| `jsr`/`ret` | Deprecated since Java 6; intentionally unsupported |
-| Shared-memory threading | `spawn()` clones the heap; threads don't share heap mutations. Full shared memory requires `Arc<Mutex<Heap>>` refactor |
-| Full type-checking verifier | JVMS 4.10 data-flow analysis not implemented; only structural checks |
-| `invokedynamic` completeness | Lambda proxies work; complex bootstrap methods (e.g., `StringConcatFactory` for Java 9+) not supported |
-| Garbage collection | Basic mark-and-sweep; no generational GC, no finalizers |
+### 11.1 Spec Coverage
+- [x] Reconcile docs so `README.md` and `TODO.md` describe `invokedynamic` support consistently
+
+### 11.2 Verification
+- [x] Implement a fuller JVMS 4.10 verifier with type-state / data-flow checking
+- [x] Parse and validate `StackMapTable` instead of relying on structural verification only
+
+### 11.3 Class Loading And Linking
+- [x] Expand class loading beyond flat classpath file lookup with directory + JAR classpath support
+- [x] Add broader support for standard class-file attributes that were previously preserved as `RawAttribute`
+- [x] Support loading classes from JARs instead of only loose `.class` files
+
+### 11.4 Runtime And Concurrency
+- [x] Replace cloned-state threading with shared-heap threading semantics
+- [x] Align monitor behavior with a more complete Java memory / synchronization model
+- [x] Support Java-level thread APIs on top of the VM threading model
+
+### 11.5 `invokedynamic` And Bootstrap Methods
+- [x] Extend `invokedynamic` beyond lambda proxies to more bootstrap method patterns
+- [x] Support common modern JDK bootstrap use cases such as `StringConcatFactory`
+
+### 11.6 Built-In Classes And Native Methods
+- [ ] Expand the built-in class library beyond the current minimal runtime surface
+- [ ] Implement more native methods needed by non-trivial Java programs
+
+### 11.7 Garbage Collection
+- [ ] Improve GC beyond basic mark-and-sweep
+- [ ] Decide whether to support finalization / reference-style cleanup semantics
+
+### 11.8 Testing And Compatibility
+- [ ] Add compatibility tests for modern `javac` output patterns beyond the current integration suite
+- [ ] Add regression tests for unsupported or partially supported JVMS features

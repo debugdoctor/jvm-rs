@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+zip = { version = "2.2.0", default-features = false, features = ["deflate"] }
 
 [profile.release]
 opt-level = 3

@@ -1,14 +1,16 @@
 use std::fmt;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use crate::classfile::{
-    AttributeInfo, ClassFile, ClassFileError, ConstantPoolEntry, MemberInfo,
+    AttributeInfo, ClassFile, ClassFileError, ConstantPoolEntry, MemberInfo, StackMapFrame,
 };
 use crate::vm::{
-    ClassMethod, ExceptionHandler, ExecutionResult, FieldRef, InvokeDynamicSite, Method, MethodRef,
-    RuntimeClass, Value, Vm, VmError,
+    ClassMethod, ExceptionHandler, ExecutionResult, FieldRef, InvokeDynamicKind,
+    InvokeDynamicSite, Method, MethodRef, RuntimeClass, Value, Vm, VmError,
 };
+use zip::ZipArchive;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LaunchOptions {
@@ -74,6 +76,15 @@ pub enum LaunchError {
         source: std::io::Error,
     },
     Vm(VmError),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClassSource {
+    File(PathBuf),
+    JarEntry {
+        jar_path: PathBuf,
+        entry_name: String,
+    },
 }
 
 impl fmt::Display for LaunchError {
@@ -161,7 +172,7 @@ pub fn parse_launch_options(args: &[String]) -> Result<LaunchOptions, LaunchErro
 }
 
 pub fn launch(options: &LaunchOptions) -> Result<ExecutionResult, LaunchError> {
-    let path = resolve_class_path(&options.class_path, &options.main_class)
+    let source = resolve_class_path(&options.class_path, &options.main_class)
         .ok_or_else(|| LaunchError::MainClassNotFound {
             main_class: options.main_class.clone(),
             path: class_relative_path(&options.main_class),
@@ -169,7 +180,7 @@ pub fn launch(options: &LaunchOptions) -> Result<ExecutionResult, LaunchError> {
     let mut vm = Vm::new();
     vm.set_class_path(options.class_path.clone());
     vm.set_trace(options.trace);
-    let method = load_main_method(&path, &options.main_class, &options.args, &mut vm)?;
+    let method = load_main_method(&source, &options.main_class, &options.args, &mut vm)?;
     vm.execute(method).map_err(LaunchError::from)
 }
 
@@ -187,12 +198,22 @@ pub fn class_relative_path(class_name: &str) -> PathBuf {
 }
 
 /// Search classpath entries for a `.class` file matching the given class name.
-pub fn resolve_class_path(class_path: &[PathBuf], class_name: &str) -> Option<PathBuf> {
+pub fn resolve_class_path(class_path: &[PathBuf], class_name: &str) -> Option<ClassSource> {
     let relative = class_relative_path(class_name);
+    let relative_name = relative.to_string_lossy().replace('\\', "/");
     for entry in class_path {
-        let candidate = entry.join(&relative);
-        if candidate.exists() {
-            return Some(candidate);
+        if is_jar_path(entry) {
+            if jar_contains_class(entry, &relative_name) {
+                return Some(ClassSource::JarEntry {
+                    jar_path: entry.clone(),
+                    entry_name: relative_name.clone(),
+                });
+            }
+        } else {
+            let candidate = entry.join(&relative);
+            if candidate.exists() {
+                return Some(ClassSource::File(candidate));
+            }
         }
     }
     None
@@ -203,34 +224,21 @@ pub fn main_class_path(class_path: &Path, main_class: &str) -> PathBuf {
     class_path.join(class_relative_path(main_class))
 }
 
-pub fn load_class_file(path: &Path, main_class: &str) -> Result<ClassFile, LaunchError> {
-    let bytes = fs::read(path).map_err(|source| {
-        if source.kind() == std::io::ErrorKind::NotFound {
-            LaunchError::MainClassNotFound {
-                main_class: main_class.to_string(),
-                path: path.to_path_buf(),
-            }
-        } else {
-            LaunchError::Io {
-                path: path.to_path_buf(),
-                source,
-            }
-        }
-    })?;
-
+pub fn load_class_file(source: &ClassSource, main_class: &str) -> Result<ClassFile, LaunchError> {
+    let (display_path, bytes) = read_class_source(source, main_class)?;
     ClassFile::parse(&bytes).map_err(|source| LaunchError::ClassFileParse {
-        path: path.to_path_buf(),
+        path: display_path,
         source,
     })
 }
 
 pub fn load_main_method(
-    path: &Path,
+    source: &ClassSource,
     main_class: &str,
     args: &[String],
     vm: &mut Vm,
 ) -> Result<Method, LaunchError> {
-    let class_file = load_class_file(path, main_class)?;
+    let class_file = load_class_file(source, main_class)?;
     let class_name = class_file.class_name().unwrap_or(main_class);
 
     // Register the full class (all methods + fields) so that invokevirtual,
@@ -247,19 +255,92 @@ pub fn load_and_register_class(
     class_name: &str,
     vm: &mut Vm,
 ) -> Result<(), LaunchError> {
-    let path = main_class_path(class_path, class_name);
-    load_and_register_class_from(&path, class_name, vm)
+    let source = if is_jar_path(class_path) {
+        ClassSource::JarEntry {
+            jar_path: class_path.to_path_buf(),
+            entry_name: class_relative_path(class_name)
+                .to_string_lossy()
+                .replace('\\', "/"),
+        }
+    } else {
+        ClassSource::File(main_class_path(class_path, class_name))
+    };
+    load_and_register_class_from(&source, class_name, vm)
 }
 
 /// Load and register a class from an already-resolved file path.
 pub fn load_and_register_class_from(
-    path: &Path,
+    source: &ClassSource,
     class_name: &str,
     vm: &mut Vm,
 ) -> Result<(), LaunchError> {
-    let class_file = load_class_file(path, class_name)?;
+    let class_file = load_class_file(source, class_name)?;
     let resolved_name = class_file.class_name().unwrap_or(class_name);
     register_class(resolved_name, &class_file, vm)
+}
+
+fn is_jar_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("jar"))
+        .unwrap_or(false)
+}
+
+fn jar_contains_class(jar_path: &Path, entry_name: &str) -> bool {
+    let Ok(file) = fs::File::open(jar_path) else {
+        return false;
+    };
+    let Ok(mut archive) = ZipArchive::new(file) else {
+        return false;
+    };
+    archive.by_name(entry_name).is_ok()
+}
+
+fn read_class_source(
+    source: &ClassSource,
+    main_class: &str,
+) -> Result<(PathBuf, Vec<u8>), LaunchError> {
+    match source {
+        ClassSource::File(path) => {
+            let bytes = fs::read(path).map_err(|source| {
+                if source.kind() == std::io::ErrorKind::NotFound {
+                    LaunchError::MainClassNotFound {
+                        main_class: main_class.to_string(),
+                        path: path.to_path_buf(),
+                    }
+                } else {
+                    LaunchError::Io {
+                        path: path.to_path_buf(),
+                        source,
+                    }
+                }
+            })?;
+            Ok((path.clone(), bytes))
+        }
+        ClassSource::JarEntry {
+            jar_path,
+            entry_name,
+        } => {
+            let file = fs::File::open(jar_path).map_err(|source| LaunchError::Io {
+                path: jar_path.clone(),
+                source,
+            })?;
+            let mut archive = ZipArchive::new(file).map_err(|source| LaunchError::Io {
+                path: jar_path.clone(),
+                source: std::io::Error::new(std::io::ErrorKind::InvalidData, source.to_string()),
+            })?;
+            let mut entry = archive.by_name(entry_name).map_err(|_| LaunchError::MainClassNotFound {
+                main_class: main_class.to_string(),
+                path: PathBuf::from(format!("{}!/{entry_name}", jar_path.display())),
+            })?;
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).map_err(|source| LaunchError::Io {
+                path: PathBuf::from(format!("{}!/{entry_name}", jar_path.display())),
+                source,
+            })?;
+            Ok((PathBuf::from(format!("{}!/{entry_name}", jar_path.display())), bytes))
+        }
+    }
 }
 
 fn register_class(
@@ -292,11 +373,13 @@ fn register_class(
                 code.max_stack as usize,
                 extract_runtime_constants(class_file, vm),
             )
+            .with_metadata(class_name, &name, &descriptor, member.access_flags)
             .with_reference_classes(extract_reference_classes(class_file))
             .with_field_refs(extract_field_refs(class_file))
             .with_method_refs(extract_method_refs(class_file))
             .with_exception_handlers(extract_exception_handlers(class_file, code))
             .with_line_numbers(extract_line_numbers(code))
+            .with_stack_map_frames(extract_stack_map_frames(code))
             .with_invoke_dynamic_sites(extract_invoke_dynamic_sites(class_file));
 
             // Best-effort verification: log but don't fail on verification errors
@@ -409,10 +492,13 @@ fn method_to_runtime_method(
         code.max_stack as usize,
         extract_runtime_constants(class_file, vm),
     )
+    .with_metadata(class_name, "main", descriptor, method.access_flags)
     .with_reference_classes(extract_reference_classes(class_file))
     .with_field_refs(extract_field_refs(class_file))
     .with_method_refs(extract_method_refs(class_file))
-    .with_exception_handlers(extract_exception_handlers(class_file, code));
+    .with_exception_handlers(extract_exception_handlers(class_file, code))
+    .with_stack_map_frames(extract_stack_map_frames(code))
+    .with_invoke_dynamic_sites(extract_invoke_dynamic_sites(class_file));
 
     match descriptor {
         "([Ljava/lang/String;)V" => {
@@ -539,30 +625,16 @@ fn extract_invoke_dynamic_sites(class_file: &ClassFile) -> Vec<Option<InvokeDyna
                 let (name, descriptor) =
                     resolve_name_and_type(class_file, *name_and_type_index)
                         .unwrap_or_default();
-
-                // Try to extract the target method from the bootstrap method's arguments.
-                // LambdaMetafactory's third argument is a MethodHandle pointing to the
-                // implementation method.
-                let target = bootstrap_methods
+                let kind = bootstrap_methods
                     .get(*bootstrap_method_attr_index as usize)
-                    .and_then(|bm| bm.arguments.get(1)) // arg[1] = MethodHandle
-                    .and_then(|mh_idx| {
-                        if let Ok(ConstantPoolEntry::MethodHandle {
-                            reference_index, ..
-                        }) = class_file.constant_pool.get(*mh_idx)
-                        {
-                            resolve_method_ref(class_file, *reference_index).ok()
-                        } else {
-                            None
-                        }
-                    })
-                    .map(|mr| (mr.class_name, mr.method_name, mr.descriptor));
+                    .map(|bm| resolve_invoke_dynamic_kind(class_file, bm))
+                    .unwrap_or(InvokeDynamicKind::Unknown);
 
                 Some(InvokeDynamicSite {
                     name,
                     descriptor,
                     bootstrap_method_index: *bootstrap_method_attr_index,
-                    target,
+                    kind,
                 })
             }
             _ => None,
@@ -573,10 +645,108 @@ fn extract_invoke_dynamic_sites(class_file: &ClassFile) -> Vec<Option<InvokeDyna
     sites
 }
 
+fn resolve_invoke_dynamic_kind(
+    class_file: &ClassFile,
+    bootstrap_method: &crate::classfile::BootstrapMethod,
+) -> InvokeDynamicKind {
+    let Ok((bootstrap_class, bootstrap_name, _)) =
+        resolve_bootstrap_method(class_file, bootstrap_method.method_ref)
+    else {
+        return InvokeDynamicKind::Unknown;
+    };
+
+    match (bootstrap_class.as_str(), bootstrap_name.as_str()) {
+        ("java/lang/invoke/LambdaMetafactory", "metafactory")
+        | ("java/lang/invoke/LambdaMetafactory", "altMetafactory") => bootstrap_method
+            .arguments
+            .get(1)
+            .and_then(|mh_idx| resolve_method_handle_target(class_file, *mh_idx))
+            .map(|mr| InvokeDynamicKind::LambdaProxy {
+                target_class: mr.class_name,
+                target_method: mr.method_name,
+                target_descriptor: mr.descriptor,
+            })
+            .unwrap_or(InvokeDynamicKind::Unknown),
+        ("java/lang/invoke/StringConcatFactory", "makeConcat")
+        | ("java/lang/invoke/StringConcatFactory", "makeConcatWithConstants") => {
+            let recipe = bootstrap_method
+                .arguments
+                .first()
+                .and_then(|index| constant_string_value(class_file, *index));
+            let constants = bootstrap_method
+                .arguments
+                .iter()
+                .skip(1)
+                .filter_map(|index| constant_string_value(class_file, *index))
+                .collect();
+            InvokeDynamicKind::StringConcat { recipe, constants }
+        }
+        _ => InvokeDynamicKind::Unknown,
+    }
+}
+
+fn resolve_bootstrap_method(
+    class_file: &ClassFile,
+    method_handle_index: u16,
+) -> Result<(String, String, String), ClassFileError> {
+    let ConstantPoolEntry::MethodHandle {
+        reference_index, ..
+    } = class_file.constant_pool.get(method_handle_index)?
+    else {
+        return Err(ClassFileError::UnexpectedConstantType {
+            index: method_handle_index,
+            expected: "MethodHandle",
+            actual: class_file.constant_pool.get(method_handle_index)?.kind_name(),
+        });
+    };
+    let method_ref = resolve_method_ref(class_file, *reference_index)?;
+    Ok((
+        method_ref.class_name,
+        method_ref.method_name,
+        method_ref.descriptor,
+    ))
+}
+
+fn resolve_method_handle_target(class_file: &ClassFile, method_handle_index: u16) -> Option<MethodRef> {
+    let Ok(ConstantPoolEntry::MethodHandle {
+        reference_index, ..
+    }) = class_file.constant_pool.get(method_handle_index)
+    else {
+        return None;
+    };
+    resolve_method_ref(class_file, *reference_index).ok()
+}
+
+fn constant_string_value(class_file: &ClassFile, index: u16) -> Option<String> {
+    match class_file.constant_pool.get(index).ok()? {
+        ConstantPoolEntry::String { string_index } => {
+            class_file.constant_pool.utf8(*string_index).ok().map(str::to_string)
+        }
+        ConstantPoolEntry::Utf8(value) => Some(value.clone()),
+        ConstantPoolEntry::Integer(value) => Some(value.to_string()),
+        ConstantPoolEntry::Long(value) => Some(value.to_string()),
+        ConstantPoolEntry::Float(value) => Some(value.to_string()),
+        ConstantPoolEntry::Double(value) => Some(value.to_string()),
+        ConstantPoolEntry::Class { name_index } => {
+            class_file.constant_pool.utf8(*name_index).ok().map(str::to_string)
+        }
+        _ => None,
+    }
+}
+
 fn extract_line_numbers(code: &crate::classfile::CodeAttribute) -> Vec<(u16, u16)> {
     for attr in &code.attributes {
         if let AttributeInfo::LineNumberTable(entries) = attr {
             return entries.iter().map(|e| (e.start_pc, e.line_number)).collect();
+        }
+    }
+    Vec::new()
+}
+
+fn extract_stack_map_frames(code: &crate::classfile::CodeAttribute) -> Vec<StackMapFrame> {
+    for attr in &code.attributes {
+        if let AttributeInfo::StackMapTable(frames) = attr {
+            return frames.clone();
         }
     }
     Vec::new()
@@ -610,6 +780,10 @@ fn resolve_method_ref(class_file: &ClassFile, index: u16) -> Result<MethodRef, C
         ConstantPoolEntry::Methodref {
             class_index,
             name_and_type_index,
+        }
+        | ConstantPoolEntry::InterfaceMethodref {
+            class_index,
+            name_and_type_index,
         } => {
             let class_name = class_file.constant_pool.class_name(*class_index)?.to_string();
             let (method_name, descriptor) =
@@ -622,7 +796,7 @@ fn resolve_method_ref(class_file: &ClassFile, index: u16) -> Result<MethodRef, C
         }
         entry => Err(ClassFileError::UnexpectedConstantType {
             index,
-            expected: "Methodref",
+            expected: "Methodref or InterfaceMethodref",
             actual: entry.kind_name(),
         }),
     }
@@ -666,7 +840,7 @@ mod tests {
 
     use super::{
         LaunchError, LaunchOptions, launch, load_main_method, main_class_path,
-        parse_launch_options,
+        parse_launch_options, resolve_class_path,
     };
 
     #[test]
@@ -743,13 +917,123 @@ public class Main {
             String::from_utf8_lossy(&output.stderr)
         );
 
-        let class_file = main_class_path(&root, "demo.Main");
+        let source = resolve_class_path(&[root.clone()], "demo.Main").unwrap();
         let mut vm = Vm::new();
-        let method = load_main_method(&class_file, "demo.Main", &[], &mut vm).unwrap();
+        let method = load_main_method(&source, "demo.Main", &[], &mut vm).unwrap();
         let result = vm.execute(method).unwrap();
 
         assert_eq!(result, ExecutionResult::Void);
         assert_eq!(vm.take_output(), vec!["123".to_string(), "hi".to_string()]);
+    }
+
+    #[test]
+    fn loads_main_class_from_jar_classpath() {
+        let root = temp_dir("loads_main_class_from_jar_classpath");
+        let source_dir = root.join("demo");
+        fs::create_dir_all(&source_dir).unwrap();
+        let source_file = source_dir.join("Main.java");
+        fs::write(
+            &source_file,
+            r#"package demo;
+
+public class Main {
+    public static void main(String[] args) {
+        System.out.println(7);
+    }
+}
+"#,
+        )
+        .unwrap();
+
+        let output = Command::new("javac")
+            .arg("--release")
+            .arg("8")
+            .arg("-d")
+            .arg(&root)
+            .arg(&source_file)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "javac failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let jar_path = root.join("demo.jar");
+        let output = Command::new("jar")
+            .arg("--create")
+            .arg("--file")
+            .arg(&jar_path)
+            .arg("-C")
+            .arg(&root)
+            .arg("demo")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "jar failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let options = LaunchOptions::new(&jar_path, "demo.Main", vec![]);
+        let result = launch(&options).unwrap();
+        assert_eq!(result, ExecutionResult::Void);
+    }
+
+    #[test]
+    fn parses_classes_from_jar_source() {
+        let root = temp_dir("parses_classes_from_jar_source");
+        let source_dir = root.join("demo");
+        fs::create_dir_all(&source_dir).unwrap();
+        let source_file = source_dir.join("Main.java");
+        fs::write(
+            &source_file,
+            r#"package demo;
+
+public class Main {
+    public static void main(String[] args) {
+        System.out.println("jar");
+    }
+}
+"#,
+        )
+        .unwrap();
+
+        let output = Command::new("javac")
+            .arg("--release")
+            .arg("8")
+            .arg("-d")
+            .arg(&root)
+            .arg(&source_file)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "javac failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let jar_path = root.join("demo.jar");
+        let output = Command::new("jar")
+            .arg("--create")
+            .arg("--file")
+            .arg(&jar_path)
+            .arg("-C")
+            .arg(&root)
+            .arg("demo")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "jar failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let source = resolve_class_path(&[jar_path], "demo.Main").unwrap();
+        let mut vm = Vm::new();
+        let method = load_main_method(&source, "demo.Main", &[], &mut vm).unwrap();
+        let result = vm.execute(method).unwrap();
+        assert_eq!(result, ExecutionResult::Void);
     }
 
     #[test]

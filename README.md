@@ -47,17 +47,16 @@ jvm-rs -Xtrace -cp examples demo.Main
 `ifeq`, `ifne`, `iflt`, `ifge`, `ifgt`, `ifle`, `if_icmpeq`, `if_icmpne`, `if_icmplt`, `if_icmpge`, `if_icmpgt`, `if_icmple`, `if_acmpeq`, `if_acmpne`, `lcmp`, `fcmpl`, `fcmpg`, `dcmpl`, `dcmpg`, `instanceof`
 
 **Control** (all implemented)
-`goto`, `goto_w`, `tableswitch`, `lookupswitch`, `ireturn`, `lreturn`, `freturn`, `dreturn`, `areturn`, `return`
+`goto`, `goto_w`, `jsr`, `jsr_w`, `ret`, `tableswitch`, `lookupswitch`, `ireturn`, `lreturn`, `freturn`, `dreturn`, `areturn`, `return`
 
-**References** (all except `invokedynamic`)
-`getstatic`, `putstatic`, `getfield`, `putfield`, `invokevirtual`, `invokespecial`, `invokestatic`, `invokeinterface`, `new`, `newarray`, `anewarray`, `multianewarray`, `arraylength`, `athrow`, `checkcast`, `instanceof`, `monitorenter`, `monitorexit`, `ifnull`, `ifnonnull`
+**References** (implemented, with partial `invokedynamic` support)
+`getstatic`, `putstatic`, `getfield`, `putfield`, `invokevirtual`, `invokespecial`, `invokestatic`, `invokeinterface`, `invokedynamic`, `new`, `newarray`, `anewarray`, `multianewarray`, `arraylength`, `athrow`, `checkcast`, `instanceof`, `monitorenter`, `monitorexit`, `ifnull`, `ifnonnull`
 
 **Extended**: `wide`
 
 | Not yet implemented | Notes |
 |---|---|
-| `invokedynamic` | Requires bootstrap method linkage |
-| `jsr`, `jsr_w`, `ret` | Legacy (deprecated since Java 6) |
+| Full `invokedynamic` bootstrap coverage | Lambda proxies and `StringConcatFactory` are supported; other bootstrap patterns may still be incomplete |
 
 ### Runtime Features
 
@@ -66,19 +65,24 @@ jvm-rs -Xtrace -cp examples demo.Main
 - **Object model**: Heap-allocated objects with fields, all primitive types (int/long/float/double), arrays (all types, multi-dimensional)
 - **Exception handling**: Exception tables, `athrow`, try-catch-finally, VM errors converted to Java exceptions (NPE, AIOOBE, ArithmeticException, ClassCast, NegativeArraySize)
 - **Static initializers**: `<clinit>` executed on first class access
-- **Monitors**: Reentrant lock count per object, `IllegalMonitorStateException` on invalid exit
+- **Threading model**: `Vm::spawn()` shares heap, loaded classes, class initialization state, monitors, and captured output across threads
+- **Java thread API**: Built-in `Thread` / `Runnable` support with `Thread.start()` and `Thread.join()`
+- **Monitors**: Reentrant lock count per object, blocking monitor acquisition across threads, `Object.wait/notify/notifyAll`, `IllegalMonitorStateException` on invalid exit
+- **Verification**: Structural and data-flow bytecode verification with `StackMapTable` checks
+- **`invokedynamic`**: Supports lambda proxies via `LambdaMetafactory` and modern string concatenation via `StringConcatFactory`
 
 ### Built-in Classes
 
 | Class | Methods |
 |---|---|
-| `java.lang.Object` | `<init>` |
+| `java.lang.Object` | `<init>`, `wait`, `notify`, `notifyAll` |
 | `java.lang.System` | `out` (static field) |
 | `java.io.PrintStream` | `println`/`print` for void, int, long, float, double, boolean, char, String |
 | `java.lang.String` | `length`, `charAt`, `equals`, `hashCode` |
 | `java.lang.Integer` | `parseInt`, `valueOf`, `intValue` |
 | `java.lang.StringBuilder` | `<init>`, `append` (all types), `toString`, `length` |
 | `java.lang.Math` | `max`, `min`, `abs` (int/long/double), `sqrt`, `pow` |
+| `java.lang.Thread` / `java.lang.Runnable` | `Thread.<init>`, `Thread.start`, `Thread.run`, `Thread.join` |
 | Exception hierarchy | `Throwable` through `ArithmeticException`, `NullPointerException`, `ClassCastException`, etc. |
 
 ## Project Structure

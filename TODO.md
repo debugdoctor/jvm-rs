@@ -6,9 +6,124 @@ References:
 - JVMS 21 main index: https://docs.oracle.com/javase/specs/jvms/se21/html/index.html
 - JVMS 21 instruction set: https://docs.oracle.com/javase/specs/jvms/se21/html/jvms-6.html#jvms-6.5
 
-## Status: Feature Complete
+## Status: Phase 1 Complete — Phase 2 Open
 
-All actionable items on this roadmap have been implemented. The remaining unchecked boxes are explicit non-goals (e.g. finalization) that we have decided not to pursue — see §11.7 for the rationale.
+**Phase 1 — Minimal spec-conformant JVM** (§1–§11): done. A JVMS 21 core that can load, verify, and execute compiled Java with a hand-written subset of built-ins.
+
+**Phase 2 — HotSpot-class runtime** (§12–§16): open. The new target is to **rival HotSpot on feature richness while beating it on startup time, steady-state throughput, and memory footprint**. HotSpot loads thousands of classes from `jmods/` into an unbounded Metaspace and pays for it in RSS and warm-up; jvm-rs only registers ~15 built-ins today. Closing the feature gap without importing HotSpot's overhead is the whole game.
+
+Concretely, Phase 2 success means:
+- Running unmodified real-world Java workloads (Spring-less servers, CLI tools, build scripts) — not just hand-picked demos
+- Lower cold-start latency than HotSpot `-Xshare:auto` on the same workload
+- Lower peak and steady-state RSS than HotSpot at matched throughput
+- Steady-state throughput within 2× of C2 on numeric/allocation-heavy loops, via a tiered interpreter + JIT
+
+## 12. Standard Library Coverage — Open
+
+Goal: run code that uses the JDK without `ClassNotFound`, without shipping all of `jmods/`.
+
+### 12.1 Load Strategy
+- [x] Decide: ship a curated subset of OpenJDK `java.base` `.class` files vs. lazy-load from a system `jmods/` vs. rewrite pure-Java classes in Rust natives
+- [x] Lazy class-loader pipeline: resolve a class only when first referenced, cache parsed `RuntimeClass`, evict cold classes under pressure
+- [x] Bootstrap class-loader delegation model (parent-first), with a concrete story for `sun.*` / `jdk.internal.*` internals the JDK relies on
+
+### 12.2 Collections & Data Structures (`java.util`)
+- [x] `ArrayList` — basic add/get/size from real JDK working
+- [ ] `LinkedList`, `HashMap` (partial — basic put/get/size), `LinkedHashMap`, `TreeMap`, `HashSet`, `LinkedHashSet`, `TreeSet`, `ArrayDeque`, `PriorityQueue`
+- [ ] `Iterator`, `Iterable`, `Collection`, `List`, `Map`, `Set`, `Queue`, `Deque` interfaces with `default` methods
+- [ ] `Collections` (sort, shuffle, unmodifiable*, emptyList/Map/Set, singletonList)
+- [ ] `Arrays` (sort, binarySearch, asList, copyOf, copyOfRange, fill, toString, hashCode, equals, stream) — bytecode verification issues with StackMapTable
+- [x] `Optional`, `OptionalInt`, `OptionalLong`, `OptionalDouble` — basic Optional.of/isPresent/get working
+
+### 12.3 Streams & Functional (`java.util.stream`, `java.util.function`)
+- [x] `Function` (tested), `Predicate`, `Consumer`, `Supplier` — basic lambda support working
+- [ ] `Stream`, `IntStream`, `LongStream`, `DoubleStream` — requires `Arrays.asList` which has bytecode verification issues
+- [ ] `Collectors` (toList, toMap, groupingBy, joining, counting, reducing)
+- [ ] Full `java.util.function` (BiFunction, IntFunction, Consumer variants, and primitive specializations)
+
+### 12.4 IO & NIO (`java.io`, `java.nio`)
+- [ ] `InputStream`/`OutputStream`/`Reader`/`Writer` hierarchies, `BufferedReader`, `PrintWriter`
+- [ ] `File`, `Files`, `Path`, `Paths`, `StandardOpenOption`
+- [ ] `ByteBuffer`, `CharBuffer`, `Channels` (enough to run logging frameworks)
+- [ ] `Scanner` (full Locale-less subset), `Console`
+
+### 12.5 Concurrency (`java.util.concurrent`)
+- [ ] `ExecutorService`, `ThreadPoolExecutor`, `Executors`, `Future`, `CompletableFuture`
+- [ ] `ConcurrentHashMap`, `ConcurrentLinkedQueue`, `CopyOnWriteArrayList`
+- [ ] `AtomicInteger`, `AtomicLong`, `AtomicReference`, `LongAdder`
+- [ ] `ReentrantLock`, `ReadWriteLock`, `Semaphore`, `CountDownLatch`, `CyclicBarrier`
+- [ ] `VarHandle` / `Unsafe`-lite intrinsics that concurrent collections rely on
+
+### 12.6 Text, Regex, Time, Reflection
+- [ ] `java.util.regex.Pattern`, `Matcher` (wrap the Rust `regex` crate, or port a subset)
+- [ ] `java.time` (Instant, Duration, LocalDate, LocalDateTime, ZonedDateTime, Clock)
+- [ ] `java.text.DecimalFormat`, `MessageFormat`, `NumberFormat`
+- [ ] `java.lang.reflect.{Class, Method, Field, Constructor}` backed by `RuntimeClass`
+- [ ] `java.lang.Class` metadata reachable from user code (`getClass()`, `getName()`, literals via `ldc`)
+
+### 12.7 Build Story
+- [ ] Decide how classes are packaged (embedded in the binary via `include_bytes!`, sidecar `jvm-rs-stdlib.jar`, or lazy-download)
+- [ ] Maintain a compatibility matrix per class — which methods run on real bytecode vs. Rust native stubs
+
+## 13. Performance — Open
+
+Goal: beat HotSpot on cold-start and match-within-2x on steady state, via a simpler pipeline.
+
+### 13.1 Interpreter
+- [ ] Replace the `match Opcode` dispatch loop with a threaded/computed-goto interpreter (or Rust `#[inline(always)]` dispatch table) — cuts branch misprediction on the hot path
+- [ ] Quicken resolved constant-pool entries in place (`_quick` opcode variants) so repeat invokes skip resolution
+- [ ] Inline caching for `invokevirtual` / `invokeinterface` call sites (monomorphic → polymorphic → megamorphic)
+- [ ] Stack-allocated frames where escape analysis permits, instead of `Vec<Frame>` heap growth
+
+### 13.2 JIT
+- [ ] Tier 1: template JIT that emits straight-line machine code per bytecode (via Cranelift) — target 5–10× over interpreter
+- [ ] Tier 2: optimizing JIT over a reduced SSA IR — inlining, DCE, LICM, escape analysis, allocation sinking, box elimination
+- [ ] On-stack replacement (OSR) for hot loops
+- [ ] Method-level adaptive compilation driven by invocation + backedge counters
+- [ ] Deoptimization: guard failures fall back to the interpreter with correct locals/stack
+
+### 13.3 Memory Layout
+- [ ] Compressed object references (32-bit indices on a ≤4 GB heap) — already mostly the case via `Reference::Heap(u32)`; formalize and document
+- [ ] Pack `HeapValue::Object` fields by descriptor into a flat `Vec<u8>` with an offset table per class, instead of `BTreeMap<String, Value>` — kills per-object hashing + allocation overhead
+- [ ] String deduplication / interning table shared across threads
+- [ ] Class metadata in a flat arena, not per-class `HashMap`
+
+### 13.4 Garbage Collection
+- [ ] Generational heap: bump-allocated young gen + mark-sweep old gen
+- [ ] Concurrent marking so GC pauses scale with live set, not heap size
+- [ ] Optional region-based collector (G1-style) once generational is stable
+- [ ] Per-thread allocation buffers (TLABs) to remove the global heap lock from the allocation fast path
+
+## 14. Memory Footprint — Open
+
+Goal: lower RSS than HotSpot at matched throughput. HotSpot's Metaspace + code cache + compiler threads dominate its baseline; jvm-rs should stay lean.
+
+- [ ] Class-data-sharing analogue: mmap a pre-parsed `RuntimeClass` blob so cold classes don't cost parse time or heap
+- [ ] Lazy method-body parsing — parse `Code` attributes on first call, not at class load
+- [ ] Drop unused constant-pool entries after resolution
+- [ ] Bytecode → internal-opcode rewrite once, reuse forever (no re-decoding per invocation)
+- [ ] Measure and publish an RSS/throughput baseline vs. HotSpot on a fixed workload; regression-gate it in CI
+
+## 15. Tooling & Observability — Open
+
+- [ ] `-Xlog:gc`, `-Xlog:class+load`, `-Xlog:jit` style structured logging
+- [ ] JFR-compatible event stream (or a jvm-rs-native equivalent) for flight-recording
+- [ ] `jmap`-equivalent heap dump (hprof format) so existing analyzers work
+- [ ] `jstack`-equivalent thread dump
+- [ ] Attach API for runtime instrumentation (sampling profiler at minimum)
+
+## 16. Compatibility & Validation — Open
+
+- [ ] Run the OpenJDK jtreg tier-1 tests against jvm-rs; track pass rate as a first-class metric
+- [ ] Run a real workload (e.g. `javac` itself, a plain servlet container, a CLI like `jshell`) end-to-end
+- [ ] Benchmark suite: DaCapo / Renaissance subset that fits the supported std-lib surface
+- [ ] Publish per-release perf + footprint numbers vs. HotSpot on the same machine
+
+## Non-goals (unchanged)
+
+- `Object.finalize` / finalization queue (see §11.7)
+- Full `javax.*` / `java.desktop` / `java.sql` / RMI — outside the §12 core
+- Signing, JMX, JVMTI native agent ABI compatibility
 
 ## 1. JVMS 21 Foundations — Complete
 
@@ -83,9 +198,9 @@ All actionable items on this roadmap have been implemented. The remaining unchec
 - [x] Multiple classpath entries, on-demand class loading
 - [x] Execution tracing (`-Xtrace`), improved error diagnostics
 
-## 10. Testing — 84 tests
-- [x] 57 unit tests (opcodes, VM behavior, GC API)
-- [x] 27 integration tests (compile Java + execute): core language, built-ins (String/Integer/Long/Character/Boolean/Math/System/Objects), modern `javac` output (`var`, try/finally unwinding, nested lambdas, interface `default` methods, `StringConcatFactory`), and regressions for `tableswitch`/`lookupswitch`, multi-dim arrays, long arithmetic, nested exceptions, StringBuilder edits
+## 10. Testing — 95 tests
+- [x] 61 unit tests (opcodes, VM behavior, GC API)
+- [x] 34 integration tests (compile Java + execute): core language, built-ins, modern `javac` output, regressions, ArrayList/HashMap, java.util.function (Function/Predicate/Consumer/Supplier), Optional
 
 ## 11. Remaining TODOs
 
@@ -111,9 +226,9 @@ All actionable items on this roadmap have been implemented. The remaining unchec
 - [x] Support common modern JDK bootstrap use cases such as `StringConcatFactory`
 
 ### 11.6 Built-In Classes And Native Methods
-- [x] Expanded built-ins: `java.lang.{String, Integer, Long, Character, Boolean, Math, System, StringBuilder, Throwable}` and `java.util.Objects`
-- [x] Added native methods: `String` (substring, indexOf, startsWith/endsWith, contains, trim, {to,from}Case, concat, replace, compareTo, all `valueOf` overloads), `Integer`/`Long` (parse, radix conversions, compare), `Character` (is*, to*, toString), `Boolean` (parseBoolean, valueOf, toString), `Math` (floor, ceil, round, random, log, log10, exp, sin/cos/tan), `System` (`currentTimeMillis`, `nanoTime`, `arraycopy`, `exit`, `getProperty`, `lineSeparator`, `identityHashCode`), `Objects` (requireNonNull, equals, isNull, nonNull), exception constructors (`<init>(Ljava/lang/String;)V` and variants) + `Throwable.getMessage`, and `StringBuilder` (charAt, setLength, deleteCharAt, setCharAt, reverse, insert)
-- [x] Interface `default` methods via `RuntimeClass.interfaces` and interface-aware `resolve_method`
+- [x] Expanded built-ins: `java.lang.{String, Integer, Long, Character, Boolean, Math, System, StringBuilder, Throwable}` and `java.util.Objects` (loads from JDK java.base.jmod, not stub)
+- [x] Added native methods: `String` (substring, indexOf, startsWith/endsWith, contains, trim, {to,from}Case, concat, replace, compareTo, all `valueOf` overloads), `Integer`/`Long` (parse, radix conversions, compare), `Character` (is*, to*, toString), `Boolean` (parseBoolean, valueOf, toString), `Math` (floor, ceil, round, random, log, log10, exp, sin/cos/tan), `System` (`currentTimeMillis`, `nanoTime`, `arraycopy`, `exit`, `getProperty`, `lineSeparator`, `identityHashCode`), `Objects` (requireNonNull, equals, isNull, nonNull — loads from JDK, not stub), exception constructors (`<init>(Ljava/lang/String;)V` and variants) + `Throwable.getMessage`, and `StringBuilder` (charAt, setLength, deleteCharAt, setCharAt, reverse, insert)
+- [x] Interface `default` methods via `RuntimeClass.interfaces` and interface-aware `resolve_method` (tested with modern_javac_interface_default_dispatch)
 
 ### 11.7 Garbage Collection
 - [x] Improve GC beyond basic mark-and-sweep — configurable threshold, manual trigger, and cumulative `GcStats`

@@ -260,30 +260,7 @@ impl Vm {
                 interfaces: vec![],
             });
 
-        // java/util/Objects
-        let mut objects_methods = BTreeMap::new();
-        for (name, desc) in [
-            ("requireNonNull", "(Ljava/lang/Object;)Ljava/lang/Object;"),
-            ("requireNonNull", "(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Object;"),
-            ("equals", "(Ljava/lang/Object;Ljava/lang/Object;)Z"),
-            ("isNull", "(Ljava/lang/Object;)Z"),
-            ("nonNull", "(Ljava/lang/Object;)Z"),
-        ] {
-            objects_methods.insert(
-                (name.to_string(), desc.to_string()),
-                ClassMethod::Native,
-            );
-        }
-        self.register_class(RuntimeClass {
-                name: "java/util/Objects".to_string(),
-                super_class: Some("java/lang/Object".to_string()),
-                methods: objects_methods,
-                static_fields: BTreeMap::new(),
-                instance_fields: vec![],
-                interfaces: vec![],
-            });
-
-        // java/lang/StringBuilder
+        
         let mut sb_methods = BTreeMap::new();
         sb_methods.insert(
             ("<init>".to_string(), "()V".to_string()),

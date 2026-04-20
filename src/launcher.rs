@@ -8,7 +8,7 @@ use crate::classfile::{
 };
 use crate::vm::{
     ClassMethod, ExceptionHandler, ExecutionResult, FieldRef, InvokeDynamicKind,
-    InvokeDynamicSite, Method, MethodRef, RuntimeClass, Value, Vm, VmError,
+    InvokeDynamicSite, Method, MethodRef, Reference, RuntimeClass, Value, Vm, VmError,
 };
 use zip::ZipArchive;
 
@@ -343,7 +343,7 @@ fn read_class_source(
     }
 }
 
-fn register_class(
+pub(crate) fn register_class(
     class_name: &str,
     class_file: &ClassFile,
     vm: &mut Vm,
@@ -389,6 +389,8 @@ fn register_class(
             }
 
             methods.insert((name, descriptor), ClassMethod::Bytecode(method));
+        } else if member.access_flags & 0x0100 != 0 {
+            methods.insert((name, descriptor), ClassMethod::Native);
         }
     }
 
@@ -542,6 +544,10 @@ fn extract_runtime_constants(class_file: &ClassFile, vm: &mut Vm) -> Vec<Option<
                 .utf8(*string_index)
                 .ok()
                 .map(|value| vm.new_string(value.to_string())),
+            Ok(ConstantPoolEntry::MethodType { descriptor_index: _ })
+            | Ok(ConstantPoolEntry::Class { name_index: _ }) => {
+                Some(Value::Reference(Reference::Null))
+            }
             _ => None,
         };
         constants.push(value);
@@ -693,7 +699,7 @@ fn resolve_invoke_dynamic_kind(
     }
 }
 
-fn resolve_bootstrap_method(
+pub(crate) fn resolve_bootstrap_method(
     class_file: &ClassFile,
     method_handle_index: u16,
 ) -> Result<(String, String, String), ClassFileError> {
@@ -715,7 +721,7 @@ fn resolve_bootstrap_method(
     ))
 }
 
-fn resolve_method_handle_target(class_file: &ClassFile, method_handle_index: u16) -> Option<MethodRef> {
+pub(crate) fn resolve_method_handle_target(class_file: &ClassFile, method_handle_index: u16) -> Option<MethodRef> {
     let Ok(ConstantPoolEntry::MethodHandle {
         reference_index, ..
     }) = class_file.constant_pool.get(method_handle_index)

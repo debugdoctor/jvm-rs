@@ -1,1225 +1,36 @@
 mod builtin;
+mod classloader;
+mod frame;
+mod heap;
+mod thread;
+mod types;
 pub mod verify;
+
+pub use crate::classfile::ClassFile;
+pub use heap::GcStats;
+pub use thread::JvmThread;
+pub use types::{
+    ClassMethod, ExceptionHandler, ExecutionResult, FieldRef, InvokeDynamicKind, InvokeDynamicSite,
+    Method, MethodRef, Reference, RuntimeClass, Value, VmError,
+};
+use frame::Frame;
+use heap::{Heap, HeapValue};
+use thread::{
+    ClassInitializationState, JavaThreadState, RuntimeState, SharedMonitors,
+    SharedThreads, Thread,
+};
+use types::{default_value_for_descriptor, format_vm_float, parse_arg_count, parse_arg_types};
 
 use std::collections::BTreeMap;
 use std::fmt;
 use std::path::PathBuf;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Mutex};
 
 use crate::bytecode::Opcode;
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Value {
-    Int(i32),
-    Long(i64),
-    Float(f32),
-    Double(f64),
-    Reference(Reference),
-    ReturnAddress(usize),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Reference {
-    Null,
-    Heap(usize),
-}
-
-impl Value {
-    fn as_int(self) -> Result<i32, VmError> {
-        match self {
-            Self::Int(value) => Ok(value),
-            other => Err(VmError::TypeMismatch {
-                expected: "int",
-                actual: other.type_name(),
-            }),
-        }
-    }
-
-    fn as_long(self) -> Result<i64, VmError> {
-        match self {
-            Self::Long(value) => Ok(value),
-            other => Err(VmError::TypeMismatch {
-                expected: "long",
-                actual: other.type_name(),
-            }),
-        }
-    }
-
-    fn as_float(self) -> Result<f32, VmError> {
-        match self {
-            Self::Float(value) => Ok(value),
-            other => Err(VmError::TypeMismatch {
-                expected: "float",
-                actual: other.type_name(),
-            }),
-        }
-    }
-
-    fn as_double(self) -> Result<f64, VmError> {
-        match self {
-            Self::Double(value) => Ok(value),
-            other => Err(VmError::TypeMismatch {
-                expected: "double",
-                actual: other.type_name(),
-            }),
-        }
-    }
-
-    fn as_reference(self) -> Result<Reference, VmError> {
-        match self {
-            Self::Reference(reference) => Ok(reference),
-            other => Err(VmError::TypeMismatch {
-                expected: "reference",
-                actual: other.type_name(),
-            }),
-        }
-    }
-
-    fn as_return_address(self) -> Result<usize, VmError> {
-        match self {
-            Self::ReturnAddress(address) => Ok(address),
-            other => Err(VmError::TypeMismatch {
-                expected: "returnAddress",
-                actual: other.type_name(),
-            }),
-        }
-    }
-
-    fn type_name(self) -> &'static str {
-        match self {
-            Self::Int(_) => "int",
-            Self::Long(_) => "long",
-            Self::Float(_) => "float",
-            Self::Double(_) => "double",
-            Self::Reference(_) => "reference",
-            Self::ReturnAddress(_) => "returnAddress",
-        }
-    }
-}
-
-impl fmt::Display for Value {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Int(v) => write!(f, "{v}"),
-            Self::Long(v) => write!(f, "{v}L"),
-            Self::Float(v) => write!(f, "{v}f"),
-            Self::Double(v) => write!(f, "{v}d"),
-            Self::Reference(Reference::Null) => write!(f, "null"),
-            Self::Reference(Reference::Heap(i)) => write!(f, "ref@{i}"),
-            Self::ReturnAddress(pc) => write!(f, "ret@{pc}"),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Method {
-    pub class_name: String,
-    pub name: String,
-    pub descriptor: String,
-    pub access_flags: u16,
-    pub code: Vec<u8>,
-    pub max_locals: usize,
-    pub max_stack: usize,
-    pub constants: Vec<Option<Value>>,
-    pub reference_classes: Vec<Option<String>>,
-    pub field_refs: Vec<Option<FieldRef>>,
-    pub method_refs: Vec<Option<MethodRef>>,
-    pub exception_handlers: Vec<ExceptionHandler>,
-    pub line_numbers: Vec<(u16, u16)>,
-    pub stack_map_frames: Vec<crate::classfile::StackMapFrame>,
-    /// InvokeDynamic call site info: `(name, descriptor, bootstrap_index)` keyed by constant pool index.
-    pub invoke_dynamic_sites: Vec<Option<InvokeDynamicSite>>,
-    pub initial_locals: Vec<Option<Value>>,
-}
-
-/// Resolved info for an `invokedynamic` constant pool entry.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InvokeDynamicSite {
-    pub name: String,
-    pub descriptor: String,
-    pub bootstrap_method_index: u16,
-    pub kind: InvokeDynamicKind,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum InvokeDynamicKind {
-    Unknown,
-    LambdaProxy {
-        target_class: String,
-        target_method: String,
-        target_descriptor: String,
-    },
-    StringConcat {
-        recipe: Option<String>,
-        constants: Vec<String>,
-    },
-}
-
-/// A single entry from the Code attribute's exception_table.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExceptionHandler {
-    pub start_pc: u16,
-    pub end_pc: u16,
-    pub handler_pc: u16,
-    /// Class name of the caught exception, or `None` for catch-all (`finally`).
-    pub catch_class: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FieldRef {
-    pub class_name: String,
-    pub field_name: String,
-    pub descriptor: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MethodRef {
-    pub class_name: String,
-    pub method_name: String,
-    pub descriptor: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum ClassInitializationState {
-    Initializing(u64),
-    Initialized,
-}
-
-#[derive(Debug, Default)]
-struct RuntimeState {
-    classes: BTreeMap<String, RuntimeClass>,
-    initialized_classes: BTreeMap<String, ClassInitializationState>,
-}
-
-#[derive(Debug, Default)]
-struct SharedMonitors {
-    states: Mutex<BTreeMap<usize, MonitorState>>,
-    changed: Condvar,
-}
-
-#[derive(Default)]
-struct SharedThreads {
-    states: Mutex<BTreeMap<usize, JavaThreadState>>,
-}
-
-struct JavaThreadState {
-    started: bool,
-    handle: Option<JvmThread>,
-}
-
-impl fmt::Debug for SharedThreads {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let count = self.states.lock().unwrap().len();
-        f.debug_struct("SharedThreads")
-            .field("thread_count", &count)
-            .finish()
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct RuntimeClass {
-    pub name: String,
-    pub super_class: Option<String>,
-    pub methods: BTreeMap<(String, String), ClassMethod>,
-    pub static_fields: BTreeMap<String, Value>,
-    /// Instance field definitions: (name, descriptor).
-    pub instance_fields: Vec<(String, String)>,
-    /// Names of directly implemented interfaces. Empty for built-in classes and for
-    /// classes that do not declare any interface. Used by `resolve_method` to find
-    /// interface `default` methods when no class-hierarchy method matches.
-    #[doc(hidden)]
-    pub interfaces: Vec<String>,
-}
-
-#[derive(Debug, Clone)]
-pub enum ClassMethod {
-    Bytecode(Method),
-    Native,
-}
-
-impl Method {
-    pub fn new(code: impl Into<Vec<u8>>, max_locals: usize, max_stack: usize) -> Self {
-        Self::with_constants(code, max_locals, max_stack, [])
-    }
-
-    pub fn with_constants(
-        code: impl Into<Vec<u8>>,
-        max_locals: usize,
-        max_stack: usize,
-        constants: impl Into<Vec<Value>>,
-    ) -> Self {
-        let mut constant_pool = vec![None];
-        constant_pool.extend(constants.into().into_iter().map(Some));
-        Self::with_constant_pool(code, max_locals, max_stack, constant_pool)
-    }
-
-    pub fn with_constant_pool(
-        code: impl Into<Vec<u8>>,
-        max_locals: usize,
-        max_stack: usize,
-        constants: impl Into<Vec<Option<Value>>>,
-    ) -> Self {
-        Self {
-            class_name: String::new(),
-            name: String::new(),
-            descriptor: String::new(),
-            access_flags: 0,
-            code: code.into(),
-            max_locals,
-            max_stack,
-            constants: constants.into(),
-            reference_classes: Vec::new(),
-            field_refs: Vec::new(),
-            method_refs: Vec::new(),
-            exception_handlers: Vec::new(),
-            line_numbers: Vec::new(),
-            stack_map_frames: Vec::new(),
-            invoke_dynamic_sites: Vec::new(),
-            initial_locals: Vec::new(),
-        }
-    }
-
-    pub fn with_metadata(
-        mut self,
-        class_name: impl Into<String>,
-        name: impl Into<String>,
-        descriptor: impl Into<String>,
-        access_flags: u16,
-    ) -> Self {
-        self.class_name = class_name.into();
-        self.name = name.into();
-        self.descriptor = descriptor.into();
-        self.access_flags = access_flags;
-        self
-    }
-
-    pub fn with_initial_locals(mut self, locals: impl Into<Vec<Option<Value>>>) -> Self {
-        self.initial_locals = locals.into();
-        self
-    }
-
-    pub fn with_reference_classes(mut self, classes: impl Into<Vec<Option<String>>>) -> Self {
-        self.reference_classes = classes.into();
-        self
-    }
-
-    pub fn with_field_refs(mut self, field_refs: impl Into<Vec<Option<FieldRef>>>) -> Self {
-        self.field_refs = field_refs.into();
-        self
-    }
-
-    pub fn with_method_refs(mut self, method_refs: impl Into<Vec<Option<MethodRef>>>) -> Self {
-        self.method_refs = method_refs.into();
-        self
-    }
-
-    pub fn with_line_numbers(mut self, line_numbers: impl Into<Vec<(u16, u16)>>) -> Self {
-        self.line_numbers = line_numbers.into();
-        self
-    }
-
-    pub fn with_stack_map_frames(
-        mut self,
-        frames: impl Into<Vec<crate::classfile::StackMapFrame>>,
-    ) -> Self {
-        self.stack_map_frames = frames.into();
-        self
-    }
-
-    pub fn with_invoke_dynamic_sites(
-        mut self,
-        sites: impl Into<Vec<Option<InvokeDynamicSite>>>,
-    ) -> Self {
-        self.invoke_dynamic_sites = sites.into();
-        self
-    }
-
-    pub fn with_exception_handlers(
-        mut self,
-        handlers: impl Into<Vec<ExceptionHandler>>,
-    ) -> Self {
-        self.exception_handlers = handlers.into();
-        self
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum ExecutionResult {
-    Void,
-    Value(Value),
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum VmError {
-    StackUnderflow,
-    StackOverflow {
-        max_stack: usize,
-    },
-    InvalidLocalIndex {
-        index: usize,
-        max_locals: usize,
-    },
-    UninitializedLocal {
-        index: usize,
-    },
-    InvalidOpcode {
-        opcode: u8,
-        pc: usize,
-    },
-    UnexpectedEof {
-        pc: usize,
-    },
-    InvalidConstantIndex {
-        index: usize,
-        constant_count: usize,
-    },
-    InvalidClassConstantIndex {
-        index: usize,
-        constant_count: usize,
-    },
-    InvalidFieldRefIndex {
-        index: usize,
-        constant_count: usize,
-    },
-    InvalidMethodRefIndex {
-        index: usize,
-        constant_count: usize,
-    },
-    UnsupportedNewArrayType {
-        atype: u8,
-    },
-    ClassNotFound {
-        class_name: String,
-    },
-    FieldNotFound {
-        class_name: String,
-        field_name: String,
-    },
-    MethodNotFound {
-        class_name: String,
-        method_name: String,
-        descriptor: String,
-    },
-    UnsupportedNativeMethod {
-        class_name: String,
-        method_name: String,
-        descriptor: String,
-    },
-    InvalidDescriptor {
-        descriptor: String,
-    },
-    ClassCastError {
-        from: String,
-        to: String,
-    },
-    UnhandledException {
-        class_name: String,
-    },
-    TypeMismatch {
-        expected: &'static str,
-        actual: &'static str,
-    },
-    NegativeArraySize {
-        size: i32,
-    },
-    NullReference,
-    InvalidHeapReference {
-        reference: usize,
-    },
-    ArrayIndexOutOfBounds {
-        index: i32,
-        len: usize,
-    },
-    InvalidHeapValue {
-        expected: &'static str,
-        actual: &'static str,
-    },
-    DivisionByZero,
-    InvalidBranchTarget {
-        target: isize,
-        code_len: usize,
-    },
-    MissingReturn,
-    VerificationError {
-        pc: usize,
-        reason: String,
-    },
-}
-
-impl fmt::Display for VmError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::StackUnderflow => write!(f, "operand stack underflow"),
-            Self::StackOverflow { max_stack } => {
-                write!(f, "operand stack overflow (max_stack = {max_stack})")
-            }
-            Self::InvalidLocalIndex { index, max_locals } => {
-                write!(
-                    f,
-                    "invalid local variable index {index} (max_locals = {max_locals})"
-                )
-            }
-            Self::UninitializedLocal { index } => {
-                write!(f, "local variable {index} has not been initialized")
-            }
-            Self::InvalidOpcode { opcode, pc } => {
-                write!(f, "invalid opcode 0x{opcode:02x} at pc {pc}")
-            }
-            Self::UnexpectedEof { pc } => write!(f, "unexpected end of bytecode at pc {pc}"),
-            Self::InvalidConstantIndex {
-                index,
-                constant_count,
-            } => write!(
-                f,
-                "invalid constant pool index {index} (constant_count = {constant_count})"
-            ),
-            Self::InvalidClassConstantIndex {
-                index,
-                constant_count,
-            } => write!(
-                f,
-                "invalid class constant index {index} (constant_count = {constant_count})"
-            ),
-            Self::InvalidFieldRefIndex {
-                index,
-                constant_count,
-            } => write!(
-                f,
-                "invalid field reference index {index} (constant_count = {constant_count})"
-            ),
-            Self::InvalidMethodRefIndex {
-                index,
-                constant_count,
-            } => write!(
-                f,
-                "invalid method reference index {index} (constant_count = {constant_count})"
-            ),
-            Self::UnsupportedNewArrayType { atype } => {
-                write!(f, "unsupported newarray atype {atype}")
-            }
-            Self::ClassNotFound { class_name } => {
-                write!(f, "class not found: {class_name}")
-            }
-            Self::FieldNotFound {
-                class_name,
-                field_name,
-            } => write!(f, "field not found: {class_name}.{field_name}"),
-            Self::MethodNotFound {
-                class_name,
-                method_name,
-                descriptor,
-            } => write!(
-                f,
-                "method not found: {class_name}.{method_name}{descriptor}"
-            ),
-            Self::UnsupportedNativeMethod {
-                class_name,
-                method_name,
-                descriptor,
-            } => write!(
-                f,
-                "unsupported native method: {class_name}.{method_name}{descriptor}"
-            ),
-            Self::InvalidDescriptor { descriptor } => {
-                write!(f, "invalid method descriptor: {descriptor}")
-            }
-            Self::ClassCastError { from, to } => {
-                write!(f, "class cast error: {from} cannot be cast to {to}")
-            }
-            Self::UnhandledException { class_name } => {
-                write!(f, "unhandled exception: {class_name}")
-            }
-            Self::TypeMismatch { expected, actual } => {
-                write!(f, "type mismatch: expected {expected}, got {actual}")
-            }
-            Self::NegativeArraySize { size } => write!(f, "negative array size {size}"),
-            Self::NullReference => write!(f, "null reference"),
-            Self::InvalidHeapReference { reference } => {
-                write!(f, "invalid heap reference {reference}")
-            }
-            Self::ArrayIndexOutOfBounds { index, len } => {
-                write!(f, "array index out of bounds: index {index}, len {len}")
-            }
-            Self::InvalidHeapValue { expected, actual } => {
-                write!(f, "heap value mismatch: expected {expected}, got {actual}")
-            }
-            Self::DivisionByZero => write!(f, "division by zero"),
-            Self::InvalidBranchTarget { target, code_len } => write!(
-                f,
-                "invalid branch target {target} for bytecode length {code_len}"
-            ),
-            Self::MissingReturn => write!(f, "method completed without return instruction"),
-            Self::VerificationError { pc, reason } => {
-                write!(f, "verification failed at pc {pc}: {reason}")
-            }
-        }
-    }
-}
-
-impl std::error::Error for VmError {}
-
-#[derive(Debug)]
-struct Frame {
-    code: Vec<u8>,
-    pc: usize,
-    locals: Vec<Option<Value>>,
-    stack: Vec<Value>,
-    max_stack: usize,
-    constants: Vec<Option<Value>>,
-    reference_classes: Vec<Option<String>>,
-    field_refs: Vec<Option<FieldRef>>,
-    method_refs: Vec<Option<MethodRef>>,
-    exception_handlers: Vec<ExceptionHandler>,
-    line_numbers: Vec<(u16, u16)>,
-    invoke_dynamic_sites: Vec<Option<InvokeDynamicSite>>,
-}
-
-impl Frame {
-    /// Builds the initial execution frame for a method and seeds any preloaded locals
-    /// such as launcher-provided `main` arguments.
-    fn new(method: Method) -> Self {
-        let mut locals = vec![None; method.max_locals];
-        for (index, value) in method.initial_locals.into_iter().enumerate() {
-            if index >= locals.len() {
-                break;
-            }
-            locals[index] = value;
-        }
-
-        Self {
-            code: method.code,
-            pc: 0,
-            locals,
-            stack: Vec::with_capacity(method.max_stack),
-            max_stack: method.max_stack,
-            constants: method.constants,
-            reference_classes: method.reference_classes,
-            field_refs: method.field_refs,
-            method_refs: method.method_refs,
-            exception_handlers: method.exception_handlers,
-            line_numbers: method.line_numbers,
-            invoke_dynamic_sites: method.invoke_dynamic_sites,
-        }
-    }
-
-    /// Reads the next byte at the current program counter and advances `pc`.
-    fn read_u8(&mut self) -> Result<u8, VmError> {
-        let byte = self
-            .code
-            .get(self.pc)
-            .copied()
-            .ok_or(VmError::UnexpectedEof { pc: self.pc })?;
-        self.pc += 1;
-        Ok(byte)
-    }
-
-    /// Reads a big-endian signed 16-bit immediate from bytecode.
-    fn read_i16(&mut self) -> Result<i16, VmError> {
-        let high = self.read_u8()?;
-        let low = self.read_u8()?;
-        Ok(i16::from_be_bytes([high, low]))
-    }
-
-    /// Reads a big-endian signed 32-bit immediate from bytecode.
-    fn read_i32(&mut self) -> Result<i32, VmError> {
-        let b0 = self.read_u8()?;
-        let b1 = self.read_u8()?;
-        let b2 = self.read_u8()?;
-        let b3 = self.read_u8()?;
-        Ok(i32::from_be_bytes([b0, b1, b2, b3]))
-    }
-
-    /// Reads a big-endian unsigned 16-bit immediate from bytecode.
-    fn read_u16(&mut self) -> Result<u16, VmError> {
-        let high = self.read_u8()?;
-        let low = self.read_u8()?;
-        Ok(u16::from_be_bytes([high, low]))
-    }
-
-    /// Pushes a value onto the operand stack while enforcing the method's `max_stack`.
-    fn push(&mut self, value: Value) -> Result<(), VmError> {
-        if self.stack.len() >= self.max_stack {
-            return Err(VmError::StackOverflow {
-                max_stack: self.max_stack,
-            });
-        }
-        self.stack.push(value);
-        Ok(())
-    }
-
-    /// Pops the top operand stack value, failing if the bytecode underflows the stack.
-    fn pop(&mut self) -> Result<Value, VmError> {
-        self.stack.pop().ok_or(VmError::StackUnderflow)
-    }
-
-    /// Loads an initialized local variable slot.
-    fn load_local(&self, index: usize) -> Result<Value, VmError> {
-        let slot = self.locals.get(index).ok_or(VmError::InvalidLocalIndex {
-            index,
-            max_locals: self.locals.len(),
-        })?;
-        slot.ok_or(VmError::UninitializedLocal { index })
-    }
-
-    /// Stores a value into a local variable slot.
-    fn store_local(&mut self, index: usize, value: Value) -> Result<(), VmError> {
-        let max_locals = self.locals.len();
-        let slot = self
-            .locals
-            .get_mut(index)
-            .ok_or(VmError::InvalidLocalIndex { index, max_locals })?;
-        *slot = Some(value);
-        Ok(())
-    }
-
-    /// Resolves an execution-time constant that has already been projected into `Method.constants`.
-    fn load_constant(&self, index: usize) -> Result<Value, VmError> {
-        self.constants
-            .get(index)
-            .and_then(|value| value.as_ref().copied())
-            .ok_or(VmError::InvalidConstantIndex {
-                index,
-                constant_count: self.constants.len().saturating_sub(1),
-            })
-    }
-
-    /// Resolves the reference component type used by instructions such as `anewarray`.
-    fn load_reference_class(&self, index: usize) -> Result<&str, VmError> {
-        self.reference_classes
-            .get(index)
-            .and_then(|value| value.as_deref())
-            .ok_or(VmError::InvalidClassConstantIndex {
-                index,
-                constant_count: self.reference_classes.len().saturating_sub(1),
-            })
-    }
-
-    /// Resolves a field reference prepared from the class-file constant pool.
-    fn load_field_ref(&self, index: usize) -> Result<&FieldRef, VmError> {
-        self.field_refs
-            .get(index)
-            .and_then(|value| value.as_ref())
-            .ok_or(VmError::InvalidFieldRefIndex {
-                index,
-                constant_count: self.field_refs.len().saturating_sub(1),
-            })
-    }
-
-    /// Resolves a method reference prepared from the class-file constant pool.
-    fn load_method_ref(&self, index: usize) -> Result<&MethodRef, VmError> {
-        self.method_refs
-            .get(index)
-            .and_then(|value| value.as_ref())
-            .ok_or(VmError::InvalidMethodRefIndex {
-                index,
-                constant_count: self.method_refs.len().saturating_sub(1),
-            })
-    }
-
-    /// Applies a JVM-style relative branch offset from the current opcode position.
-    fn branch(&mut self, opcode_pc: usize, offset: i32) -> Result<(), VmError> {
-        let target = opcode_pc as isize + offset as isize;
-        if !(0..=self.code.len() as isize).contains(&target) {
-            return Err(VmError::InvalidBranchTarget {
-                target,
-                code_len: self.code.len(),
-            });
-        }
-        self.pc = target as usize;
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone)]
-enum HeapValue {
-    IntArray {
-        values: Vec<i32>,
-    },
-    ReferenceArray {
-        component_type: String,
-        values: Vec<Reference>,
-    },
-    String(String),
-    LongArray {
-        values: Vec<i64>,
-    },
-    FloatArray {
-        values: Vec<f32>,
-    },
-    DoubleArray {
-        values: Vec<f64>,
-    },
-    Object {
-        class_name: String,
-        fields: BTreeMap<String, Value>,
-    },
-    StringBuilder(std::string::String),
-}
-
-impl HeapValue {
-    fn kind_name(&self) -> &'static str {
-        match self {
-            Self::IntArray { .. } => "int-array",
-            Self::LongArray { .. } => "long-array",
-            Self::FloatArray { .. } => "float-array",
-            Self::DoubleArray { .. } => "double-array",
-            Self::ReferenceArray { .. } => "reference-array",
-            Self::String(_) => "string",
-            Self::Object { .. } => "object",
-            Self::StringBuilder(_) => "string-builder",
-        }
-    }
-}
-
-/// Snapshot of garbage-collector counters for tooling / tests.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct GcStats {
-    /// Number of completed collections.
-    pub collections: u64,
-    /// Cumulative number of objects freed across all collections.
-    pub freed: u64,
-    /// Number of live heap slots after the most recent collection.
-    pub live: usize,
-    /// Total number of allocations observed since VM start.
-    pub total_allocations: u64,
-}
-
-#[derive(Debug, Clone)]
-struct Heap {
-    values: Vec<Option<HeapValue>>,
-    /// Number of live objects (approximate, updated by GC).
-    live_count: usize,
-    /// Number of allocations since last GC.
-    allocs_since_gc: usize,
-    /// Allocation threshold that triggers collection. `usize::MAX` disables GC.
-    gc_threshold: usize,
-    /// Cumulative GC statistics.
-    stats: GcStats,
-}
-
-impl Default for Heap {
-    fn default() -> Self {
-        Self {
-            values: Vec::new(),
-            live_count: 0,
-            allocs_since_gc: 0,
-            gc_threshold: 1024,
-            stats: GcStats::default(),
-        }
-    }
-}
-
-impl Heap {
-    fn allocate_int_array(&mut self, values: Vec<i32>) -> Reference {
-        self.allocate(HeapValue::IntArray { values })
-    }
-
-    fn allocate(&mut self, value: HeapValue) -> Reference {
-        self.allocs_since_gc += 1;
-        self.stats.total_allocations = self.stats.total_allocations.saturating_add(1);
-        // Try to reuse a freed slot.
-        for (i, slot) in self.values.iter_mut().enumerate() {
-            if slot.is_none() {
-                *slot = Some(value);
-                return Reference::Heap(i);
-            }
-        }
-        let reference = self.values.len();
-        self.values.push(Some(value));
-        Reference::Heap(reference)
-    }
-
-    fn allocate_string(&mut self, value: impl Into<String>) -> Reference {
-        self.allocate(HeapValue::String(value.into()))
-    }
-
-    fn allocate_reference_array(
-        &mut self,
-        component_type: impl Into<String>,
-        values: Vec<Reference>,
-    ) -> Reference {
-        self.allocate(HeapValue::ReferenceArray {
-            component_type: component_type.into(),
-            values,
-        })
-    }
-
-    fn get(&self, reference: Reference) -> Result<&HeapValue, VmError> {
-        match reference {
-            Reference::Null => Err(VmError::NullReference),
-            Reference::Heap(index) => self
-                .values
-                .get(index)
-                .and_then(|v| v.as_ref())
-                .ok_or(VmError::InvalidHeapReference { reference: index }),
-        }
-    }
-
-    /// Returns the number of heap slots currently in use.
-    fn len(&self) -> usize {
-        self.values.iter().filter(|v| v.is_some()).count()
-    }
-
-    fn array_length(&self, reference: Reference) -> Result<usize, VmError> {
-        match self.get(reference)? {
-            HeapValue::IntArray { values } => Ok(values.len()),
-            HeapValue::LongArray { values } => Ok(values.len()),
-            HeapValue::FloatArray { values } => Ok(values.len()),
-            HeapValue::DoubleArray { values } => Ok(values.len()),
-            HeapValue::ReferenceArray { values, .. } => Ok(values.len()),
-            value => Err(VmError::InvalidHeapValue {
-                expected: "array",
-                actual: value.kind_name(),
-            }),
-        }
-    }
-
-    fn load_int_array_element(&self, reference: Reference, index: i32) -> Result<i32, VmError> {
-        let values = match self.get(reference)? {
-            HeapValue::IntArray { values } => values,
-            value => {
-                return Err(VmError::InvalidHeapValue {
-                    expected: "int-array",
-                    actual: value.kind_name(),
-                });
-            }
-        };
-
-        let index = usize::try_from(index).map_err(|_| VmError::ArrayIndexOutOfBounds {
-            index,
-            len: values.len(),
-        })?;
-
-        values
-            .get(index)
-            .copied()
-            .ok_or(VmError::ArrayIndexOutOfBounds {
-                index: index as i32,
-                len: values.len(),
-            })
-    }
-
-    fn load_reference_array_element(
-        &self,
-        reference: Reference,
-        index: i32,
-    ) -> Result<Reference, VmError> {
-        let values = match self.get(reference)? {
-            HeapValue::ReferenceArray { values, .. } => values,
-            value => {
-                return Err(VmError::InvalidHeapValue {
-                    expected: "reference-array",
-                    actual: value.kind_name(),
-                });
-            }
-        };
-
-        let index = usize::try_from(index).map_err(|_| VmError::ArrayIndexOutOfBounds {
-            index,
-            len: values.len(),
-        })?;
-
-        values
-            .get(index)
-            .copied()
-            .ok_or(VmError::ArrayIndexOutOfBounds {
-                index: index as i32,
-                len: values.len(),
-            })
-    }
-
-    fn store_reference_array_element(
-        &mut self,
-        reference: Reference,
-        index: i32,
-        value: Reference,
-    ) -> Result<(), VmError> {
-        let values = match self.get_mut(reference)? {
-            HeapValue::ReferenceArray { values, .. } => values,
-            value => {
-                return Err(VmError::InvalidHeapValue {
-                    expected: "reference-array",
-                    actual: value.kind_name(),
-                });
-            }
-        };
-
-        let index = usize::try_from(index).map_err(|_| VmError::ArrayIndexOutOfBounds {
-            index,
-            len: values.len(),
-        })?;
-
-        let len = values.len();
-        let slot = values
-            .get_mut(index)
-            .ok_or(VmError::ArrayIndexOutOfBounds {
-                index: index as i32,
-                len,
-            })?;
-        *slot = value;
-        Ok(())
-    }
-
-    fn store_int_array_element(
-        &mut self,
-        reference: Reference,
-        index: i32,
-        value: i32,
-    ) -> Result<(), VmError> {
-        let values = match self.get_mut(reference)? {
-            HeapValue::IntArray { values } => values,
-            value => {
-                return Err(VmError::InvalidHeapValue {
-                    expected: "int-array",
-                    actual: value.kind_name(),
-                });
-            }
-        };
-
-        let index = usize::try_from(index).map_err(|_| VmError::ArrayIndexOutOfBounds {
-            index,
-            len: values.len(),
-        })?;
-
-        let len = values.len();
-        let slot = values
-            .get_mut(index)
-            .ok_or(VmError::ArrayIndexOutOfBounds {
-                index: index as i32,
-                len,
-            })?;
-        *slot = value;
-        Ok(())
-    }
-
-    /// Generic typed array element load.
-    fn load_typed_array_element(&self, reference: Reference, index: i32) -> Result<Value, VmError> {
-        let heap_val = self.get(reference)?;
-        let (value, len) = match heap_val {
-            HeapValue::LongArray { values } => {
-                let i = Self::check_array_index(index, values.len())?;
-                (Value::Long(values[i]), values.len())
-            }
-            HeapValue::FloatArray { values } => {
-                let i = Self::check_array_index(index, values.len())?;
-                (Value::Float(values[i]), values.len())
-            }
-            HeapValue::DoubleArray { values } => {
-                let i = Self::check_array_index(index, values.len())?;
-                (Value::Double(values[i]), values.len())
-            }
-            _ => {
-                return Err(VmError::InvalidHeapValue {
-                    expected: "typed-array",
-                    actual: heap_val.kind_name(),
-                });
-            }
-        };
-        let _ = len;
-        Ok(value)
-    }
-
-    /// Generic typed array element store.
-    fn store_typed_array_element(
-        &mut self,
-        reference: Reference,
-        index: i32,
-        value: Value,
-    ) -> Result<(), VmError> {
-        let heap_val = self.get_mut(reference)?;
-        match (heap_val, value) {
-            (HeapValue::LongArray { values }, Value::Long(v)) => {
-                let i = Self::check_array_index(index, values.len())?;
-                values[i] = v;
-            }
-            (HeapValue::FloatArray { values }, Value::Float(v)) => {
-                let i = Self::check_array_index(index, values.len())?;
-                values[i] = v;
-            }
-            (HeapValue::DoubleArray { values }, Value::Double(v)) => {
-                let i = Self::check_array_index(index, values.len())?;
-                values[i] = v;
-            }
-            _ => {
-                return Err(VmError::TypeMismatch {
-                    expected: "matching array/value type",
-                    actual: "mismatched",
-                });
-            }
-        }
-        Ok(())
-    }
-
-    fn check_array_index(index: i32, len: usize) -> Result<usize, VmError> {
-        let i = usize::try_from(index).map_err(|_| VmError::ArrayIndexOutOfBounds {
-            index,
-            len,
-        })?;
-        if i >= len {
-            return Err(VmError::ArrayIndexOutOfBounds {
-                index,
-                len,
-            });
-        }
-        Ok(i)
-    }
-
-    fn get_mut(&mut self, reference: Reference) -> Result<&mut HeapValue, VmError> {
-        match reference {
-            Reference::Null => Err(VmError::NullReference),
-            Reference::Heap(index) => self
-                .values
-                .get_mut(index)
-                .and_then(|v| v.as_mut())
-                .ok_or(VmError::InvalidHeapReference { reference: index }),
-        }
-    }
-
-    /// Mark-and-sweep garbage collection.
-    ///
-    /// `roots` must contain every `Reference` reachable from the thread stacks,
-    /// static fields, and any other GC roots.
-    fn gc(&mut self, roots: &[Reference]) {
-        let mut marked = vec![false; self.values.len()];
-
-        // Worklist-based marking.
-        let mut worklist: Vec<usize> = roots
-            .iter()
-            .filter_map(|r| match r {
-                Reference::Heap(i) => Some(*i),
-                Reference::Null => None,
-            })
-            .collect();
-
-        while let Some(index) = worklist.pop() {
-            if index >= marked.len() || marked[index] {
-                continue;
-            }
-            marked[index] = true;
-
-            // Trace child references.
-            if let Some(Some(value)) = self.values.get(index) {
-                match value {
-                    HeapValue::ReferenceArray { values, .. } => {
-                        for r in values {
-                            if let Reference::Heap(i) = r {
-                                if !marked[*i] {
-                                    worklist.push(*i);
-                                }
-                            }
-                        }
-                    }
-                    HeapValue::Object { fields, .. } => {
-                        for v in fields.values() {
-                            if let Value::Reference(Reference::Heap(i)) = v {
-                                if !marked[*i] {
-                                    worklist.push(*i);
-                                }
-                            }
-                        }
-                    }
-                    HeapValue::IntArray { .. }
-                    | HeapValue::LongArray { .. }
-                    | HeapValue::FloatArray { .. }
-                    | HeapValue::DoubleArray { .. }
-                    | HeapValue::String(_)
-                    | HeapValue::StringBuilder(_) => {}
-                }
-            }
-        }
-
-        // Sweep: free unmarked objects.
-        let mut freed = 0u64;
-        for (i, slot) in self.values.iter_mut().enumerate() {
-            if slot.is_some() && !marked[i] {
-                *slot = None;
-                freed += 1;
-            }
-        }
-        self.live_count = self.values.iter().filter(|v| v.is_some()).count();
-        self.allocs_since_gc = 0;
-
-        // Trim trailing None slots.
-        while self.values.last().map_or(false, |v| v.is_none()) {
-            self.values.pop();
-        }
-
-        self.stats.collections = self.stats.collections.saturating_add(1);
-        self.stats.freed = self.stats.freed.saturating_add(freed);
-        self.stats.live = self.live_count;
-    }
-
-    fn should_collect(&self) -> bool {
-        self.gc_threshold != usize::MAX && self.allocs_since_gc >= self.gc_threshold
-    }
-}
-
-#[derive(Debug)]
-struct Thread {
-    frames: Vec<Frame>,
-}
-
-impl Thread {
-    fn new(method: Method) -> Self {
-        Self {
-            frames: vec![Frame::new(method)],
-        }
-    }
-
-    fn current_frame(&self) -> &Frame {
-        self.frames.last().expect("call stack is empty")
-    }
-
-    fn current_frame_mut(&mut self) -> &mut Frame {
-        self.frames.last_mut().expect("call stack is empty")
-    }
-
-    fn push_frame(&mut self, frame: Frame) {
-        self.frames.push(frame);
-    }
-
-    fn pop_frame(&mut self) -> Frame {
-        self.frames.pop().expect("call stack is empty")
-    }
-
-    fn depth(&self) -> usize {
-        self.frames.len()
-    }
-}
-
-/// Per-object monitor state for `monitorenter` / `monitorexit`.
-#[derive(Debug, Clone, Default)]
-struct MonitorState {
-    /// Number of times the owning thread has entered this monitor.
-    /// Zero means the monitor is free.
-    lock_count: usize,
-    /// Thread ID of the owner (0 = unowned).
-    owner_thread: u64,
-    /// Number of threads waiting in `Object.wait()`.
-    waiting_threads: usize,
-    /// Number of pending notifications that have not yet been consumed by a waiter.
-    pending_notifies: usize,
-}
-
-/// Handle to a spawned VM thread, allowing the caller to wait for completion.
-pub struct JvmThread {
-    handle: Option<std::thread::JoinHandle<Result<ExecutionResult, VmError>>>,
-}
-
-impl JvmThread {
-    /// Block until the thread finishes and return its result.
-    pub fn join(mut self) -> Result<ExecutionResult, VmError> {
-        self.handle
-            .take()
-            .expect("thread already joined")
-            .join()
-            .unwrap_or(Err(VmError::MissingReturn))
-    }
-}
+use classloader::{ClassLoader, LazyClassLoader, BootstrapClassLoader};
 
 static NEXT_THREAD_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
-#[derive(Debug, Clone)]
 pub struct Vm {
     heap: Arc<Mutex<Heap>>,
     runtime: Arc<Mutex<RuntimeState>>,
@@ -1227,9 +38,41 @@ pub struct Vm {
     monitors: Arc<SharedMonitors>,
     threads: Arc<SharedThreads>,
     class_path: Vec<PathBuf>,
+    class_loader: Option<LazyClassLoader<BootstrapClassLoader>>,
     trace: bool,
     thread_id: u64,
     output: Arc<Mutex<Vec<String>>>,
+}
+
+impl fmt::Debug for Vm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Vm")
+            .field("heap", &self.heap)
+            .field("runtime", &self.runtime)
+            .field("monitors", &self.monitors)
+            .field("threads", &self.threads)
+            .field("class_path", &self.class_path)
+            .field("trace", &self.trace)
+            .field("thread_id", &self.thread_id)
+            .field("output", &self.output)
+            .finish()
+    }
+}
+
+impl Clone for Vm {
+    fn clone(&self) -> Self {
+        Self {
+            heap: self.heap.clone(),
+            runtime: self.runtime.clone(),
+            monitors: self.monitors.clone(),
+            threads: self.threads.clone(),
+            class_path: self.class_path.clone(),
+            class_loader: None,
+            trace: self.trace,
+            thread_id: NEXT_THREAD_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            output: self.output.clone(),
+        }
+    }
 }
 
 impl Vm {
@@ -1240,6 +83,7 @@ impl Vm {
             monitors: Arc::new(SharedMonitors::default()),
             threads: Arc::new(SharedThreads::default()),
             class_path: Vec::new(),
+            class_loader: Some(classloader::create_bootstrap_loader()),
             trace: false,
             thread_id: NEXT_THREAD_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             output: Arc::new(Mutex::new(Vec::new())),
@@ -1374,6 +218,12 @@ impl Vm {
 
     /// Register a class loaded from a `.class` file.
     pub fn register_class(&mut self, class: RuntimeClass) {
+        if class.name == "java/util/Objects" {
+            eprintln!("DEBUG register_class: java/util/Objects being registered with {} methods", class.methods.len());
+            for (k, v) in &class.methods {
+                eprintln!("DEBUG register_class:   method: {:?} => {:?}", k, v);
+            }
+        }
         self.runtime
             .lock()
             .unwrap()
@@ -1381,7 +231,19 @@ impl Vm {
             .insert(class.name.clone(), class);
     }
 
+    /// Register a class from a parsed `ClassFile`, extracting all runtime
+    /// metadata (constant pool entries, method/field refs, exception handlers,
+    /// line numbers, stack map frames, invoke dynamic sites).
+    pub fn register_classfile(&mut self, class_name: &str, class_file: &ClassFile) {
+        eprintln!("DEBUG register_classfile: called for {}", class_name);
+        crate::launcher::register_class(class_name, class_file, self)
+            .expect("register_class should not fail for valid ClassFile data");
+    }
+
     /// Ensure a class is loaded, loading it from the classpath on demand.
+    /// Uses a parent-first delegation model: bootstrap classloader (loads java.*,
+    /// jdk.*, sun.*) is consulted first; if not found and a user classpath is set,
+    /// the user classpath is searched.
     fn ensure_class_loaded(&mut self, class_name: &str) -> Result<(), VmError> {
         if self
             .runtime
@@ -1390,24 +252,38 @@ impl Vm {
             .classes
             .contains_key(class_name)
         {
+            if class_name == "java/util/Objects" {
+                eprintln!("DEBUG ensure_class_loaded: {} already in classes map!", class_name);
+            }
             return Ok(());
         }
-        if self.class_path.is_empty() {
-            return Err(VmError::ClassNotFound {
-                class_name: class_name.to_string(),
-            });
-        }
-        let class_path = self.class_path.clone();
-        let source = crate::launcher::resolve_class_path(&class_path, class_name).ok_or_else(
-            || VmError::ClassNotFound {
-                class_name: class_name.to_string(),
-            },
-        )?;
-        crate::launcher::load_and_register_class_from(&source, class_name, self).map_err(|_| {
-            VmError::ClassNotFound {
-                class_name: class_name.to_string(),
+
+        if let Some(ref mut loader) = self.class_loader {
+            if let Ok(Some(class_file)) = ClassLoader::load_classfile(loader, class_name) {
+                eprintln!("DEBUG ensure_class_loaded: {} from bootstrap loader, registering", class_name);
+                self.register_classfile(class_name, &class_file);
+                return Ok(());
             }
-        })
+        }
+
+        if !self.class_path.is_empty() {
+            eprintln!("DEBUG ensure_class_loaded: {} from classpath", class_name);
+            let class_path = self.class_path.clone();
+            let source = crate::launcher::resolve_class_path(&class_path, class_name).ok_or_else(
+                || VmError::ClassNotFound {
+                    class_name: class_name.to_string(),
+                },
+            )?;
+            crate::launcher::load_and_register_class_from(&source, class_name, self).map_err(|_| {
+                VmError::ClassNotFound {
+                    class_name: class_name.to_string(),
+                }
+            })
+        } else {
+            Err(VmError::ClassNotFound {
+                class_name: class_name.to_string(),
+            })
+        }
     }
 
     /// Run `<clinit>` for a class if it hasn't been initialized yet.
@@ -2882,6 +1758,9 @@ impl Vm {
                     self.ensure_class_loaded(class_name)?;
                     self.ensure_class_initialized(class_name)?;
                     let class = self.get_class(class_name)?;
+                    if class_name == "java/util/Objects" {
+                        eprintln!("DEBUG Objects methods: {:?}", class.methods.keys().collect::<Vec<_>>());
+                    }
                     let class_method = class
                         .methods
                         .get(&(
@@ -3511,130 +2390,6 @@ impl Vm {
 /// Parses the parameter section of a descriptor like `(ILjava/lang/String;)V`
 /// and returns the number of parameters (2 in that example).
 /// Return the JVM default zero-value for a field descriptor.
-fn default_value_for_descriptor(descriptor: &str) -> Value {
-    match descriptor.as_bytes().first() {
-        Some(b'J') => Value::Long(0),
-        Some(b'F') => Value::Float(0.0),
-        Some(b'D') => Value::Double(0.0),
-        Some(b'L') | Some(b'[') => Value::Reference(Reference::Null),
-        _ => Value::Int(0),
-    }
-}
-
-/// Parse the leading descriptor byte for every parameter in a method descriptor.
-/// Reference types collapse to `b'L'`, arrays to `b'['`; primitives keep their
-/// descriptor letter. Returns `None` for malformed descriptors.
-fn parse_arg_types(descriptor: &str) -> Option<Vec<u8>> {
-    let bytes = descriptor.as_bytes();
-    if bytes.first() != Some(&b'(') {
-        return None;
-    }
-    let mut out = Vec::new();
-    let mut i = 1;
-    while i < bytes.len() && bytes[i] != b')' {
-        match bytes[i] {
-            c @ (b'B' | b'C' | b'D' | b'F' | b'I' | b'J' | b'S' | b'Z') => {
-                out.push(c);
-                i += 1;
-            }
-            b'L' => {
-                out.push(b'L');
-                i += 1;
-                while i < bytes.len() && bytes[i] != b';' {
-                    i += 1;
-                }
-                i += 1;
-            }
-            b'[' => {
-                out.push(b'[');
-                while i < bytes.len() && bytes[i] == b'[' {
-                    i += 1;
-                }
-                if i < bytes.len() && bytes[i] == b'L' {
-                    i += 1;
-                    while i < bytes.len() && bytes[i] != b';' {
-                        i += 1;
-                    }
-                    i += 1;
-                } else if i < bytes.len() {
-                    i += 1;
-                }
-            }
-            _ => return None,
-        }
-    }
-    Some(out)
-}
-
-fn parse_arg_count(descriptor: &str) -> Result<usize, VmError> {
-    let bytes = descriptor.as_bytes();
-    if bytes.first() != Some(&b'(') {
-        return Err(VmError::InvalidDescriptor {
-            descriptor: descriptor.to_string(),
-        });
-    }
-    let mut count = 0;
-    let mut i = 1;
-    while i < bytes.len() && bytes[i] != b')' {
-        match bytes[i] {
-            b'B' | b'C' | b'D' | b'F' | b'I' | b'J' | b'S' | b'Z' => {
-                count += 1;
-                i += 1;
-            }
-            b'L' => {
-                count += 1;
-                i += 1;
-                while i < bytes.len() && bytes[i] != b';' {
-                    i += 1;
-                }
-                i += 1;
-            }
-            b'[' => {
-                while i < bytes.len() && bytes[i] == b'[' {
-                    i += 1;
-                }
-                if i < bytes.len() && bytes[i] == b'L' {
-                    i += 1;
-                    while i < bytes.len() && bytes[i] != b';' {
-                        i += 1;
-                    }
-                    i += 1;
-                } else if i < bytes.len() {
-                    i += 1;
-                }
-                count += 1;
-            }
-            _ => {
-                return Err(VmError::InvalidDescriptor {
-                    descriptor: descriptor.to_string(),
-                });
-            }
-        }
-    }
-    Ok(count)
-}
-
-fn format_vm_float(v: f64) -> String {
-    if v.is_nan() {
-        "NaN".to_string()
-    } else if v.is_infinite() {
-        if v > 0.0 {
-            "Infinity".to_string()
-        } else {
-            "-Infinity".to_string()
-        }
-    } else if v == 0.0 && v.is_sign_negative() {
-        "-0.0".to_string()
-    } else {
-        let s = format!("{v}");
-        if s.contains('.') {
-            s
-        } else {
-            format!("{v}.0")
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;

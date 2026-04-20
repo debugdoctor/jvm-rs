@@ -823,3 +823,147 @@ public class SB {
         vec!["hello, world", "dlrow ,olleh", "lrow ,olleh"]
     );
 }
+
+#[test]
+fn java_util_arraylist_from_jdk() {
+    let (result, output) = compile_and_run(
+        "java_util_arraylist",
+        &[("demo/TestArrayList.java", r#"
+package demo;
+import java.util.ArrayList;
+public class TestArrayList {
+    public static void main(String[] args) {
+        ArrayList<String> list = new ArrayList<>();
+        list.add("hello");
+        list.add("world");
+        System.out.println(list.size());
+    }
+}
+"#)],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["2"]);
+}
+
+#[test]
+fn java_util_arraylist_get_from_jdk() {
+    let (result, output) = compile_and_run(
+        "java_util_arraylist_get",
+        &[("demo/TestArrayListGet.java", r#"
+package demo;
+import java.util.ArrayList;
+public class TestArrayListGet {
+    public static void main(String[] args) {
+        ArrayList<String> list = new ArrayList<>();
+        list.add("hello");
+        list.add("world");
+        System.out.println(list.get(0));
+        System.out.println(list.get(1));
+    }
+}
+"#)],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["hello", "world"]);
+}
+
+#[test]
+fn java_util_hashmap_basic() {
+    let (result, output) = compile_and_run(
+        "java_util_hashmap",
+        &[("demo/TestHashMap.java", r#"
+package demo;
+import java.util.HashMap;
+public class TestHashMap {
+    public static void main(String[] args) {
+        HashMap<String, String> map = new HashMap<>();
+        map.put("one", "1");
+        map.put("two", "2");
+        System.out.println(map.get("one"));
+        System.out.println(map.get("two"));
+        System.out.println(map.size());
+    }
+}
+"#)],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["1", "2", "2"]);
+}
+
+#[test]
+fn java_util_function_basic() {
+    let (result, output) = compile_and_run(
+        "java_util_function",
+        &[("demo/TestFunction.java", r#"
+package demo;
+import java.util.function.Function;
+public class TestFunction {
+    public static void main(String[] args) {
+        Function<String, String> len = s -> String.valueOf(s.length());
+        System.out.println(len.apply("hello"));
+    }
+}
+"#)],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["5"]);
+}
+
+#[test]
+fn java_util_consumer_basic() {
+    let (result, output) = compile_and_run(
+        "java_util_consumer",
+        &[("demo/TestConsumer.java", r#"
+package demo;
+import java.util.function.Consumer;
+public class TestConsumer {
+    public static void main(String[] args) {
+        Consumer<String> printer = s -> System.out.println(s);
+        printer.accept("hello");
+        printer.accept("world");
+    }
+}
+"#)],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["hello", "world"]);
+}
+
+#[test]
+fn java_util_supplier_basic() {
+    let (result, output) = compile_and_run(
+        "java_util_supplier",
+        &[("demo/TestSupplier.java", r#"
+package demo;
+import java.util.function.Supplier;
+public class TestSupplier {
+    public static void main(String[] args) {
+        Supplier<String> supplier = () -> "produced";
+        System.out.println(supplier.get());
+    }
+}
+"#)],
+    );
+assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["produced"]);
+}
+
+#[test]
+fn java_util_optional_basic() {
+    let (result, output) = compile_and_run(
+        "java_util_optional",
+        &[("demo/TestOptional.java", r#"
+package demo;
+import java.util.Optional;
+public class TestOptional {
+    public static void main(String[] args) {
+        Optional<String> opt = Optional.of("hello");
+        System.out.println(opt.isPresent());
+        System.out.println(opt.get());
+    }
+}
+"#)],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["true", "hello"]);
+}

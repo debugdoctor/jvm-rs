@@ -348,7 +348,7 @@ pub(crate) fn register_class(
     class_file: &ClassFile,
     vm: &mut Vm,
 ) -> Result<(), LaunchError> {
-    let mut methods = std::collections::BTreeMap::new();
+    let mut methods = std::collections::HashMap::new();
 
     for member in &class_file.methods {
         let name = member
@@ -434,7 +434,7 @@ pub(crate) fn register_class(
         name: class_name.to_string(),
         super_class,
         methods,
-        static_fields: std::collections::BTreeMap::new(),
+        static_fields: std::collections::HashMap::new(),
         instance_fields,
         interfaces,
     });

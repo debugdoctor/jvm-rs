@@ -5,7 +5,7 @@
 //! `java.*` and `jdk.*` are protected from eviction because the VM
 //! relies on them for correct operation.
 
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::io::Read;
@@ -274,7 +274,7 @@ impl ClassLoader for BootstrapClassLoader {
             }
         }
 
-        let mut methods = BTreeMap::new();
+        let mut methods = HashMap::new();
         for member in &class_file.methods {
             let name = member
                 .name(&class_file.constant_pool)
@@ -302,7 +302,7 @@ impl ClassLoader for BootstrapClassLoader {
             name: resolved_name,
             super_class,
             methods,
-            static_fields: BTreeMap::new(),
+            static_fields: HashMap::new(),
             instance_fields,
             interfaces,
         }))

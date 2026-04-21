@@ -2,7 +2,7 @@
 //! join handle (`JvmThread`), monitor bookkeeping, and the shared runtime
 //! state that's parked behind a `Mutex` on `Vm`.
 
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Condvar, Mutex};
 
@@ -17,19 +17,19 @@ pub(super) enum ClassInitializationState {
 
 #[derive(Debug, Default)]
 pub(super) struct RuntimeState {
-    pub(super) classes: BTreeMap<String, RuntimeClass>,
-    pub(super) initialized_classes: BTreeMap<String, ClassInitializationState>,
+    pub(super) classes: HashMap<String, RuntimeClass>,
+    pub(super) initialized_classes: HashMap<String, ClassInitializationState>,
 }
 
 #[derive(Debug, Default)]
 pub(super) struct SharedMonitors {
-    pub(super) states: Mutex<BTreeMap<usize, MonitorState>>,
+    pub(super) states: Mutex<HashMap<usize, MonitorState>>,
     pub(super) changed: Condvar,
 }
 
 #[derive(Default)]
 pub(super) struct SharedThreads {
-    pub(super) states: Mutex<BTreeMap<usize, JavaThreadState>>,
+    pub(super) states: Mutex<HashMap<usize, JavaThreadState>>,
 }
 
 pub(super) struct JavaThreadState {

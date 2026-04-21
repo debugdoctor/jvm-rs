@@ -21,7 +21,7 @@ use thread::{
 };
 use types::{default_value_for_descriptor, format_vm_float, parse_arg_count, parse_arg_types};
 
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -1850,7 +1850,7 @@ impl Vm {
                         } => {
                             // LambdaMetafactory: create a lambda proxy object that stores the
                             // target method reference and any captured arguments.
-                            let mut fields = BTreeMap::new();
+                            let mut fields = HashMap::new();
                             fields.insert(
                                 "__target_class".to_string(),
                                 Value::Reference(
@@ -1932,9 +1932,23 @@ impl Vm {
                         thread.current_frame().load_reference_class(index)?.to_string();
                     self.ensure_class_loaded(&class_name)?;
                     self.ensure_class_initialized(&class_name)?;
-                    let instance_fields = self.get_class(&class_name)?.instance_fields;
-                    let mut fields = BTreeMap::new();
-                    for (name, descriptor) in instance_fields {
+                    let mut all_instance_fields = Vec::new();
+                    let mut current_class = class_name.clone();
+                    loop {
+                        self.ensure_class_loaded(&current_class)?;
+                        let class = self.get_class(&current_class)?;
+                        for (name, desc) in &class.instance_fields {
+                            if !all_instance_fields.iter().any(|(n, _)| n == name) {
+                                all_instance_fields.push((name.clone(), desc.clone()));
+                            }
+                        }
+                        match &class.super_class {
+                            Some(parent) => current_class = parent.clone(),
+                            None => break,
+                        }
+                    }
+                    let mut fields = HashMap::new();
+                    for (name, descriptor) in all_instance_fields {
                         fields.insert(name, default_value_for_descriptor(&descriptor));
                     }
                     let reference = self.heap.lock().unwrap().allocate(HeapValue::Object {
@@ -2130,7 +2144,7 @@ impl Vm {
     ) -> Result<(), VmError> {
         let reference = self.heap.lock().unwrap().allocate(HeapValue::Object {
             class_name: class_name.to_string(),
-            fields: BTreeMap::new(),
+            fields: HashMap::new(),
         });
         self.throw_exception(thread, reference)
     }
@@ -2392,7 +2406,7 @@ impl Vm {
 /// Return the JVM default zero-value for a field descriptor.
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+use std::collections::HashMap;
     use std::sync::atomic::Ordering;
     use std::sync::mpsc;
     use std::time::Duration;
@@ -2966,8 +2980,8 @@ mod tests {
         vm.register_class(RuntimeClass {
             name: "demo/Counter".to_string(),
             super_class: Some("java/lang/Object".to_string()),
-            methods: BTreeMap::new(),
-            static_fields: BTreeMap::from([("value".to_string(), Value::Int(0))]),
+            methods: HashMap::new(),
+            static_fields: HashMap::from([("value".to_string(), Value::Int(0))]),
             instance_fields: vec![],
             interfaces: vec![],
         });
@@ -3018,7 +3032,7 @@ mod tests {
         let vm = Vm::new();
         let monitor_ref = vm.heap.lock().unwrap().allocate(HeapValue::Object {
             class_name: "java/lang/Object".to_string(),
-            fields: BTreeMap::new(),
+            fields: HashMap::new(),
         });
         vm.enter_monitor(monitor_ref).unwrap();
 

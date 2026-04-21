@@ -1,7 +1,7 @@
 //! Heap storage: `HeapValue` variants, `Heap` with mark-and-sweep GC, and
 //! `GcStats` counters. Accessed through `Vm::heap` (behind a `Mutex`).
 
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 
 use super::types::{Reference, Value, VmError};
 
@@ -26,7 +26,7 @@ pub(super) enum HeapValue {
     },
     Object {
         class_name: String,
-        fields: BTreeMap<String, Value>,
+        fields: HashMap<String, Value>,
     },
     StringBuilder(std::string::String),
 }

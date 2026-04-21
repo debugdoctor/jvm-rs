@@ -4,7 +4,7 @@
 //! `java/io/PrintStream`, `java/lang/System`, `java/lang/Thread`) and provides the native
 //! method implementations that back them.
 
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 
 use super::{ClassMethod, HeapValue, Reference, RuntimeClass, Value, Vm, VmError};
 
@@ -16,7 +16,7 @@ impl Vm {
     /// initializes `System.out` to a `PrintStream` instance.
     pub(super) fn bootstrap(&mut self) {
         // java/lang/Object
-        let mut object_methods = BTreeMap::new();
+        let mut object_methods = HashMap::new();
         for (name, desc) in [
             ("<init>", "()V"),
             ("wait", "()V"),
@@ -32,13 +32,13 @@ impl Vm {
                 name: "java/lang/Object".to_string(),
                 super_class: None,
                 methods: object_methods,
-                static_fields: BTreeMap::new(),
+                static_fields: HashMap::new(),
                 instance_fields: vec![],
                 interfaces: vec![],
             });
 
         // java/io/PrintStream
-        let mut ps_methods = BTreeMap::new();
+        let mut ps_methods = HashMap::new();
         for desc in [
             "()V",
             "(I)V",
@@ -48,6 +48,7 @@ impl Vm {
             "(Z)V",
             "(C)V",
             "(Ljava/lang/String;)V",
+            "(Ljava/lang/Object;)V",
         ] {
             ps_methods.insert(
                 ("println".to_string(), desc.to_string()),
@@ -66,7 +67,7 @@ impl Vm {
                 name: "java/io/PrintStream".to_string(),
                 super_class: Some("java/lang/Object".to_string()),
                 methods: ps_methods,
-                static_fields: BTreeMap::new(),
+                static_fields: HashMap::new(),
                 instance_fields: vec![],
                 interfaces: vec![],
             });
@@ -74,20 +75,20 @@ impl Vm {
         // Create the PrintStream instance for System.out
         let print_stream_ref = self.heap.lock().unwrap().allocate(HeapValue::Object {
             class_name: "java/io/PrintStream".to_string(),
-            fields: BTreeMap::new(),
+            fields: HashMap::new(),
         });
 
         // Create a second PrintStream instance for System.err
         let err_stream_ref = self.heap.lock().unwrap().allocate(HeapValue::Object {
             class_name: "java/io/PrintStream".to_string(),
-            fields: BTreeMap::new(),
+            fields: HashMap::new(),
         });
 
         // java/lang/System
-        let mut system_static = BTreeMap::new();
+        let mut system_static = HashMap::new();
         system_static.insert("out".to_string(), Value::Reference(print_stream_ref));
         system_static.insert("err".to_string(), Value::Reference(err_stream_ref));
-        let mut system_methods = BTreeMap::new();
+        let mut system_methods = HashMap::new();
         for (name, desc) in [
             ("currentTimeMillis", "()J"),
             ("nanoTime", "()J"),
@@ -112,7 +113,7 @@ impl Vm {
             });
 
         // java/lang/String
-        let mut string_methods = BTreeMap::new();
+        let mut string_methods = HashMap::new();
         for (name, desc) in [
             ("<init>", "()V"),
             ("length", "()I"),
@@ -134,6 +135,7 @@ impl Vm {
             ("contains", "(Ljava/lang/CharSequence;)Z"),
             ("replace", "(CC)Ljava/lang/String;"),
             ("compareTo", "(Ljava/lang/String;)I"),
+            ("compareTo", "(Ljava/lang/Object;)I"),
             ("valueOf", "(I)Ljava/lang/String;"),
             ("valueOf", "(J)Ljava/lang/String;"),
             ("valueOf", "(Z)Ljava/lang/String;"),
@@ -151,13 +153,13 @@ impl Vm {
                 name: "java/lang/String".to_string(),
                 super_class: Some("java/lang/Object".to_string()),
                 methods: string_methods,
-                static_fields: BTreeMap::new(),
+                static_fields: HashMap::new(),
                 instance_fields: vec![],
                 interfaces: vec![],
             });
 
         // java/lang/Integer
-        let mut integer_methods = BTreeMap::new();
+        let mut integer_methods = HashMap::new();
         for (name, desc) in [
             ("<init>", "(I)V"),
             ("intValue", "()I"),
@@ -182,13 +184,13 @@ impl Vm {
                 name: "java/lang/Integer".to_string(),
                 super_class: Some("java/lang/Object".to_string()),
                 methods: integer_methods,
-                static_fields: BTreeMap::new(),
+                static_fields: HashMap::new(),
                 instance_fields: vec![("value".to_string(), "I".to_string())],
                 interfaces: vec![],
             });
 
         // java/lang/Long
-        let mut long_methods = BTreeMap::new();
+        let mut long_methods = HashMap::new();
         for (name, desc) in [
             ("<init>", "(J)V"),
             ("longValue", "()J"),
@@ -206,13 +208,13 @@ impl Vm {
                 name: "java/lang/Long".to_string(),
                 super_class: Some("java/lang/Object".to_string()),
                 methods: long_methods,
-                static_fields: BTreeMap::new(),
+                static_fields: HashMap::new(),
                 instance_fields: vec![("value".to_string(), "J".to_string())],
                 interfaces: vec![],
             });
 
         // java/lang/Character
-        let mut character_methods = BTreeMap::new();
+        let mut character_methods = HashMap::new();
         for (name, desc) in [
             ("isDigit", "(C)Z"),
             ("isLetter", "(C)Z"),
@@ -233,13 +235,13 @@ impl Vm {
                 name: "java/lang/Character".to_string(),
                 super_class: Some("java/lang/Object".to_string()),
                 methods: character_methods,
-                static_fields: BTreeMap::new(),
+                static_fields: HashMap::new(),
                 instance_fields: vec![],
                 interfaces: vec![],
             });
 
         // java/lang/Boolean
-        let mut boolean_methods = BTreeMap::new();
+        let mut boolean_methods = HashMap::new();
         for (name, desc) in [
             ("parseBoolean", "(Ljava/lang/String;)Z"),
             ("toString", "(Z)Ljava/lang/String;"),
@@ -255,13 +257,13 @@ impl Vm {
                 name: "java/lang/Boolean".to_string(),
                 super_class: Some("java/lang/Object".to_string()),
                 methods: boolean_methods,
-                static_fields: BTreeMap::new(),
+                static_fields: HashMap::new(),
                 instance_fields: vec![("value".to_string(), "Z".to_string())],
                 interfaces: vec![],
             });
 
         
-        let mut sb_methods = BTreeMap::new();
+        let mut sb_methods = HashMap::new();
         sb_methods.insert(
             ("<init>".to_string(), "()V".to_string()),
             ClassMethod::Native,
@@ -310,13 +312,13 @@ impl Vm {
                 name: "java/lang/StringBuilder".to_string(),
                 super_class: Some("java/lang/Object".to_string()),
                 methods: sb_methods,
-                static_fields: BTreeMap::new(),
+                static_fields: HashMap::new(),
                 instance_fields: vec![],
                 interfaces: vec![],
             });
 
         // java/lang/Math
-        let mut math_methods = BTreeMap::new();
+        let mut math_methods = HashMap::new();
         for (name, desc) in [
             ("max", "(II)I"),
             ("min", "(II)I"),
@@ -350,7 +352,7 @@ impl Vm {
                 name: "java/lang/Math".to_string(),
                 super_class: Some("java/lang/Object".to_string()),
                 methods: math_methods,
-                static_fields: BTreeMap::new(),
+                static_fields: HashMap::new(),
                 instance_fields: vec![],
                 interfaces: vec![],
             });
@@ -359,8 +361,8 @@ impl Vm {
         self.register_class(RuntimeClass {
                 name: "java/lang/Runnable".to_string(),
                 super_class: None,
-                methods: BTreeMap::new(),
-                static_fields: BTreeMap::new(),
+                methods: HashMap::new(),
+                static_fields: HashMap::new(),
                 instance_fields: vec![],
                 interfaces: vec![],
             });
@@ -370,8 +372,8 @@ impl Vm {
         self.register_class(RuntimeClass {
                 name: "java/lang/Comparable".to_string(),
                 super_class: None,
-                methods: BTreeMap::new(),
-                static_fields: BTreeMap::new(),
+                methods: HashMap::new(),
+                static_fields: HashMap::new(),
                 instance_fields: vec![],
                 interfaces: vec![],
             });
@@ -380,8 +382,8 @@ impl Vm {
         self.register_class(RuntimeClass {
                 name: "java/lang/CharSequence".to_string(),
                 super_class: None,
-                methods: BTreeMap::new(),
-                static_fields: BTreeMap::new(),
+                methods: HashMap::new(),
+                static_fields: HashMap::new(),
                 instance_fields: vec![],
                 interfaces: vec![],
             });
@@ -415,7 +417,7 @@ impl Vm {
         }
 
         // java/lang/Thread
-        let mut thread_methods = BTreeMap::new();
+        let mut thread_methods = HashMap::new();
         for (name, desc) in [
             ("<init>", "()V"),
             ("<init>", "(Ljava/lang/Runnable;)V"),
@@ -432,7 +434,7 @@ impl Vm {
                 name: "java/lang/Thread".to_string(),
                 super_class: Some("java/lang/Object".to_string()),
                 methods: thread_methods,
-                static_fields: BTreeMap::new(),
+                static_fields: HashMap::new(),
                 instance_fields: vec![("target".to_string(), "Ljava/lang/Runnable;".to_string())],
                 interfaces: vec![],
             });
@@ -476,7 +478,7 @@ impl Vm {
             ),
         ];
         for (name, parent) in exception_chain {
-            let mut methods = BTreeMap::new();
+            let mut methods = HashMap::new();
             for (mname, mdesc) in [
                 ("<init>", "()V"),
                 ("<init>", "(Ljava/lang/String;)V"),
@@ -493,7 +495,7 @@ impl Vm {
                     name: name.to_string(),
                     super_class: Some(parent.to_string()),
                     methods,
-                    static_fields: BTreeMap::new(),
+                    static_fields: HashMap::new(),
                     instance_fields: vec![("message".to_string(), "Ljava/lang/String;".to_string())],
                     interfaces: vec![],
                 });
@@ -540,6 +542,17 @@ impl Vm {
             ("java/io/PrintStream", "println", "(Ljava/lang/String;)V") => {
                 let reference = args[1].as_reference()?;
                 let line = self.stringify_reference(reference)?;
+                println!("{line}");
+                self.output.lock().unwrap().push(line);
+                Ok(None)
+            }
+            ("java/io/PrintStream", "println", "(Ljava/lang/Object;)V") => {
+                let reference = args[1].as_reference()?;
+                let line = if reference == Reference::Null {
+                    "null".to_string()
+                } else {
+                    self.stringify_reference(reference).unwrap_or_else(|_| format!("Object@{reference:?}"))
+                };
                 println!("{line}");
                 self.output.lock().unwrap().push(line);
                 Ok(None)
@@ -759,6 +772,18 @@ impl Vm {
                 };
                 Ok(Some(Value::Int(cmp)))
             }
+            ("java/lang/String", "compareTo", "(Ljava/lang/Object;)I") => {
+                let a_ref = args[0].as_reference()?;
+                let b_ref = args[1].as_reference()?;
+                let a = self.stringify_reference(a_ref)?;
+                let b = self.stringify_reference(b_ref)?;
+                let cmp = match a.cmp(&b) {
+                    std::cmp::Ordering::Less => -1,
+                    std::cmp::Ordering::Equal => 0,
+                    std::cmp::Ordering::Greater => 1,
+                };
+                Ok(Some(Value::Int(cmp)))
+            }
             ("java/lang/String", "valueOf", "(I)Ljava/lang/String;") => {
                 Ok(Some(self.new_string(args[0].as_int()?.to_string())))
             }
@@ -805,7 +830,7 @@ impl Vm {
             }
             ("java/lang/Integer", "valueOf", "(I)Ljava/lang/Integer;") => {
                 let value = args[0].as_int()?;
-                let mut fields = BTreeMap::new();
+                let mut fields = HashMap::new();
                 fields.insert("value".to_string(), Value::Int(value));
                 let reference = self.heap.lock().unwrap().allocate(HeapValue::Object {
                     class_name: "java/lang/Integer".to_string(),
@@ -892,7 +917,7 @@ impl Vm {
             }
             ("java/lang/Long", "valueOf", "(J)Ljava/lang/Long;") => {
                 let value = args[0].as_long()?;
-                let mut fields = BTreeMap::new();
+                let mut fields = HashMap::new();
                 fields.insert("value".to_string(), Value::Long(value));
                 let reference = self.heap.lock().unwrap().allocate(HeapValue::Object {
                     class_name: "java/lang/Long".to_string(),
@@ -967,7 +992,7 @@ impl Vm {
             }
             ("java/lang/Boolean", "valueOf", "(Z)Ljava/lang/Boolean;") => {
                 let value = args[0].as_int()?;
-                let mut fields = BTreeMap::new();
+                let mut fields = HashMap::new();
                 fields.insert("value".to_string(), Value::Int(value));
                 let reference = self.heap.lock().unwrap().allocate(HeapValue::Object {
                     class_name: "java/lang/Boolean".to_string(),
@@ -1034,6 +1059,83 @@ impl Vm {
             ("java/util/Objects", "nonNull", "(Ljava/lang/Object;)Z") => {
                 let r = args[0].as_reference()?;
                 Ok(Some(Value::Int(if r == Reference::Null { 0 } else { 1 })))
+            }
+            ("java/util/Objects", "hash", "([Ljava/lang/Object;)I") => {
+                let arr_ref = args[0].as_reference()?;
+                let hash = self.hash_array_elements(arr_ref)?;
+                Ok(Some(Value::Int(hash)))
+            }
+            ("java/util/Objects", "hashCode", "(Ljava/lang/Object;)I") => {
+                let r = args[0].as_reference()?;
+                if r == Reference::Null {
+                    Ok(Some(Value::Int(0)))
+                } else {
+                    Ok(Some(Value::Int(self.hash_object(r))))
+                }
+            }
+            ("java/util/Objects", "checkIndex", "(II)I") => {
+                let index = args[0].as_int()?;
+                let length = args[1].as_int()?;
+                if index < 0 || index >= length {
+                    return Err(VmError::UnhandledException {
+                        class_name: "java/lang/ArrayIndexOutOfBoundsException".to_string(),
+                    });
+                }
+                Ok(Some(Value::Int(index)))
+            }
+            ("java/util/Objects", "checkIndex", "(JJ)J") => {
+                let index = args[0].as_long()?;
+                let length = args[1].as_long()?;
+                if index < 0 || index >= length {
+                    return Err(VmError::UnhandledException {
+                        class_name: "java/lang/ArrayIndexOutOfBoundsException".to_string(),
+                    });
+                }
+                Ok(Some(Value::Long(index)))
+            }
+            ("java/util/Objects", "checkFromToIndex", "(III)I") => {
+                let from = args[0].as_int()?;
+                let to = args[1].as_int()?;
+                let length = args[2].as_int()?;
+                if from < 0 || to > length || from > to {
+                    return Err(VmError::UnhandledException {
+                        class_name: "java/lang/IndexOutOfBoundsException".to_string(),
+                    });
+                }
+                Ok(Some(Value::Int(from)))
+            }
+            ("java/util/Objects", "checkFromToIndex", "(JJJ)J") => {
+                let from = args[0].as_long()?;
+                let to = args[1].as_long()?;
+                let length = args[2].as_long()?;
+                if from < 0 || to > length || from > to {
+                    return Err(VmError::UnhandledException {
+                        class_name: "java/lang/IndexOutOfBoundsException".to_string(),
+                    });
+                }
+                Ok(Some(Value::Long(from)))
+            }
+            ("java/util/Objects", "checkFromIndexSize", "(III)I") => {
+                let from = args[0].as_int()?;
+                let size = args[1].as_int()?;
+                let length = args[2].as_int()?;
+                if from < 0 || size < 0 || from > length - size {
+                    return Err(VmError::UnhandledException {
+                        class_name: "java/lang/IndexOutOfBoundsException".to_string(),
+                    });
+                }
+                Ok(Some(Value::Int(from)))
+            }
+            ("java/util/Objects", "checkFromIndexSize", "(JJJ)J") => {
+                let from = args[0].as_long()?;
+                let size = args[1].as_long()?;
+                let length = args[2].as_long()?;
+                if from < 0 || size < 0 || from > length - size {
+                    return Err(VmError::UnhandledException {
+                        class_name: "java/lang/IndexOutOfBoundsException".to_string(),
+                    });
+                }
+                Ok(Some(Value::Long(from)))
             }
 
             // --- System methods ---
@@ -1512,6 +1614,63 @@ impl Vm {
                 .unwrap_or(0)),
             _ => Ok(0),
         }
+    }
+
+    /// Compute a hash code for a heap object (identity hash for non-strings).
+    fn hash_object(&self, reference: Reference) -> i32 {
+        match reference {
+            Reference::Null => 0,
+            Reference::Heap(idx) => {
+                let base = idx as i64;
+                ((base >> 32) ^ base) as i32
+            }
+        }
+    }
+
+    fn hash_array_elements(&self, arr_ref: Reference) -> Result<i32, VmError> {
+        let mut hash: i32 = 0;
+        match self.heap.lock().unwrap().get(arr_ref)? {
+            HeapValue::ReferenceArray { values, .. } => {
+                for r in values {
+                    let elem_hash = match r {
+                        Reference::Null => 0,
+                        _ => self.hash_object(*r),
+                    };
+                    hash = hash.wrapping_mul(31).wrapping_add(elem_hash);
+                }
+            }
+            HeapValue::IntArray { values } => {
+                for v in values {
+                    hash = hash.wrapping_mul(31).wrapping_add(*v);
+                }
+            }
+            HeapValue::LongArray { values } => {
+                for v in values {
+                    let elem_hash = ((*v as u64) ^ ((*v as u64) >> 32)) as i32;
+                    hash = hash.wrapping_mul(31).wrapping_add(elem_hash);
+                }
+            }
+            HeapValue::FloatArray { values } => {
+                for v in values {
+                    hash = hash.wrapping_mul(31).wrapping_add((*v as u32) as i32);
+                }
+            }
+            HeapValue::DoubleArray { values } => {
+                for v in values {
+                    let bits = v.to_bits();
+                    let elem_hash = ((bits as u64) ^ ((bits as u64) >> 32)) as i32;
+                    hash = hash.wrapping_mul(31).wrapping_add(elem_hash);
+                }
+            }
+            _ => {
+                let base = match arr_ref {
+                    Reference::Heap(idx) => idx as i64,
+                    Reference::Null => 0,
+                };
+                hash = ((base >> 32) ^ base) as i32;
+            }
+        }
+        Ok(hash)
     }
 
     /// Copy `length` elements between typed arrays, matching `System.arraycopy` semantics

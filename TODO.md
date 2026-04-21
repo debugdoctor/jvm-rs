@@ -29,15 +29,21 @@ Goal: run code that uses the JDK without `ClassNotFound`, without shipping all o
 
 ### 12.2 Collections & Data Structures (`java.util`)
 - [x] `ArrayList` — basic add/get/size from real JDK working
-- [ ] `LinkedList`, `HashMap` (partial — basic put/get/size), `LinkedHashMap`, `TreeMap`, `HashSet`, `LinkedHashSet`, `TreeSet`, `ArrayDeque`, `PriorityQueue`
+- [x] `LinkedList` — basic add/get/size working
+- [x] `HashMap` — basic put/get/size working
+- [x] `HashSet` — basic add/contains/size working
+- [x] `TreeMap` — basic put/get/size working (requires String.compareTo(Ljava/lang/Object;)I)
+- [x] `TreeSet` — basic add/first/size working
+- [x] `LinkedHashMap` — basic put/get/size working (requires loading inherited fields from superclass)
 - [ ] `Iterator`, `Iterable`, `Collection`, `List`, `Map`, `Set`, `Queue`, `Deque` interfaces with `default` methods
 - [ ] `Collections` (sort, shuffle, unmodifiable*, emptyList/Map/Set, singletonList)
 - [ ] `Arrays` (sort, binarySearch, asList, copyOf, copyOfRange, fill, toString, hashCode, equals, stream) — bytecode verification issues with StackMapTable
 - [x] `Optional`, `OptionalInt`, `OptionalLong`, `OptionalDouble` — basic Optional.of/isPresent/get working
 
 ### 12.3 Streams & Functional (`java.util.stream`, `java.util.function`)
-- [x] `Function` (tested), `Predicate`, `Consumer`, `Supplier` — basic lambda support working
-- [ ] `Stream`, `IntStream`, `LongStream`, `DoubleStream` — requires `Arrays.asList` which has bytecode verification issues
+- [x] `Function`, `Predicate`, `Consumer`, `Supplier` — basic lambda support working
+- [ ] `Stream.count()`, `IntStream.sum()` — blocked by bytecode verifier StackMapTable TOP type handling
+- [ ] `Stream`, `IntStream`, `LongStream`, `DoubleStream` — requires working `Arrays.stream()` which triggers verifier issues
 - [ ] `Collectors` (toList, toMap, groupingBy, joining, counting, reducing)
 - [ ] Full `java.util.function` (BiFunction, IntFunction, Consumer variants, and primitive specializations)
 
@@ -198,9 +204,9 @@ Goal: lower RSS than HotSpot at matched throughput. HotSpot's Metaspace + code c
 - [x] Multiple classpath entries, on-demand class loading
 - [x] Execution tracing (`-Xtrace`), improved error diagnostics
 
-## 10. Testing — 95 tests
+## 10. Testing — 101 tests
 - [x] 61 unit tests (opcodes, VM behavior, GC API)
-- [x] 34 integration tests (compile Java + execute): core language, built-ins, modern `javac` output, regressions, ArrayList/HashMap, java.util.function (Function/Predicate/Consumer/Supplier), Optional
+- [x] 40 integration tests (compile Java + execute): core language, built-ins, modern `javac` output, regressions, ArrayList/HashMap/LinkedList/LinkedHashMap/TreeMap/TreeSet/HashSet, java.util.function (Function/Predicate/Consumer/Supplier), Optional
 
 ## 11. Remaining TODOs
 
@@ -227,7 +233,7 @@ Goal: lower RSS than HotSpot at matched throughput. HotSpot's Metaspace + code c
 
 ### 11.6 Built-In Classes And Native Methods
 - [x] Expanded built-ins: `java.lang.{String, Integer, Long, Character, Boolean, Math, System, StringBuilder, Throwable}` and `java.util.Objects` (loads from JDK java.base.jmod, not stub)
-- [x] Added native methods: `String` (substring, indexOf, startsWith/endsWith, contains, trim, {to,from}Case, concat, replace, compareTo, all `valueOf` overloads), `Integer`/`Long` (parse, radix conversions, compare), `Character` (is*, to*, toString), `Boolean` (parseBoolean, valueOf, toString), `Math` (floor, ceil, round, random, log, log10, exp, sin/cos/tan), `System` (`currentTimeMillis`, `nanoTime`, `arraycopy`, `exit`, `getProperty`, `lineSeparator`, `identityHashCode`), `Objects` (requireNonNull, equals, isNull, nonNull — loads from JDK, not stub), exception constructors (`<init>(Ljava/lang/String;)V` and variants) + `Throwable.getMessage`, and `StringBuilder` (charAt, setLength, deleteCharAt, setCharAt, reverse, insert)
+- [x] Added native methods: `String` (substring, indexOf, startsWith/endsWith, contains, trim, {to,from}Case, concat, replace, compareTo (String and Object overloads), all `valueOf` overloads), `Integer`/`Long` (parse, radix conversions, compare), `Character` (is*, to*, toString), `Boolean` (parseBoolean, valueOf, toString), `Math` (floor, ceil, round, random, log, log10, exp, sin/cos/tan), `System` (`currentTimeMillis`, `nanoTime`, `arraycopy`, `exit`, `getProperty`, `lineSeparator`, `identityHashCode`), `Objects` (requireNonNull, equals, isNull, nonNull, hash, hashCode, checkIndex, checkFromToIndex, checkFromIndexSize — loads from JDK, not stub), exception constructors (`<init>(Ljava/lang/String;)V` and variants) + `Throwable.getMessage`, and `StringBuilder` (charAt, setLength, deleteCharAt, setCharAt, reverse, insert)
 - [x] Interface `default` methods via `RuntimeClass.interfaces` and interface-aware `resolve_method` (tested with modern_javac_interface_default_dispatch)
 
 ### 11.7 Garbage Collection

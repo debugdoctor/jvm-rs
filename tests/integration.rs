@@ -967,3 +967,137 @@ public class TestOptional {
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["true", "hello"]);
 }
+
+#[test]
+fn java_util_linked_list() {
+    let (result, output) = compile_and_run(
+        "java_util_linked_list",
+        &[("demo/TestLinkedList.java", r#"
+package demo;
+import java.util.LinkedList;
+public class TestLinkedList {
+    public static void main(String[] args) {
+        LinkedList<String> list = new LinkedList<>();
+        list.add("hello");
+        list.add("world");
+        System.out.println(list.get(0));
+        System.out.println(list.get(1));
+        System.out.println(list.size());
+    }
+}
+"#)],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["hello", "world", "2"]);
+}
+
+#[test]
+fn java_util_hash_map() {
+    let (result, output) = compile_and_run(
+        "java_util_hash_map",
+        &[("demo/TestHashMap.java", r#"
+package demo;
+import java.util.HashMap;
+public class TestHashMap {
+    public static void main(String[] args) {
+        HashMap<String, String> map = new HashMap<>();
+        map.put("one", "1");
+        map.put("two", "2");
+        System.out.println(map.get("one"));
+        System.out.println(map.get("two"));
+        System.out.println(map.size());
+    }
+}
+"#)],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["1", "2", "2"]);
+}
+
+#[test]
+fn java_util_tree_map() {
+    let (result, output) = compile_and_run(
+        "java_util_tree_map",
+        &[("demo/TestTreeMap.java", r#"
+package demo;
+import java.util.TreeMap;
+public class TestTreeMap {
+    public static void main(String[] args) {
+        TreeMap<String, String> tm = new TreeMap<>();
+        tm.put("one", "1");
+        tm.put("two", "2");
+        System.out.println(tm.get("one"));
+        System.out.println(tm.size());
+    }
+}
+"#)],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["1", "2"]);
+}
+
+#[test]
+fn java_util_tree_set() {
+    let (result, output) = compile_and_run(
+        "java_util_tree_set",
+        &[("demo/TestTreeSet.java", r#"
+package demo;
+import java.util.TreeSet;
+public class TestTreeSet {
+    public static void main(String[] args) {
+        TreeSet<String> ts = new TreeSet<>();
+        ts.add("banana");
+        ts.add("apple");
+        System.out.println(ts.first());
+        System.out.println(ts.size());
+    }
+}
+"#)],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["apple", "2"]);
+}
+
+#[test]
+fn java_util_hash_set() {
+    let (result, output) = compile_and_run(
+        "java_util_hash_set",
+        &[("demo/TestHashSet.java", r#"
+package demo;
+import java.util.HashSet;
+public class TestHashSet {
+    public static void main(String[] args) {
+        HashSet<String> hs = new HashSet<>();
+        hs.add("apple");
+        hs.add("banana");
+        System.out.println(hs.contains("apple"));
+        System.out.println(hs.size());
+    }
+}
+"#)],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["true", "2"]);
+}
+
+#[test]
+fn java_util_linked_hash_map() {
+    let (result, output) = compile_and_run(
+        "java_util_linked_hash_map",
+        &[("demo/TestLinkedHashMap.java", r#"
+package demo;
+import java.util.LinkedHashMap;
+public class TestLinkedHashMap {
+    public static void main(String[] args) {
+        LinkedHashMap<String, String> lhm = new LinkedHashMap<>();
+        lhm.put("k1", "v1");
+        lhm.put("k2", "v2");
+        System.out.println(lhm.get("k1"));
+        System.out.println(lhm.size());
+    }
+}
+"#)],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["v1", "2"]);
+}

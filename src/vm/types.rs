@@ -3,7 +3,7 @@
 //! Split from `mod.rs` to keep data-type definitions separate from the
 //! runtime machinery (heap, frames, interpreter).
 
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -181,8 +181,8 @@ pub struct MethodRef {
 pub struct RuntimeClass {
     pub name: String,
     pub super_class: Option<String>,
-    pub methods: BTreeMap<(String, String), ClassMethod>,
-    pub static_fields: BTreeMap<String, Value>,
+    pub methods: HashMap<(String, String), ClassMethod>,
+    pub static_fields: HashMap<String, Value>,
     /// Instance field definitions: (name, descriptor).
     pub instance_fields: Vec<(String, String)>,
     /// Names of directly implemented interfaces. Empty for built-in classes and for

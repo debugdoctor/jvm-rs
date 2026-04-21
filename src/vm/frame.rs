@@ -7,6 +7,9 @@ use super::types::{
 
 #[derive(Debug)]
 pub(super) struct Frame {
+    pub(super) class_name: String,
+    pub(super) method_name: String,
+    pub(super) descriptor: String,
     pub(super) code: Vec<u8>,
     pub(super) pc: usize,
     pub(super) locals: Vec<Option<Value>>,
@@ -35,6 +38,9 @@ impl Frame {
         }
 
         Self {
+            class_name: method.class_name,
+            method_name: method.name,
+            descriptor: method.descriptor,
             code: method.code,
             pc: 0,
             locals,

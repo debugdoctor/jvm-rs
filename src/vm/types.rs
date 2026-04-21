@@ -529,6 +529,23 @@ pub(super) fn default_value_for_descriptor(descriptor: &str) -> Value {
     }
 }
 
+/// Zero-valued return for a method descriptor, suitable for stubbing out
+/// native methods. Returns `None` for void (`V`), matching the invoker's
+/// "don't push anything on void" convention.
+pub(super) fn stub_return_value(descriptor: &str) -> Option<Value> {
+    let bytes = descriptor.as_bytes();
+    let close = bytes.iter().position(|&b| b == b')')?;
+    let ret = &descriptor[close + 1..];
+    match ret.as_bytes().first()? {
+        b'V' => None,
+        b'J' => Some(Value::Long(0)),
+        b'F' => Some(Value::Float(0.0)),
+        b'D' => Some(Value::Double(0.0)),
+        b'L' | b'[' => Some(Value::Reference(Reference::Null)),
+        _ => Some(Value::Int(0)),
+    }
+}
+
 /// Parse the leading descriptor byte for every parameter in a method descriptor.
 /// Reference types collapse to `b'L'`, arrays to `b'['`; primitives keep their
 /// descriptor letter. Returns `None` for malformed descriptors.

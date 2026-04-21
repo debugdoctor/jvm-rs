@@ -213,19 +213,17 @@ pub trait ClassLoader {
 
 impl ClassLoader for BootstrapClassLoader {
     fn load_classfile(&mut self, class_name: &str) -> Result<Option<ClassFile>, VmError> {
-        eprintln!("DEBUG load_classfile: called for {}", class_name);
-        let bytes = match self.find_class_bytes(class_name) {
-            Some(b) => {
-                eprintln!("DEBUG load_classfile: {} found bytes len={}", class_name, b.len());
-                b
+        // Array classes ([Ljava/lang/Integer;, [I, etc.) don't have class files -
+        // they are synthesized at runtime. Return None so the VM can handle them.
+        if class_name.starts_with('[') {
+            return Ok(None);
+        }
+
+        let bytes = self.find_class_bytes(class_name).ok_or_else(|| {
+            VmError::ClassNotFound {
+                class_name: class_name.to_string(),
             }
-            None => {
-                eprintln!("DEBUG load_classfile: {} NOT FOUND", class_name);
-                return Err(VmError::ClassNotFound {
-                    class_name: class_name.to_string(),
-                });
-            }
-        };
+        })?;
         ClassFile::parse(&bytes)
             .map(Some)
             .map_err(|_| VmError::ClassNotFound {

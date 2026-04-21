@@ -132,7 +132,7 @@ impl Vm {
                     Ok(result.map_or(ExecutionResult::Void, ExecutionResult::Value))
                 }
                 ClassMethod::Bytecode(method) => {
-                    let callee = method.with_initial_locals(args.into_iter().map(Some).collect::<Vec<_>>());
+                    let callee = method.with_initial_locals(Vm::args_to_locals(args));
                     child_vm.execute(callee)
                 }
             }
@@ -144,7 +144,7 @@ impl Vm {
     }
 
     /// Run garbage collection, freeing unreachable heap objects.
-    fn collect_garbage(&mut self, thread: &Thread) {
+fn collect_garbage(&mut self, thread: &Thread) {
         let mut roots = Vec::new();
 
         // Roots from thread frames: stack + locals.
@@ -159,7 +159,6 @@ impl Vm {
                     roots.push(*r);
                 }
             }
-            // Constants may hold string references.
             for constant in &frame.constants {
                 if let Some(Value::Reference(r @ Reference::Heap(_))) = constant {
                     roots.push(*r);
@@ -167,13 +166,19 @@ impl Vm {
             }
         }
 
-        // Roots from static fields of all loaded classes.
+        // Roots from static fields of all loaded classes and from the
+        // `java.lang.Class` cache.
         let runtime = self.runtime.lock().unwrap();
         for class in runtime.classes.values() {
             for value in class.static_fields.values() {
                 if let Value::Reference(r @ Reference::Heap(_)) = value {
                     roots.push(*r);
                 }
+            }
+        }
+        for r in runtime.class_objects.values() {
+            if let Reference::Heap(_) = r {
+                roots.push(*r);
             }
         }
 
@@ -218,12 +223,6 @@ impl Vm {
 
     /// Register a class loaded from a `.class` file.
     pub fn register_class(&mut self, class: RuntimeClass) {
-        if class.name == "java/util/Objects" {
-            eprintln!("DEBUG register_class: java/util/Objects being registered with {} methods", class.methods.len());
-            for (k, v) in &class.methods {
-                eprintln!("DEBUG register_class:   method: {:?} => {:?}", k, v);
-            }
-        }
         self.runtime
             .lock()
             .unwrap()
@@ -231,11 +230,142 @@ impl Vm {
             .insert(class.name.clone(), class);
     }
 
+    /// Project a value list into JVM-slot-indexed locals: longs and doubles
+    /// occupy two slots per JVMS §2.6, so subsequent parameters land at the
+    /// index the bytecode expects. Without this padding, methods like
+    /// `ArraysSupport.vectorizedMismatch(Object,J,Object,J,I,I)` read local
+    /// 7 (the second int) from an uninitialized slot.
+    pub(super) fn args_to_locals(args: Vec<Value>) -> Vec<Option<Value>> {
+        let mut locals = Vec::with_capacity(args.len());
+        for value in args {
+            let wide = matches!(value, Value::Long(_) | Value::Double(_));
+            locals.push(Some(value));
+            if wide {
+                locals.push(None);
+            }
+        }
+        locals
+    }
+
+    /// Invoke an instance method on the receiver, resolving dynamically from
+    /// the receiver's runtime class (like `invokevirtual`), and return its
+    /// value. For calling back into Java bytecode from native implementations
+    /// (e.g., `Collections.sort` native reading/writing a List through
+    /// `get`/`set`).
+    pub(super) fn call_virtual(
+        &mut self,
+        receiver: Reference,
+        method_name: &str,
+        descriptor: &str,
+        extra_args: Vec<Value>,
+    ) -> Result<ExecutionResult, VmError> {
+        let class_name = self.get_object_class(receiver)?;
+        let (resolved_class, class_method) =
+            self.resolve_method(&class_name, method_name, descriptor)?;
+        let mut all_args = vec![Value::Reference(receiver)];
+        all_args.extend(extra_args);
+        match class_method {
+            ClassMethod::Native => {
+                let result = self.invoke_native(
+                    &resolved_class,
+                    method_name,
+                    descriptor,
+                    &all_args,
+                )?;
+                Ok(match result {
+                    Some(v) => ExecutionResult::Value(v),
+                    None => ExecutionResult::Void,
+                })
+            }
+            ClassMethod::Bytecode(method) => {
+                let callee = method.with_initial_locals(Vm::args_to_locals(all_args));
+                self.execute(callee)
+            }
+        }
+    }
+
+    /// Whether a `(class, method, descriptor)` has a Rust-native shadow that
+    /// should win over any bytecode version loaded from the JDK. Used to
+    /// short-circuit JDK implementations that transitively pull in machinery
+    /// we don't support (reference handler threads, security, reflection).
+    pub(super) fn has_native_override(
+        &self,
+        class_name: &str,
+        method_name: &str,
+        descriptor: &str,
+    ) -> bool {
+        // Every method on Unsafe is native-stubbed — the real Unsafe depends
+        // on intrinsics we don't provide, and listing every method JDK code
+        // might call up-front would be miles of boilerplate.
+        if class_name == "jdk/internal/misc/Unsafe" {
+            return true;
+        }
+        matches!(
+            (class_name, method_name, descriptor),
+            ("java/util/Collections", "sort", "(Ljava/util/List;)V")
+                | (
+                    "java/util/Collections",
+                    "sort",
+                    "(Ljava/util/List;Ljava/util/Comparator;)V",
+                )
+                | ("java/util/Collections", "reverse", "(Ljava/util/List;)V")
+                | ("java/util/Arrays", "stream", "([I)Ljava/util/stream/IntStream;")
+                | ("java/util/Arrays", "stream", "([J)Ljava/util/stream/LongStream;")
+                | ("java/util/Arrays", "stream", "([D)Ljava/util/stream/DoubleStream;")
+                | ("java/util/Arrays", "equals", "([I[I)Z")
+                | ("java/util/Arrays", "equals", "([J[J)Z")
+                | ("java/util/Arrays", "equals", "([B[B)Z")
+                | ("java/util/Arrays", "equals", "([S[S)Z")
+                | ("java/util/Arrays", "equals", "([C[C)Z")
+                | ("java/util/Arrays", "equals", "([F[F)Z")
+                | ("java/util/Arrays", "equals", "([D[D)Z")
+                | ("java/util/Arrays", "equals", "([Z[Z)Z")
+                | (
+                    "java/util/Arrays",
+                    "equals",
+                    "([Ljava/lang/Object;[Ljava/lang/Object;)Z",
+                )
+        )
+    }
+
+    /// Return the `java/lang/Class` heap object for the given internal class
+    /// name, allocating (and caching) it on first reference. `ldc` of a
+    /// `CONSTANT_Class` entry resolves through here so that class literals
+    /// round-trip as real heap references instead of null — which is what
+    /// static initializers like `Reflection.<clinit>` rely on when they
+    /// build `Map.of(SomeClass.class, ...)`.
+    pub fn class_object(&mut self, internal_name: &str) -> Reference {
+        if let Some(existing) = self
+            .runtime
+            .lock()
+            .unwrap()
+            .class_objects
+            .get(internal_name)
+            .copied()
+        {
+            return existing;
+        }
+        let name_ref = self.new_string(internal_name.to_string());
+        let mut fields = std::collections::HashMap::new();
+        if let Value::Reference(r) = name_ref {
+            fields.insert("__name".to_string(), Value::Reference(r));
+        }
+        let reference = self.heap.lock().unwrap().allocate(HeapValue::Object {
+            class_name: "java/lang/Class".to_string(),
+            fields,
+        });
+        self.runtime
+            .lock()
+            .unwrap()
+            .class_objects
+            .insert(internal_name.to_string(), reference);
+        reference
+    }
+
     /// Register a class from a parsed `ClassFile`, extracting all runtime
     /// metadata (constant pool entries, method/field refs, exception handlers,
     /// line numbers, stack map frames, invoke dynamic sites).
     pub fn register_classfile(&mut self, class_name: &str, class_file: &ClassFile) {
-        eprintln!("DEBUG register_classfile: called for {}", class_name);
         crate::launcher::register_class(class_name, class_file, self)
             .expect("register_class should not fail for valid ClassFile data");
     }
@@ -252,22 +382,22 @@ impl Vm {
             .classes
             .contains_key(class_name)
         {
-            if class_name == "java/util/Objects" {
-                eprintln!("DEBUG ensure_class_loaded: {} already in classes map!", class_name);
-            }
             return Ok(());
+        }
+
+        // Array classes (e.g., [I, [Ljava/lang/Object;) are synthesized at runtime
+        if class_name.starts_with('[') {
+            return self.register_synthetic_array_class(class_name);
         }
 
         if let Some(ref mut loader) = self.class_loader {
             if let Ok(Some(class_file)) = ClassLoader::load_classfile(loader, class_name) {
-                eprintln!("DEBUG ensure_class_loaded: {} from bootstrap loader, registering", class_name);
                 self.register_classfile(class_name, &class_file);
                 return Ok(());
             }
         }
 
         if !self.class_path.is_empty() {
-            eprintln!("DEBUG ensure_class_loaded: {} from classpath", class_name);
             let class_path = self.class_path.clone();
             let source = crate::launcher::resolve_class_path(&class_path, class_name).ok_or_else(
                 || VmError::ClassNotFound {
@@ -284,6 +414,49 @@ impl Vm {
                 class_name: class_name.to_string(),
             })
         }
+    }
+
+    /// Register a synthesized array class (e.g., [I, [Ljava/lang/String;)
+    fn register_synthetic_array_class(&mut self, class_name: &str) -> Result<(), VmError> {
+        // Determine element type and array dimensions
+        let (element_type, dimensions) = Self::parse_array_descriptor(class_name);
+
+        // For 1-dim primitive arrays like [I, [B, etc., create a simple runtime class
+        // For object arrays like [Ljava/lang/String;, we need to know the element class
+        let super_class = if dimensions == 1 && !element_type.starts_with('[') && !element_type.starts_with('L') {
+            // Primitive array's super is Object
+            "java/lang/Object".to_string()
+        } else if dimensions > 1 {
+            // Multi-dim array: super is array of (dimensions-1)
+            format!("[{}", &element_type[..element_type.len().saturating_sub(2)])
+        } else {
+            // Object array: super is Object
+            "java/lang/Object".to_string()
+        };
+
+        let runtime_class = RuntimeClass {
+            name: class_name.to_string(),
+            super_class: Some(super_class),
+            methods: std::collections::HashMap::new(),
+            static_fields: std::collections::HashMap::new(),
+            instance_fields: vec![],
+            interfaces: vec![],
+        };
+
+        self.register_class(runtime_class);
+        Ok(())
+    }
+
+    /// Parse array descriptor to get element type and dimensions
+    fn parse_array_descriptor(class_name: &str) -> (String, usize) {
+        let mut dims = 0;
+        let mut i = 0;
+        while i < class_name.len() && class_name.chars().nth(i) == Some('[') {
+            dims += 1;
+            i += 1;
+        }
+        let element_type = class_name[i..].to_string();
+        (element_type, dims)
     }
 
     /// Run `<clinit>` for a class if it hasn't been initialized yet.
@@ -751,11 +924,6 @@ impl Vm {
         let mut thread = Thread::new(method);
 
         loop {
-            // Trigger GC when allocation pressure crosses the configured threshold.
-            if self.heap.lock().unwrap().should_collect() {
-                self.collect_garbage(&thread);
-            }
-
             let opcode_pc = thread.current_frame().pc;
             if opcode_pc >= thread.current_frame().code.len() {
                 return Err(VmError::MissingReturn);
@@ -767,14 +935,17 @@ impl Vm {
             })?;
 
             if self.trace {
-                let stack_repr: Vec<_> = thread
-                    .current_frame()
+                let frame = thread.current_frame();
+                let stack_repr: Vec<_> = frame
                     .stack
                     .iter()
                     .map(|v| format!("{v}"))
                     .collect();
                 eprintln!(
-                    "  pc={opcode_pc:<4} {opcode:?}  stack=[{}]  depth={}",
+                    "  [{}.{}{}] pc={opcode_pc:<4} {opcode:?}  stack=[{}]  depth={}",
+                    frame.class_name,
+                    frame.method_name,
+                    frame.descriptor,
                     stack_repr.join(", "),
                     thread.depth(),
                 );
@@ -1713,14 +1884,23 @@ impl Vm {
                     args.reverse();
                     let receiver = thread.current_frame_mut().pop()?.as_reference()?;
 
-                    let class_name = self.get_object_class(receiver)?;
-                    self.dispatch_instance_method(
-                        &mut thread,
-                        &class_name,
-                        &method_ref,
-                        receiver,
-                        args,
-                    )?;
+                    let should_return_false = receiver == Reference::Null
+                        && method_ref.class_name == "java/lang/Class"
+                        && method_ref.method_name == "desiredAssertionStatus"
+                        && method_ref.descriptor == "()Z";
+
+                    if should_return_false {
+                        thread.current_frame_mut().push(Value::Int(0))?;
+                    } else {
+                        let class_name = self.get_object_class(receiver)?;
+                        self.dispatch_instance_method(
+                            &mut thread,
+                            &class_name,
+                            &method_ref,
+                            receiver,
+                            args,
+                        )?;
+                    }
                 }
                 Opcode::Invokespecial => {
                     let index = thread.current_frame_mut().read_u16()? as usize;
@@ -1757,40 +1937,57 @@ impl Vm {
                     let class_name = &method_ref.class_name;
                     self.ensure_class_loaded(class_name)?;
                     self.ensure_class_initialized(class_name)?;
-                    let class = self.get_class(class_name)?;
-                    if class_name == "java/util/Objects" {
-                        eprintln!("DEBUG Objects methods: {:?}", class.methods.keys().collect::<Vec<_>>());
-                    }
-                    let class_method = class
-                        .methods
-                        .get(&(
-                            method_ref.method_name.clone(),
-                            method_ref.descriptor.clone(),
-                        ))
-                        .cloned()
-                        .ok_or_else(|| VmError::MethodNotFound {
-                            class_name: class_name.clone(),
-                            method_name: method_ref.method_name.clone(),
-                            descriptor: method_ref.descriptor.clone(),
-                        })?;
 
-                    match class_method {
-                        ClassMethod::Native => {
-                            let result = self.invoke_native(
-                                class_name,
-                                &method_ref.method_name,
-                                &method_ref.descriptor,
-                                &args,
-                            )?;
-                            if let Some(value) = result {
-                                thread.current_frame_mut().push(value)?;
-                            }
+                    // Shortcut: some JDK static methods drag in heavy
+                    // machinery (Reference handler threads, security,
+                    // reflection). When a native shadow exists, dispatch
+                    // to it rather than running the JDK bytecode.
+                    if self.has_native_override(
+                        class_name,
+                        &method_ref.method_name,
+                        &method_ref.descriptor,
+                    ) {
+                        let result = self.invoke_native(
+                            class_name,
+                            &method_ref.method_name,
+                            &method_ref.descriptor,
+                            &args,
+                        )?;
+                        if let Some(value) = result {
+                            thread.current_frame_mut().push(value)?;
                         }
-                        ClassMethod::Bytecode(method) => {
-                            let initial_locals: Vec<Option<Value>> =
-                                args.into_iter().map(Some).collect();
-                            let callee = method.with_initial_locals(initial_locals);
-                            thread.push_frame(Frame::new(callee));
+                    } else {
+                        let class = self.get_class(class_name)?;
+                        let class_method = class
+                            .methods
+                            .get(&(
+                                method_ref.method_name.clone(),
+                                method_ref.descriptor.clone(),
+                            ))
+                            .cloned()
+                            .ok_or_else(|| VmError::MethodNotFound {
+                                class_name: class_name.clone(),
+                                method_name: method_ref.method_name.clone(),
+                                descriptor: method_ref.descriptor.clone(),
+                            })?;
+
+                        match class_method {
+                            ClassMethod::Native => {
+                                let result = self.invoke_native(
+                                    class_name,
+                                    &method_ref.method_name,
+                                    &method_ref.descriptor,
+                                    &args,
+                                )?;
+                                if let Some(value) = result {
+                                    thread.current_frame_mut().push(value)?;
+                                }
+                            }
+                            ClassMethod::Bytecode(method) => {
+                                let callee = method
+                                    .with_initial_locals(Vm::args_to_locals(args));
+                                thread.push_frame(Frame::new(callee));
+                            }
                         }
                     }
                 }
@@ -2311,6 +2508,28 @@ impl Vm {
             return self.dispatch_lambda_proxy(thread, receiver, args);
         }
 
+        // Class-wide native shadows (e.g., every method on Unsafe) skip
+        // method-table lookup so we don't have to enumerate every JDK
+        // method name up front.
+        if self.has_native_override(
+            class_name,
+            &method_ref.method_name,
+            &method_ref.descriptor,
+        ) {
+            let mut all_args = vec![Value::Reference(receiver)];
+            all_args.extend(args);
+            let result = self.invoke_native(
+                class_name,
+                &method_ref.method_name,
+                &method_ref.descriptor,
+                &all_args,
+            )?;
+            if let Some(value) = result {
+                thread.current_frame_mut().push(value)?;
+            }
+            return Ok(());
+        }
+
         let (resolved_class, class_method) =
             self.resolve_method(class_name, &method_ref.method_name, &method_ref.descriptor)?;
 
@@ -2389,9 +2608,7 @@ impl Vm {
                 }
             }
             ClassMethod::Bytecode(method) => {
-                let initial_locals: Vec<Option<Value>> =
-                    all_args.into_iter().map(Some).collect();
-                let callee = method.with_initial_locals(initial_locals);
+                let callee = method.with_initial_locals(Vm::args_to_locals(all_args));
                 thread.push_frame(Frame::new(callee));
             }
         }

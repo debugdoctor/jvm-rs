@@ -1101,3 +1101,225 @@ public class TestLinkedHashMap {
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["v1", "2"]);
 }
+
+#[test]
+fn java_util_arraylist_iterator() {
+    // Exercises the ArrayList → AbstractList → Iterable chain end-to-end:
+    // `iterator()` allocates the JDK's ArrayList$Itr inner class, and the
+    // while loop dispatches through hasNext/next on that iterator.
+    let (result, output) = compile_and_run(
+        "java_util_arraylist_iterator",
+        &[("demo/TestIter.java", r#"
+package demo;
+import java.util.ArrayList;
+import java.util.Iterator;
+public class TestIter {
+    public static void main(String[] args) {
+        ArrayList<String> list = new ArrayList<>();
+        list.add("a");
+        list.add("b");
+        list.add("c");
+        Iterator<String> it = list.iterator();
+        while (it.hasNext()) {
+            System.out.println(it.next());
+        }
+    }
+}
+"#)],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["a", "b", "c"]);
+}
+
+#[test]
+fn java_util_arraylist_enhanced_for() {
+    // javac desugars enhanced-for on a Collection into iterator()/hasNext()/next().
+    // Confirms the Iterable default-method pipeline works for real JDK
+    // bytecode, not just for primitive-array enhanced-for.
+    let (result, output) = compile_and_run(
+        "java_util_arraylist_enhanced_for",
+        &[("demo/TestForEach.java", r#"
+package demo;
+import java.util.ArrayList;
+public class TestForEach {
+    public static void main(String[] args) {
+        ArrayList<String> list = new ArrayList<>();
+        list.add("x");
+        list.add("y");
+        list.add("z");
+        for (String s : list) {
+            System.out.println(s);
+        }
+    }
+}
+"#)],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["x", "y", "z"]);
+}
+
+#[test]
+fn java_util_collections_sort_integers() {
+    // Collections.sort is implemented natively in the VM (shadows the JDK
+    // bytecode) — it invokes List.size/get/set and Comparable.compareTo
+    // through normal virtual dispatch.
+    let (result, output) = compile_and_run(
+        "java_util_collections_sort_integers",
+        &[("demo/TestSort.java", r#"
+package demo;
+import java.util.ArrayList;
+import java.util.Collections;
+public class TestSort {
+    public static void main(String[] args) {
+        ArrayList<Integer> list = new ArrayList<>();
+        list.add(Integer.valueOf(3));
+        list.add(Integer.valueOf(1));
+        list.add(Integer.valueOf(4));
+        list.add(Integer.valueOf(1));
+        list.add(Integer.valueOf(5));
+        Collections.sort(list);
+        for (int i = 0; i < list.size(); i++) {
+            System.out.println(list.get(i));
+        }
+    }
+}
+"#)],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["1", "1", "3", "4", "5"]);
+}
+
+#[test]
+fn java_util_collections_sort_strings() {
+    let (result, output) = compile_and_run(
+        "java_util_collections_sort_strings",
+        &[("demo/TestSortS.java", r#"
+package demo;
+import java.util.ArrayList;
+import java.util.Collections;
+public class TestSortS {
+    public static void main(String[] args) {
+        ArrayList<String> list = new ArrayList<>();
+        list.add("banana");
+        list.add("apple");
+        list.add("cherry");
+        Collections.sort(list);
+        for (int i = 0; i < list.size(); i++) {
+            System.out.println(list.get(i));
+        }
+    }
+}
+"#)],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["apple", "banana", "cherry"]);
+}
+
+#[test]
+fn java_util_collections_reverse() {
+    let (result, output) = compile_and_run(
+        "java_util_collections_reverse",
+        &[("demo/TestRev.java", r#"
+package demo;
+import java.util.ArrayList;
+import java.util.Collections;
+public class TestRev {
+    public static void main(String[] args) {
+        ArrayList<Integer> list = new ArrayList<>();
+        list.add(Integer.valueOf(1));
+        list.add(Integer.valueOf(2));
+        list.add(Integer.valueOf(3));
+        Collections.reverse(list);
+        for (int i = 0; i < list.size(); i++) {
+            System.out.println(list.get(i));
+        }
+    }
+}
+"#)],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["3", "2", "1"]);
+}
+
+#[test]
+fn java_util_arrays_hashcode_and_equals() {
+    // Arrays.hashCode/equals both unblocked by the descriptor-correct CDS
+    // stub fix (prior `operand stack overflow` root cause) and by stubbing
+    // jdk/internal/misc/Unsafe — ArraysSupport's mismatch path now runs
+    // end-to-end.
+    let (result, output) = compile_and_run(
+        "java_util_arrays_hashcode_equals",
+        &[("demo/TestArrEq.java", r#"
+package demo;
+import java.util.Arrays;
+public class TestArrEq {
+    public static void main(String[] args) {
+        int[] a = {1, 2, 3, 4};
+        int[] b = {1, 2, 3, 4};
+        int[] c = {1, 2, 3, 5};
+        System.out.println(Arrays.hashCode(a));
+        System.out.println(Arrays.equals(a, b));
+        System.out.println(Arrays.equals(a, c));
+    }
+}
+"#)],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["955331", "true", "false"]);
+}
+
+#[test]
+fn java_util_arrays_stream_sum() {
+    // Arrays.stream(int[]) is shadowed by a Rust native that returns a
+    // `__jvm_rs/NativeIntStream`, avoiding the JDK's Stream pipeline
+    // (which pulls in ForkJoin/SharedSecrets/Reference handler).
+    // Terminal ops sum/count/toArray are services as natives on the
+    // NativeIntStream class.
+    let (result, output) = compile_and_run(
+        "java_util_arrays_stream_sum",
+        &[("demo/TestArrStream.java", r#"
+package demo;
+import java.util.Arrays;
+import java.util.stream.IntStream;
+public class TestArrStream {
+    public static void main(String[] args) {
+        int[] a = {1, 2, 3, 4, 5};
+        IntStream s = Arrays.stream(a);
+        System.out.println(s.sum());
+        System.out.println(Arrays.stream(a).count());
+    }
+}
+"#)],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["15", "5"]);
+}
+
+#[test]
+fn java_util_hashmap_iterator() {
+    // HashMap.entrySet().iterator() exercises a second Iterator implementation
+    // (HashMap$EntryIterator) and confirms the Iterable machinery isn't
+    // ArrayList-specific.
+    let (result, output) = compile_and_run(
+        "java_util_hashmap_iterator",
+        &[("demo/TestMapIter.java", r#"
+package demo;
+import java.util.HashMap;
+import java.util.Map;
+public class TestMapIter {
+    public static void main(String[] args) {
+        HashMap<String, Integer> map = new HashMap<>();
+        map.put("a", Integer.valueOf(1));
+        map.put("b", Integer.valueOf(2));
+        int total = 0;
+        for (Map.Entry<String, Integer> e : map.entrySet()) {
+            total += e.getValue().intValue();
+        }
+        System.out.println(total);
+    }
+}
+"#)],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["3"]);
+}

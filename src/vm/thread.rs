@@ -19,6 +19,10 @@ pub(super) enum ClassInitializationState {
 pub(super) struct RuntimeState {
     pub(super) classes: HashMap<String, RuntimeClass>,
     pub(super) initialized_classes: HashMap<String, ClassInitializationState>,
+    /// Cache of `java/lang/Class` heap references, keyed by the internal class
+    /// name (e.g., `java/util/HashMap`, `I`, `[Ljava/lang/String;`). Populated
+    /// on demand when `ldc` or native reflection produces a Class constant.
+    pub(super) class_objects: HashMap<String, crate::vm::types::Reference>,
 }
 
 #[derive(Debug, Default)]

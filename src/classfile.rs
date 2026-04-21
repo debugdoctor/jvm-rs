@@ -323,6 +323,13 @@ impl MemberInfo {
                 _ => None,
             })
     }
+
+    pub fn constant_value(&self) -> Option<u16> {
+        self.attributes.iter().find_map(|attr| match attr {
+            AttributeInfo::ConstantValue(idx) => Some(*idx),
+            _ => None,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

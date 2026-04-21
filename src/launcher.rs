@@ -395,24 +395,58 @@ pub(crate) fn register_class(
     }
 
     // Extract instance field definitions (name, descriptor) from the class file.
+    // Also extract static field values from ConstantValue attributes.
     let mut instance_fields = Vec::new();
+    let mut static_fields: std::collections::HashMap<String, Value> = std::collections::HashMap::new();
     for field in &class_file.fields {
+        let name = field
+            .name(&class_file.constant_pool)
+            .map_err(|e| LaunchError::ClassFileParse {
+                path: PathBuf::new(),
+                source: e,
+            })?
+            .to_string();
+        let descriptor = field
+            .descriptor(&class_file.constant_pool)
+            .map_err(|e| LaunchError::ClassFileParse {
+                path: PathBuf::new(),
+                source: e,
+            })?
+            .to_string();
+
         let is_static = field.access_flags & 0x0008 != 0;
-        if !is_static {
-            let name = field
-                .name(&class_file.constant_pool)
-                .map_err(|e| LaunchError::ClassFileParse {
-                    path: PathBuf::new(),
-                    source: e,
-                })?
-                .to_string();
-            let descriptor = field
-                .descriptor(&class_file.constant_pool)
-                .map_err(|e| LaunchError::ClassFileParse {
-                    path: PathBuf::new(),
-                    source: e,
-                })?
-                .to_string();
+        if is_static {
+            // Static field — extract ConstantValue if present, otherwise use default
+            let default_value = if descriptor.starts_with('[') || descriptor.starts_with('L') {
+                // Reference type: null
+                Value::Reference(Reference::Null)
+            } else {
+                // Primitive type: 0
+                Value::Int(0)
+            };
+            let value = if let Some(value_index) = field.constant_value() {
+                if let Ok(constant) = class_file.constant_pool.get(value_index) {
+                    match constant {
+                        crate::classfile::ConstantPoolEntry::Integer(i) => Value::Int(*i),
+                        crate::classfile::ConstantPoolEntry::Long(l) => Value::Long(*l),
+                        crate::classfile::ConstantPoolEntry::Float(f) => Value::Float(*f),
+                        crate::classfile::ConstantPoolEntry::Double(d) => Value::Double(*d),
+                        crate::classfile::ConstantPoolEntry::String { .. } => {
+                            Value::Reference(Reference::Null)
+                        }
+                        crate::classfile::ConstantPoolEntry::Class { .. } => {
+                            Value::Reference(Reference::Null)
+                        }
+                        _ => default_value,
+                    }
+                } else {
+                    default_value
+                }
+            } else {
+                default_value
+            };
+            static_fields.insert(name, value);
+        } else {
             instance_fields.push((name, descriptor));
         }
     }
@@ -434,7 +468,7 @@ pub(crate) fn register_class(
         name: class_name.to_string(),
         super_class,
         methods,
-        static_fields: std::collections::HashMap::new(),
+        static_fields,
         instance_fields,
         interfaces,
     });
@@ -544,8 +578,18 @@ fn extract_runtime_constants(class_file: &ClassFile, vm: &mut Vm) -> Vec<Option<
                 .utf8(*string_index)
                 .ok()
                 .map(|value| vm.new_string(value.to_string())),
-            Ok(ConstantPoolEntry::MethodType { descriptor_index: _ })
-            | Ok(ConstantPoolEntry::Class { name_index: _ }) => {
+            Ok(ConstantPoolEntry::Class { name_index }) => {
+                match class_file.constant_pool.utf8(*name_index) {
+                    Ok(name) => {
+                        let name = name.to_string();
+                        Some(Value::Reference(match vm.class_object(&name) {
+                            r => r,
+                        }))
+                    }
+                    Err(_) => Some(Value::Reference(Reference::Null)),
+                }
+            }
+            Ok(ConstantPoolEntry::MethodType { descriptor_index: _ }) => {
                 Some(Value::Reference(Reference::Null))
             }
             _ => None,

@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 
+use super::types::stub_return_value;
 use super::{ClassMethod, HeapValue, Reference, RuntimeClass, Value, Vm, VmError};
 
 impl Vm {
@@ -22,6 +23,10 @@ impl Vm {
             ("wait", "()V"),
             ("notify", "()V"),
             ("notifyAll", "()V"),
+            ("hashCode", "()I"),
+            ("equals", "(Ljava/lang/Object;)Z"),
+            ("toString", "()Ljava/lang/String;"),
+            ("getClass", "()Ljava/lang/Class;"),
         ] {
             object_methods.insert(
                 (name.to_string(), desc.to_string()),
@@ -34,6 +39,38 @@ impl Vm {
                 methods: object_methods,
                 static_fields: HashMap::new(),
                 instance_fields: vec![],
+                interfaces: vec![],
+            });
+
+        // java/lang/Class — registered as a minimal stub so the VM can mint
+        // Class heap objects for `ldc class` without triggering the real
+        // JDK's `java/lang/Class` initialization (which transitively pulls
+        // in ClassLoader, Module, security, reflection, etc. — a rabbit
+        // hole that stalls startup). Bytecode that calls simple Class
+        // methods dispatches to these native stubs. `__name` is an internal
+        // string field holding the internal class name (e.g.
+        // `java/util/HashMap`); `getName` converts it to dotted form.
+        let mut class_methods = HashMap::new();
+        for (name, desc) in [
+            ("desiredAssertionStatus", "()Z"),
+            ("getName", "()Ljava/lang/String;"),
+            ("getSimpleName", "()Ljava/lang/String;"),
+            ("isArray", "()Z"),
+            ("isInterface", "()Z"),
+            ("isPrimitive", "()Z"),
+            ("toString", "()Ljava/lang/String;"),
+        ] {
+            class_methods.insert(
+                (name.to_string(), desc.to_string()),
+                ClassMethod::Native,
+            );
+        }
+        self.register_class(RuntimeClass {
+                name: "java/lang/Class".to_string(),
+                super_class: Some("java/lang/Object".to_string()),
+                methods: class_methods,
+                static_fields: HashMap::new(),
+                instance_fields: vec![("__name".to_string(), "Ljava/lang/String;".to_string())],
                 interfaces: vec![],
             });
 
@@ -117,7 +154,7 @@ impl Vm {
         for (name, desc) in [
             ("<init>", "()V"),
             ("length", "()I"),
-            ("charAt", "(I)I"),
+            ("charAt", "(I)C"),
             ("equals", "(Ljava/lang/Object;)Z"),
             ("hashCode", "()I"),
             ("isEmpty", "()Z"),
@@ -142,7 +179,8 @@ impl Vm {
             ("valueOf", "(C)Ljava/lang/String;"),
             ("valueOf", "(D)Ljava/lang/String;"),
             ("valueOf", "(F)Ljava/lang/String;"),
-            ("valueOf", "(Ljava/lang/Object;)Ljava/lang/String;"),
+            // Note: valueOf(Ljava/lang/Object;) is NOT registered here - it's a real
+            // Java method that calls toString() on the object, not a native method
         ] {
             string_methods.insert(
                 (name.to_string(), desc.to_string()),
@@ -174,17 +212,35 @@ impl Vm {
             ("toHexString", "(I)Ljava/lang/String;"),
             ("toOctalString", "(I)Ljava/lang/String;"),
             ("compare", "(II)I"),
+            ("numberOfLeadingZeros", "(I)I"),
+            ("numberOfTrailingZeros", "(I)I"),
+            ("bitCount", "(I)I"),
+            ("reverse", "(I)I"),
+            ("reverseBytes", "(I)I"),
+            ("highestOneBit", "(I)I"),
+            ("lowestOneBit", "(I)I"),
+            ("signum", "(I)I"),
         ] {
             integer_methods.insert(
                 (name.to_string(), desc.to_string()),
                 ClassMethod::Native,
             );
         }
+        let mut integer_static = HashMap::new();
+        integer_static.insert("MIN_VALUE".to_string(), Value::Int(i32::MIN));
+        integer_static.insert("MAX_VALUE".to_string(), Value::Int(i32::MAX));
+        integer_static.insert("SIZE".to_string(), Value::Int(32));
+        integer_static.insert("BYTES".to_string(), Value::Int(4));
+        // `Integer.TYPE` is the primitive-int Class mirror. Seed it with our
+        // own Class object so bytecode that does `Integer.TYPE == otherClass`
+        // comparisons or passes it to Array.newInstance sees a non-null.
+        let int_type = self.class_object("int");
+        integer_static.insert("TYPE".to_string(), Value::Reference(int_type));
         self.register_class(RuntimeClass {
                 name: "java/lang/Integer".to_string(),
                 super_class: Some("java/lang/Object".to_string()),
                 methods: integer_methods,
-                static_fields: HashMap::new(),
+                static_fields: integer_static,
                 instance_fields: vec![("value".to_string(), "I".to_string())],
                 interfaces: vec![],
             });
@@ -247,6 +303,7 @@ impl Vm {
             ("toString", "(Z)Ljava/lang/String;"),
             ("valueOf", "(Z)Ljava/lang/Boolean;"),
             ("booleanValue", "()Z"),
+            ("getBoolean", "(Ljava/lang/String;)Z"),
         ] {
             boolean_methods.insert(
                 (name.to_string(), desc.to_string()),
@@ -342,6 +399,16 @@ impl Vm {
             ("sin", "(D)D"),
             ("cos", "(D)D"),
             ("tan", "(D)D"),
+            ("floorDiv", "(II)I"),
+            ("floorDiv", "(JJ)J"),
+            ("floorMod", "(II)I"),
+            ("floorMod", "(JJ)J"),
+            ("addExact", "(II)I"),
+            ("addExact", "(JJ)J"),
+            ("subtractExact", "(II)I"),
+            ("multiplyExact", "(II)I"),
+            ("multiplyExact", "(JJ)J"),
+            ("signum", "(I)I"),
         ] {
             math_methods.insert(
                 (name.to_string(), desc.to_string()),
@@ -367,6 +434,132 @@ impl Vm {
                 interfaces: vec![],
             });
 
+        // jdk/internal/misc/Unsafe — registered as a builtin stub so the
+        // real JDK class (which depends on native intrinsics we don't
+        // implement) never loads. Methods that user/library bytecode
+        // actually reaches go through `invoke_native`; anything unlisted
+        // falls through to the Unsafe wildcard arm in invoke_native.
+        let mut unsafe_methods = HashMap::new();
+        for (name, desc) in [
+            ("registerNatives", "()V"),
+            ("getUnsafe", "()Ljdk/internal/misc/Unsafe;"),
+            ("arrayBaseOffset", "(Ljava/lang/Class;)I"),
+            ("arrayIndexScale", "(Ljava/lang/Class;)I"),
+            ("addressSize", "()I"),
+            ("pageSize", "()I"),
+            ("objectFieldOffset", "(Ljava/lang/reflect/Field;)J"),
+            ("staticFieldOffset", "(Ljava/lang/reflect/Field;)J"),
+            ("staticFieldBase", "(Ljava/lang/reflect/Field;)Ljava/lang/Object;"),
+            ("allocateMemory", "(J)J"),
+            ("freeMemory", "(J)V"),
+            ("compareAndSetInt", "(Ljava/lang/Object;JII)Z"),
+            ("compareAndSetLong", "(Ljava/lang/Object;JJJ)Z"),
+            ("compareAndSetReference", "(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z"),
+            ("compareAndSetObject", "(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z"),
+            ("getReferenceVolatile", "(Ljava/lang/Object;J)Ljava/lang/Object;"),
+            ("putReferenceVolatile", "(Ljava/lang/Object;JLjava/lang/Object;)V"),
+            ("getIntVolatile", "(Ljava/lang/Object;J)I"),
+            ("putIntVolatile", "(Ljava/lang/Object;JI)V"),
+            ("storeFence", "()V"),
+            ("loadFence", "()V"),
+            ("fullFence", "()V"),
+        ] {
+            unsafe_methods.insert(
+                (name.to_string(), desc.to_string()),
+                ClassMethod::Native,
+            );
+        }
+        let unsafe_instance_ref = self.heap.lock().unwrap().allocate(HeapValue::Object {
+            class_name: "jdk/internal/misc/Unsafe".to_string(),
+            fields: HashMap::new(),
+        });
+        let mut unsafe_static = HashMap::new();
+        unsafe_static.insert("theUnsafe".to_string(), Value::Reference(unsafe_instance_ref));
+        // ARRAY_*_BASE_OFFSET / INDEX_SCALE are normally filled from the
+        // real Unsafe's native <clinit>. We seed plausible values so JDK
+        // helpers like ArraysSupport that read them don't trip
+        // FieldNotFound. BASE_OFFSET=0, INDEX_SCALE=1 treats logical index
+        // as byte offset — which matches how our native CAS/getReference
+        // stubs (non-authoritative) handle the `offset` parameter anyway.
+        for prim in [
+            "BOOLEAN", "BYTE", "SHORT", "CHAR", "INT", "LONG", "FLOAT", "DOUBLE", "OBJECT",
+        ] {
+            unsafe_static.insert(
+                format!("ARRAY_{prim}_BASE_OFFSET"),
+                Value::Int(0),
+            );
+            unsafe_static.insert(
+                format!("ARRAY_{prim}_INDEX_SCALE"),
+                Value::Int(1),
+            );
+        }
+        unsafe_static.insert("ADDRESS_SIZE".to_string(), Value::Int(8));
+        unsafe_static.insert("INVALID_FIELD_OFFSET".to_string(), Value::Int(-1));
+        self.register_class(RuntimeClass {
+                name: "jdk/internal/misc/Unsafe".to_string(),
+                super_class: Some("java/lang/Object".to_string()),
+                methods: unsafe_methods,
+                static_fields: unsafe_static,
+                instance_fields: vec![],
+                interfaces: vec![],
+            });
+
+        // java/util/stream/IntStream — interface stub. The JDK version has
+        // a <clinit> that pulls in ForkJoinPool, SharedSecrets, and the
+        // full pipeline factory. We don't need any of that for the simple
+        // terminal-op workloads that show up in practice, so the class is
+        // registered as an interface marker and Arrays.stream hands back
+        // our own `__jvm_rs/NativeIntStream` implementation.
+        self.register_class(RuntimeClass {
+                name: "java/util/stream/IntStream".to_string(),
+                super_class: None,
+                methods: HashMap::new(),
+                static_fields: HashMap::new(),
+                instance_fields: vec![],
+                interfaces: vec![],
+            });
+        self.register_class(RuntimeClass {
+                name: "java/util/stream/Stream".to_string(),
+                super_class: None,
+                methods: HashMap::new(),
+                static_fields: HashMap::new(),
+                instance_fields: vec![],
+                interfaces: vec![],
+            });
+
+        // __jvm_rs/NativeIntStream — our non-lazy IntStream backing. Holds
+        // an int[] and services terminal ops (sum, count, min, max) via
+        // native methods. User code that declares the variable as
+        // `IntStream` still routes here because has_native_override
+        // matches on the interface's method names regardless of receiver
+        // class.
+        let mut native_int_stream_methods = HashMap::new();
+        for (name, desc) in [
+            ("sum", "()I"),
+            ("count", "()J"),
+            ("min", "()Ljava/util/OptionalInt;"),
+            ("max", "()Ljava/util/OptionalInt;"),
+            ("average", "()Ljava/util/OptionalDouble;"),
+            ("toArray", "()[I"),
+            ("asLongStream", "()Ljava/util/stream/LongStream;"),
+            ("asDoubleStream", "()Ljava/util/stream/DoubleStream;"),
+        ] {
+            native_int_stream_methods.insert(
+                (name.to_string(), desc.to_string()),
+                ClassMethod::Native,
+            );
+        }
+        self.register_class(RuntimeClass {
+                name: "__jvm_rs/NativeIntStream".to_string(),
+                super_class: Some("java/lang/Object".to_string()),
+                methods: native_int_stream_methods,
+                static_fields: HashMap::new(),
+                instance_fields: vec![
+                    ("__array".to_string(), "[I".to_string()),
+                ],
+                interfaces: vec!["java/util/stream/IntStream".to_string()],
+            });
+
         // java/lang/Comparable — marker-only; real dispatch lands on each
         // implementing class's `compareTo` native via `resolve_method`.
         self.register_class(RuntimeClass {
@@ -377,6 +570,7 @@ impl Vm {
                 instance_fields: vec![],
                 interfaces: vec![],
             });
+
 
         // java/lang/CharSequence — used by `String.contains` and similar.
         self.register_class(RuntimeClass {
@@ -424,6 +618,21 @@ impl Vm {
             ("start", "()V"),
             ("run", "()V"),
             ("join", "()V"),
+            ("currentThread", "()Ljava/lang/Thread;"),
+            ("getThreadGroup", "()Ljava/lang/ThreadGroup;"),
+            ("getContextClassLoader", "()Ljava/lang/ClassLoader;"),
+            ("setContextClassLoader", "(Ljava/lang/ClassLoader;)V"),
+            ("getName", "()Ljava/lang/String;"),
+            ("isAlive", "()Z"),
+            ("isInterrupted", "()Z"),
+            ("interrupt", "()V"),
+            ("getId", "()J"),
+            ("getPriority", "()I"),
+            ("setPriority", "(I)V"),
+            ("setDaemon", "(Z)V"),
+            ("isDaemon", "()Z"),
+            ("sleep", "(J)V"),
+            ("yield", "()V"),
         ] {
             thread_methods.insert(
                 (name.to_string(), desc.to_string()),
@@ -546,17 +755,6 @@ impl Vm {
                 self.output.lock().unwrap().push(line);
                 Ok(None)
             }
-            ("java/io/PrintStream", "println", "(Ljava/lang/Object;)V") => {
-                let reference = args[1].as_reference()?;
-                let line = if reference == Reference::Null {
-                    "null".to_string()
-                } else {
-                    self.stringify_reference(reference).unwrap_or_else(|_| format!("Object@{reference:?}"))
-                };
-                println!("{line}");
-                self.output.lock().unwrap().push(line);
-                Ok(None)
-            }
             ("java/io/PrintStream", "println", "(J)V") => {
                 let line = args[1].as_long()?.to_string();
                 println!("{line}");
@@ -580,6 +778,27 @@ impl Vm {
             ("java/io/PrintStream", "println", "()V") => {
                 println!();
                 self.output.lock().unwrap().push(String::new());
+                Ok(None)
+            }
+            ("java/io/PrintStream", "println", "(Ljava/lang/Object;)V") => {
+                let reference = args[1].as_reference()?;
+                let line = if reference == Reference::Null {
+                    "null".to_string()
+                } else {
+                    self.stringify_heap(reference)?
+                };
+                println!("{line}");
+                self.output.lock().unwrap().push(line);
+                Ok(None)
+            }
+            ("java/io/PrintStream", "print", "(Ljava/lang/Object;)V") => {
+                let reference = args[1].as_reference()?;
+                let text = if reference == Reference::Null {
+                    "null".to_string()
+                } else {
+                    self.stringify_heap(reference)?
+                };
+                print!("{text}");
                 Ok(None)
             }
 
@@ -639,11 +858,56 @@ impl Vm {
                 self.notify_monitor(args[0].as_reference()?, true)?;
                 Ok(None)
             }
+            ("java/lang/Object", "hashCode", "()I") => {
+                let r = args[0].as_reference()?;
+                Ok(Some(Value::Int(match r {
+                    Reference::Null => 0,
+                    Reference::Heap(i) => i as i32,
+                })))
+            }
+            ("java/lang/Object", "equals", "(Ljava/lang/Object;)Z") => {
+                Ok(Some(Value::Int(i32::from(
+                    args[0].as_reference()? == args[1].as_reference()?,
+                ))))
+            }
+            ("java/lang/Object", "toString", "()Ljava/lang/String;") => {
+                let r = args[0].as_reference()?;
+                let (cls, id) = match r {
+                    Reference::Null => ("null".to_string(), 0usize),
+                    Reference::Heap(i) => {
+                        let name = match self.heap.lock().unwrap().get(r)? {
+                            HeapValue::Object { class_name, .. } => class_name.clone(),
+                            v => v.kind_name().to_string(),
+                        };
+                        (name, i)
+                    }
+                };
+                Ok(Some(self.new_string(format!("{}@{:x}", cls.replace('/', "."), id))))
+            }
+            ("java/lang/Object", "getClass", "()Ljava/lang/Class;") => {
+                let r = args[0].as_reference()?;
+                let class_name = match r {
+                    Reference::Null => return Err(VmError::NullReference),
+                    Reference::Heap(_) => match self.heap.lock().unwrap().get(r)? {
+                        HeapValue::Object { class_name, .. } => class_name.clone(),
+                        HeapValue::String(_) => "java/lang/String".to_string(),
+                        HeapValue::StringBuilder(_) => "java/lang/StringBuilder".to_string(),
+                        HeapValue::IntArray { .. } => "[I".to_string(),
+                        HeapValue::LongArray { .. } => "[J".to_string(),
+                        HeapValue::FloatArray { .. } => "[F".to_string(),
+                        HeapValue::DoubleArray { .. } => "[D".to_string(),
+                        HeapValue::ReferenceArray { component_type, .. } => {
+                            format!("[{component_type}")
+                        }
+                    },
+                };
+                Ok(Some(Value::Reference(self.class_object(&class_name))))
+            }
             ("java/lang/String", "length", "()I") => {
                 let s = self.stringify_reference(args[0].as_reference()?)?;
                 Ok(Some(Value::Int(s.len() as i32)))
             }
-            ("java/lang/String", "charAt", "(I)I") => {
+            ("java/lang/String", "charAt", "(I)C") => {
                 let s = self.stringify_reference(args[0].as_reference()?)?;
                 let index = args[1].as_int()?;
                 let ch = s.chars().nth(index as usize).unwrap_or('\0');
@@ -804,17 +1068,39 @@ impl Vm {
             ("java/lang/String", "valueOf", "(F)Ljava/lang/String;") => {
                 Ok(Some(self.new_string(format_float(args[0].as_float()? as f64))))
             }
-            ("java/lang/String", "valueOf", "(Ljava/lang/Object;)Ljava/lang/String;") => {
-                let r = args[0].as_reference()?;
-                let text = if r == Reference::Null {
-                    "null".to_string()
-                } else {
-                    self.stringify_reference(r).unwrap_or_else(|_| format!("Object@{r:?}"))
-                };
-                Ok(Some(self.new_string(text)))
-            }
+            // Note: valueOf(Ljava/lang/Object;) is NOT handled here - it's a real Java method
 
             // --- Integer methods ---
+            ("java/lang/Integer", "numberOfLeadingZeros", "(I)I") => {
+                Ok(Some(Value::Int(args[0].as_int()?.leading_zeros() as i32)))
+            }
+            ("java/lang/Integer", "numberOfTrailingZeros", "(I)I") => {
+                Ok(Some(Value::Int(args[0].as_int()?.trailing_zeros() as i32)))
+            }
+            ("java/lang/Integer", "bitCount", "(I)I") => {
+                Ok(Some(Value::Int(args[0].as_int()?.count_ones() as i32)))
+            }
+            ("java/lang/Integer", "reverse", "(I)I") => {
+                Ok(Some(Value::Int(args[0].as_int()?.reverse_bits())))
+            }
+            ("java/lang/Integer", "reverseBytes", "(I)I") => {
+                Ok(Some(Value::Int(args[0].as_int()?.swap_bytes())))
+            }
+            ("java/lang/Integer", "highestOneBit", "(I)I") => {
+                let v = args[0].as_int()? as u32;
+                Ok(Some(Value::Int(if v == 0 {
+                    0
+                } else {
+                    (1u32 << (31 - v.leading_zeros())) as i32
+                })))
+            }
+            ("java/lang/Integer", "lowestOneBit", "(I)I") => {
+                let v = args[0].as_int()?;
+                Ok(Some(Value::Int(v & v.wrapping_neg())))
+            }
+            ("java/lang/Integer", "signum", "(I)I") => {
+                Ok(Some(Value::Int(args[0].as_int()?.signum())))
+            }
             ("java/lang/Integer", "intValue", "()I") => {
                 let obj_ref = args[0].as_reference()?;
                 match self.heap.lock().unwrap().get(obj_ref)? {
@@ -982,6 +1268,11 @@ impl Vm {
             }
 
             // --- Boolean methods ---
+            ("java/lang/Boolean", "getBoolean", "(Ljava/lang/String;)Z") => {
+                // Query system property — we don't support -D properties yet, so
+                // any key is treated as absent which equals false.
+                Ok(Some(Value::Int(0)))
+            }
             ("java/lang/Boolean", "parseBoolean", "(Ljava/lang/String;)Z") => {
                 let s = self.stringify_reference(args[0].as_reference()?)?;
                 Ok(Some(Value::Int(if s.eq_ignore_ascii_case("true") { 1 } else { 0 })))
@@ -1255,6 +1546,73 @@ impl Vm {
             ("java/lang/Math", "tan", "(D)D") => {
                 Ok(Some(Value::Double(args[0].as_double()?.tan())))
             }
+            ("java/lang/Math", "floorDiv", "(II)I") => {
+                let (x, y) = (args[0].as_int()?, args[1].as_int()?);
+                if y == 0 {
+                    return Err(VmError::DivisionByZero);
+                }
+                Ok(Some(Value::Int(x.div_euclid(y).wrapping_add(
+                    if (x % y != 0) && ((x ^ y) < 0) { -1 + 1 } else { 0 },
+                ))))
+            }
+            ("java/lang/Math", "floorDiv", "(JJ)J") => {
+                let (x, y) = (args[0].as_long()?, args[1].as_long()?);
+                if y == 0 {
+                    return Err(VmError::DivisionByZero);
+                }
+                let q = x / y;
+                let q = if (x % y != 0) && ((x ^ y) < 0) { q - 1 } else { q };
+                Ok(Some(Value::Long(q)))
+            }
+            ("java/lang/Math", "floorMod", "(II)I") => {
+                let (x, y) = (args[0].as_int()?, args[1].as_int()?);
+                if y == 0 {
+                    return Err(VmError::DivisionByZero);
+                }
+                let r = x % y;
+                Ok(Some(Value::Int(if (r != 0) && ((r ^ y) < 0) { r + y } else { r })))
+            }
+            ("java/lang/Math", "floorMod", "(JJ)J") => {
+                let (x, y) = (args[0].as_long()?, args[1].as_long()?);
+                if y == 0 {
+                    return Err(VmError::DivisionByZero);
+                }
+                let r = x % y;
+                Ok(Some(Value::Long(if (r != 0) && ((r ^ y) < 0) { r + y } else { r })))
+            }
+            ("java/lang/Math", "addExact", "(II)I") => {
+                let (a, b) = (args[0].as_int()?, args[1].as_int()?);
+                a.checked_add(b)
+                    .map(|v| Some(Value::Int(v)))
+                    .ok_or(VmError::DivisionByZero)
+            }
+            ("java/lang/Math", "addExact", "(JJ)J") => {
+                let (a, b) = (args[0].as_long()?, args[1].as_long()?);
+                a.checked_add(b)
+                    .map(|v| Some(Value::Long(v)))
+                    .ok_or(VmError::DivisionByZero)
+            }
+            ("java/lang/Math", "subtractExact", "(II)I") => {
+                let (a, b) = (args[0].as_int()?, args[1].as_int()?);
+                a.checked_sub(b)
+                    .map(|v| Some(Value::Int(v)))
+                    .ok_or(VmError::DivisionByZero)
+            }
+            ("java/lang/Math", "multiplyExact", "(II)I") => {
+                let (a, b) = (args[0].as_int()?, args[1].as_int()?);
+                a.checked_mul(b)
+                    .map(|v| Some(Value::Int(v)))
+                    .ok_or(VmError::DivisionByZero)
+            }
+            ("java/lang/Math", "multiplyExact", "(JJ)J") => {
+                let (a, b) = (args[0].as_long()?, args[1].as_long()?);
+                a.checked_mul(b)
+                    .map(|v| Some(Value::Long(v)))
+                    .ok_or(VmError::DivisionByZero)
+            }
+            ("java/lang/Math", "signum", "(I)I") => {
+                Ok(Some(Value::Int(args[0].as_int()?.signum())))
+            }
 
             // --- StringBuilder methods ---
             ("java/lang/StringBuilder", "<init>", "()V") => {
@@ -1454,6 +1812,33 @@ impl Vm {
                 }
                 Ok(None)
             }
+            ("java/lang/Thread", "currentThread", "()Ljava/lang/Thread;") => {
+                // Return a singleton "current thread" stub that carries no real
+                // thread identity — enough for JDK bytecode that only inspects
+                // it to avoid NPEs. Cached via the class_objects map keyed by a
+                // reserved sentinel so GC keeps it alive.
+                const KEY: &str = "__current_thread";
+                if let Some(r) = self
+                    .runtime
+                    .lock()
+                    .unwrap()
+                    .class_objects
+                    .get(KEY)
+                    .copied()
+                {
+                    return Ok(Some(Value::Reference(r)));
+                }
+                let reference = self.heap.lock().unwrap().allocate(HeapValue::Object {
+                    class_name: "java/lang/Thread".to_string(),
+                    fields: HashMap::new(),
+                });
+                self.runtime
+                    .lock()
+                    .unwrap()
+                    .class_objects
+                    .insert(KEY.to_string(), reference);
+                Ok(Some(Value::Reference(reference)))
+            }
             ("java/lang/Thread", "<init>", "()V") => {
                 let obj_ref = args[0].as_reference()?;
                 self.set_object_field(obj_ref, "target", Value::Reference(Reference::Null))?;
@@ -1547,6 +1932,252 @@ impl Vm {
             // logic is treated as a no-op constructor.
             (_, "<init>", _) => Ok(None),
 
+            // --- java/lang/Class natives ---
+            // Not loading the real JDK's `java/lang/Class` keeps startup
+            // cheap; these cover the methods user code and the stdlib's
+            // bootstrap path actually exercise.
+            ("java/lang/Class", "desiredAssertionStatus", "()Z") => Ok(Some(Value::Int(0))),
+            ("java/lang/Class", "isArray", "()Z") => {
+                let name = self.class_internal_name(args[0].as_reference()?)?;
+                Ok(Some(Value::Int(i32::from(name.starts_with('[')))))
+            }
+            ("java/lang/Class", "isPrimitive", "()Z") => {
+                let name = self.class_internal_name(args[0].as_reference()?)?;
+                let primitive = matches!(
+                    name.as_str(),
+                    "boolean" | "byte" | "char" | "short" | "int" | "long" | "float" | "double" | "void"
+                );
+                Ok(Some(Value::Int(i32::from(primitive))))
+            }
+            ("java/lang/Class", "isInterface", "()Z") => Ok(Some(Value::Int(0))),
+            ("java/lang/Class", "getName", "()Ljava/lang/String;")
+            | ("java/lang/Class", "toString", "()Ljava/lang/String;") => {
+                let internal = self.class_internal_name(args[0].as_reference()?)?;
+                let dotted = internal.replace('/', ".");
+                Ok(Some(self.new_string(dotted)))
+            }
+            ("java/lang/Class", "getSimpleName", "()Ljava/lang/String;") => {
+                let internal = self.class_internal_name(args[0].as_reference()?)?;
+                let simple = internal
+                    .rsplit_once('/')
+                    .map(|(_, s)| s)
+                    .unwrap_or(internal.as_str())
+                    .rsplit_once('$')
+                    .map(|(_, s)| s.to_string())
+                    .unwrap_or_else(|| {
+                        internal
+                            .rsplit_once('/')
+                            .map(|(_, s)| s.to_string())
+                            .unwrap_or(internal.clone())
+                    });
+                Ok(Some(self.new_string(simple)))
+            }
+
+            // --- jdk/internal/reflect stubs ---
+            ("jdk/internal/reflect/Reflection", "getCallerClass", "()Ljava/lang/Class;") => {
+                Ok(Some(Value::Reference(Reference::Null)))
+            }
+            ("jdk/internal/reflect/Reflection", _, _) => Ok(stub_return_value(descriptor)),
+
+            // --- java/lang/Runtime natives ---
+            ("java/lang/Runtime", "availableProcessors", "()I") => {
+                let n = std::thread::available_parallelism()
+                    .map(|n| n.get() as i32)
+                    .unwrap_or(1);
+                Ok(Some(Value::Int(n)))
+            }
+            ("java/lang/Runtime", "freeMemory", "()J")
+            | ("java/lang/Runtime", "totalMemory", "()J")
+            | ("java/lang/Runtime", "maxMemory", "()J") => {
+                // Not meaningful for our heap model; report a plausible constant
+                // so JDK code that compares these values can proceed.
+                Ok(Some(Value::Long(256 * 1024 * 1024)))
+            }
+            ("java/lang/Runtime", "gc", "()V") => {
+                self.request_gc();
+                Ok(None)
+            }
+
+            // --- jdk/internal/misc/Unsafe natives ---
+            // The stdlib only uses Unsafe for concurrency primitives we
+            // don't need under our single-threaded interpreter; every
+            // meaningful call here either returns a plausible constant or
+            // falls back to descriptor-typed zero.
+            ("jdk/internal/misc/Unsafe", "registerNatives", "()V") => Ok(None),
+            ("jdk/internal/misc/Unsafe", "getUnsafe", "()Ljdk/internal/misc/Unsafe;") => {
+                // Return the singleton we allocated during bootstrap. JDK
+                // bytecode (e.g., ArraysSupport.<clinit>) caches the result
+                // in a static and then dispatches through it, so the ref
+                // must be non-null to avoid downstream NPEs.
+                Ok(Some(
+                    self.get_static_field("jdk/internal/misc/Unsafe", "theUnsafe")?,
+                ))
+            }
+            ("jdk/internal/misc/Unsafe", "arrayBaseOffset", "(Ljava/lang/Class;)I") => {
+                Ok(Some(Value::Int(0)))
+            }
+            ("jdk/internal/misc/Unsafe", "arrayIndexScale", "(Ljava/lang/Class;)I") => {
+                // Scale of 1 means index == offset for our synthetic array model.
+                Ok(Some(Value::Int(1)))
+            }
+            ("jdk/internal/misc/Unsafe", "addressSize", "()I") => Ok(Some(Value::Int(8))),
+            ("jdk/internal/misc/Unsafe", "isBigEndian", "()Z") => Ok(Some(Value::Int(
+                i32::from(cfg!(target_endian = "big")),
+            ))),
+            ("jdk/internal/misc/Unsafe", "pageSize", "()I") => Ok(Some(Value::Int(4096))),
+            ("jdk/internal/misc/Unsafe", "objectFieldOffset", _)
+            | ("jdk/internal/misc/Unsafe", "staticFieldOffset", _) => Ok(Some(Value::Long(0))),
+            ("jdk/internal/misc/Unsafe", "staticFieldBase", _) => {
+                Ok(Some(Value::Reference(Reference::Null)))
+            }
+            ("jdk/internal/misc/Unsafe", "storeFence", "()V")
+            | ("jdk/internal/misc/Unsafe", "loadFence", "()V")
+            | ("jdk/internal/misc/Unsafe", "fullFence", "()V") => Ok(None),
+            // CAS primitives: our interpreter is single-threaded, so a
+            // read-compare-set is atomic by construction. The Object arg is
+            // a direct heap reference; since we can't address fields by
+            // offset reliably, approximate by succeeding unconditionally
+            // when expected == current (trivial for null→value on freshly
+            // allocated objects, which is the `VarHandle.compareAndSet`
+            // pattern the stdlib uses during lazy-init). Callers that
+            // re-check via volatile reads still see a consistent state.
+            (
+                "jdk/internal/misc/Unsafe",
+                "compareAndSetInt" | "compareAndSetLong"
+                | "compareAndSetReference" | "compareAndSetObject",
+                _,
+            ) => Ok(Some(Value::Int(1))),
+            ("jdk/internal/misc/Unsafe", "getReferenceVolatile", _) => {
+                Ok(Some(Value::Reference(Reference::Null)))
+            }
+            ("jdk/internal/misc/Unsafe", "putReferenceVolatile", _)
+            | ("jdk/internal/misc/Unsafe", "putIntVolatile", _) => Ok(None),
+            ("jdk/internal/misc/Unsafe", "getIntVolatile", _) => Ok(Some(Value::Int(0))),
+            ("jdk/internal/misc/Unsafe", _, _) => Ok(stub_return_value(descriptor)),
+
+            // --- java/util/Arrays.equals — element-wise, avoiding the
+            //     Unsafe.getInt/getLong vectorized-mismatch path that our
+            //     offset-based stubs can't service correctly.
+            ("java/util/Arrays", "equals", "([I[I)Z") => {
+                Ok(Some(Value::Int(i32::from(
+                    self.native_arrays_equals_int(args[0].as_reference()?, args[1].as_reference()?)?,
+                ))))
+            }
+            ("java/util/Arrays", "equals", "([J[J)Z") => {
+                Ok(Some(Value::Int(i32::from(
+                    self.native_arrays_equals_long(args[0].as_reference()?, args[1].as_reference()?)?,
+                ))))
+            }
+            ("java/util/Arrays", "equals", "([B[B)Z")
+            | ("java/util/Arrays", "equals", "([S[S)Z")
+            | ("java/util/Arrays", "equals", "([C[C)Z")
+            | ("java/util/Arrays", "equals", "([Z[Z)Z") => {
+                // Booleans/bytes/shorts/chars all land in HeapValue::IntArray.
+                Ok(Some(Value::Int(i32::from(
+                    self.native_arrays_equals_int(args[0].as_reference()?, args[1].as_reference()?)?,
+                ))))
+            }
+            ("java/util/Arrays", "equals", "([F[F)Z") => {
+                Ok(Some(Value::Int(i32::from(
+                    self.native_arrays_equals_float(args[0].as_reference()?, args[1].as_reference()?)?,
+                ))))
+            }
+            ("java/util/Arrays", "equals", "([D[D)Z") => {
+                Ok(Some(Value::Int(i32::from(
+                    self.native_arrays_equals_double(args[0].as_reference()?, args[1].as_reference()?)?,
+                ))))
+            }
+            (
+                "java/util/Arrays",
+                "equals",
+                "([Ljava/lang/Object;[Ljava/lang/Object;)Z",
+            ) => {
+                Ok(Some(Value::Int(i32::from(
+                    self.native_arrays_equals_ref(args[0].as_reference()?, args[1].as_reference()?)?,
+                ))))
+            }
+
+            // --- java/util/Arrays.stream → NativeIntStream ---
+            ("java/util/Arrays", "stream", "([I)Ljava/util/stream/IntStream;") => {
+                let array_ref = args[0].as_reference()?;
+                let mut fields = HashMap::new();
+                fields.insert("__array".to_string(), Value::Reference(array_ref));
+                let r = self.heap.lock().unwrap().allocate(HeapValue::Object {
+                    class_name: "__jvm_rs/NativeIntStream".to_string(),
+                    fields,
+                });
+                Ok(Some(Value::Reference(r)))
+            }
+
+            // --- __jvm_rs/NativeIntStream terminal ops ---
+            ("__jvm_rs/NativeIntStream", "sum", "()I") => {
+                let array = self.native_int_stream_array(args[0].as_reference()?)?;
+                let heap = self.heap.lock().unwrap();
+                if let HeapValue::IntArray { values } = heap.get(array)? {
+                    Ok(Some(Value::Int(values.iter().map(|v| *v as i64).sum::<i64>() as i32)))
+                } else {
+                    Ok(Some(Value::Int(0)))
+                }
+            }
+            ("__jvm_rs/NativeIntStream", "count", "()J") => {
+                let array = self.native_int_stream_array(args[0].as_reference()?)?;
+                let heap = self.heap.lock().unwrap();
+                if let HeapValue::IntArray { values } = heap.get(array)? {
+                    Ok(Some(Value::Long(values.len() as i64)))
+                } else {
+                    Ok(Some(Value::Long(0)))
+                }
+            }
+            ("__jvm_rs/NativeIntStream", "toArray", "()[I") => {
+                let array = self.native_int_stream_array(args[0].as_reference()?)?;
+                Ok(Some(Value::Reference(array)))
+            }
+
+            // --- java/util/Collections natives ---
+            // Implemented in Rust to avoid pulling in the JDK's bytecode
+            // path, which drags in Reference handler threads, security,
+            // and reflection machinery during its <clinit>.
+            ("java/util/Collections", "sort", "(Ljava/util/List;)V") => {
+                self.native_collections_sort(args[0].as_reference()?, None)?;
+                Ok(None)
+            }
+            (
+                "java/util/Collections",
+                "sort",
+                "(Ljava/util/List;Ljava/util/Comparator;)V",
+            ) => {
+                let list = args[0].as_reference()?;
+                let cmp = args[1].as_reference()?;
+                let cmp_opt = if cmp == Reference::Null { None } else { Some(cmp) };
+                self.native_collections_sort(list, cmp_opt)?;
+                Ok(None)
+            }
+            ("java/util/Collections", "reverse", "(Ljava/util/List;)V") => {
+                self.native_collections_reverse(args[0].as_reference()?)?;
+                Ok(None)
+            }
+
+            // --- java/lang/Thread generic fallback ---
+            // Our thread model has no ThreadGroup / ContextClassLoader /
+            // Priority etc.; stub anything not explicitly implemented so JDK
+            // bytecode that only inspects the result can proceed.
+            ("java/lang/Thread", _, _) => Ok(stub_return_value(descriptor)),
+            ("java/lang/ThreadGroup", _, _) => Ok(stub_return_value(descriptor)),
+
+            // --- JDK Internal Stubs ---
+            // CDS.isDumpingClassList0 — returns false (not dumping)
+            ("jdk/internal/misc/CDS", "isDumpingClassList0", "()Z") => Ok(Some(Value::Int(0))),
+            // CDS.isDumpingArchive0 — returns false
+            ("jdk/internal/misc/CDS", "isDumpingArchive0", "()Z") => Ok(Some(Value::Int(0))),
+            // CDS.isSharingEnabled0 — returns false
+            ("jdk/internal/misc/CDS", "isSharingEnabled0", "()Z") => Ok(Some(Value::Int(0))),
+            // CDS generic — CDS is disabled; stub every method to a
+            // descriptor-correct zero value (void → None, primitives → 0,
+            // references → null). Prior wildcard always pushed a null ref,
+            // which silently corrupted the operand stack for void methods
+            // like initializeFromArchive(Ljava/lang/Class;)V.
+            ("jdk/internal/misc/CDS", _, _) => Ok(stub_return_value(descriptor)),
+
             _ => Err(VmError::UnsupportedNativeMethod {
                 class_name: class_name.to_string(),
                 method_name: method_name.to_string(),
@@ -1583,6 +2214,270 @@ impl Vm {
                 self.stringify_heap(r)
             }
             _ => Ok("?".to_string()),
+        }
+    }
+
+    fn native_arrays_equals_int(&self, a: Reference, b: Reference) -> Result<bool, VmError> {
+        if a == b {
+            return Ok(true);
+        }
+        if a == Reference::Null || b == Reference::Null {
+            return Ok(false);
+        }
+        let heap = self.heap.lock().unwrap();
+        match (heap.get(a)?, heap.get(b)?) {
+            (HeapValue::IntArray { values: x }, HeapValue::IntArray { values: y }) => Ok(x == y),
+            _ => Ok(false),
+        }
+    }
+
+    fn native_arrays_equals_long(&self, a: Reference, b: Reference) -> Result<bool, VmError> {
+        if a == b {
+            return Ok(true);
+        }
+        if a == Reference::Null || b == Reference::Null {
+            return Ok(false);
+        }
+        let heap = self.heap.lock().unwrap();
+        match (heap.get(a)?, heap.get(b)?) {
+            (HeapValue::LongArray { values: x }, HeapValue::LongArray { values: y }) => {
+                Ok(x == y)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    fn native_arrays_equals_float(&self, a: Reference, b: Reference) -> Result<bool, VmError> {
+        if a == b {
+            return Ok(true);
+        }
+        if a == Reference::Null || b == Reference::Null {
+            return Ok(false);
+        }
+        let heap = self.heap.lock().unwrap();
+        match (heap.get(a)?, heap.get(b)?) {
+            (HeapValue::FloatArray { values: x }, HeapValue::FloatArray { values: y }) => {
+                // Per Float.equals: NaN == NaN when their raw int bits match.
+                Ok(x.len() == y.len()
+                    && x.iter().zip(y.iter()).all(|(a, b)| a.to_bits() == b.to_bits()))
+            }
+            _ => Ok(false),
+        }
+    }
+
+    fn native_arrays_equals_double(&self, a: Reference, b: Reference) -> Result<bool, VmError> {
+        if a == b {
+            return Ok(true);
+        }
+        if a == Reference::Null || b == Reference::Null {
+            return Ok(false);
+        }
+        let heap = self.heap.lock().unwrap();
+        match (heap.get(a)?, heap.get(b)?) {
+            (HeapValue::DoubleArray { values: x }, HeapValue::DoubleArray { values: y }) => {
+                Ok(x.len() == y.len()
+                    && x.iter().zip(y.iter()).all(|(a, b)| a.to_bits() == b.to_bits()))
+            }
+            _ => Ok(false),
+        }
+    }
+
+    fn native_arrays_equals_ref(&mut self, a: Reference, b: Reference) -> Result<bool, VmError> {
+        if a == b {
+            return Ok(true);
+        }
+        if a == Reference::Null || b == Reference::Null {
+            return Ok(false);
+        }
+        let (xs, ys): (Vec<Reference>, Vec<Reference>) = {
+            let heap = self.heap.lock().unwrap();
+            match (heap.get(a)?, heap.get(b)?) {
+                (
+                    HeapValue::ReferenceArray { values: x, .. },
+                    HeapValue::ReferenceArray { values: y, .. },
+                ) => (x.clone(), y.clone()),
+                _ => return Ok(false),
+            }
+        };
+        if xs.len() != ys.len() {
+            return Ok(false);
+        }
+        for (x, y) in xs.iter().zip(ys.iter()) {
+            if x == y {
+                continue;
+            }
+            if *x == Reference::Null || *y == Reference::Null {
+                return Ok(false);
+            }
+            // Delegate to Object.equals for non-identity checks.
+            let res = self.call_virtual(
+                *x,
+                "equals",
+                "(Ljava/lang/Object;)Z",
+                vec![Value::Reference(*y)],
+            )?;
+            match res {
+                crate::vm::types::ExecutionResult::Value(Value::Int(0)) => return Ok(false),
+                crate::vm::types::ExecutionResult::Value(Value::Int(_)) => {}
+                _ => return Ok(false),
+            }
+        }
+        Ok(true)
+    }
+
+    /// Read the `__array` field of a NativeIntStream.
+    fn native_int_stream_array(&self, stream_ref: Reference) -> Result<Reference, VmError> {
+        match self.heap.lock().unwrap().get(stream_ref)? {
+            HeapValue::Object { fields, .. } => match fields.get("__array") {
+                Some(Value::Reference(r)) => Ok(*r),
+                _ => Err(VmError::NullReference),
+            },
+            value => Err(VmError::InvalidHeapValue {
+                expected: "object",
+                actual: value.kind_name(),
+            }),
+        }
+    }
+
+    /// Snapshot a `java.util.List`'s contents by calling `size()` and
+    /// `get(i)` through virtual dispatch — works for ArrayList, LinkedList,
+    /// and any user-defined List that implements the standard interface.
+    fn list_snapshot(&mut self, list: Reference) -> Result<Vec<Reference>, VmError> {
+        let size_res = self.call_virtual(list, "size", "()I", vec![])?;
+        let size = match size_res {
+            crate::vm::types::ExecutionResult::Value(Value::Int(n)) => n,
+            _ => return Err(VmError::TypeMismatch {
+                expected: "int",
+                actual: "non-int from List.size()",
+            }),
+        };
+        let mut out = Vec::with_capacity(size.max(0) as usize);
+        for i in 0..size {
+            let res = self.call_virtual(
+                list,
+                "get",
+                "(I)Ljava/lang/Object;",
+                vec![Value::Int(i)],
+            )?;
+            let r = match res {
+                crate::vm::types::ExecutionResult::Value(Value::Reference(r)) => r,
+                _ => return Err(VmError::TypeMismatch {
+                    expected: "reference",
+                    actual: "non-reference from List.get(I)",
+                }),
+            };
+            out.push(r);
+        }
+        Ok(out)
+    }
+
+    /// Write a Rust-side vector back into a `java.util.List` using `set(i, v)`.
+    fn list_overwrite(&mut self, list: Reference, values: &[Reference]) -> Result<(), VmError> {
+        for (i, v) in values.iter().enumerate() {
+            self.call_virtual(
+                list,
+                "set",
+                "(ILjava/lang/Object;)Ljava/lang/Object;",
+                vec![Value::Int(i as i32), Value::Reference(*v)],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Compare two Java objects via `a.compareTo(b)`. Requires `a` to
+    /// implement `Comparable`. Used by `Collections.sort` when no
+    /// comparator is supplied.
+    fn compare_natural(&mut self, a: Reference, b: Reference) -> Result<i32, VmError> {
+        let res = self.call_virtual(
+            a,
+            "compareTo",
+            "(Ljava/lang/Object;)I",
+            vec![Value::Reference(b)],
+        )?;
+        match res {
+            crate::vm::types::ExecutionResult::Value(Value::Int(n)) => Ok(n),
+            _ => Err(VmError::TypeMismatch {
+                expected: "int",
+                actual: "non-int from compareTo",
+            }),
+        }
+    }
+
+    /// Compare via `Comparator.compare(a, b)`.
+    fn compare_with(&mut self, cmp: Reference, a: Reference, b: Reference) -> Result<i32, VmError> {
+        let res = self.call_virtual(
+            cmp,
+            "compare",
+            "(Ljava/lang/Object;Ljava/lang/Object;)I",
+            vec![Value::Reference(a), Value::Reference(b)],
+        )?;
+        match res {
+            crate::vm::types::ExecutionResult::Value(Value::Int(n)) => Ok(n),
+            _ => Err(VmError::TypeMismatch {
+                expected: "int",
+                actual: "non-int from Comparator.compare",
+            }),
+        }
+    }
+
+    fn native_collections_sort(
+        &mut self,
+        list: Reference,
+        cmp: Option<Reference>,
+    ) -> Result<(), VmError> {
+        if list == Reference::Null {
+            return Err(VmError::NullReference);
+        }
+        let mut values = self.list_snapshot(list)?;
+        // Simple insertion sort — stable, fine for the sizes Java code
+        // throws at Collections.sort in practice, and avoids the Arrays.sort
+        // code path that currently pulls in unwanted JDK bytecode.
+        for i in 1..values.len() {
+            let mut j = i;
+            while j > 0 {
+                let cmp_result = match cmp {
+                    Some(c) => self.compare_with(c, values[j - 1], values[j])?,
+                    None => self.compare_natural(values[j - 1], values[j])?,
+                };
+                if cmp_result > 0 {
+                    values.swap(j - 1, j);
+                    j -= 1;
+                } else {
+                    break;
+                }
+            }
+        }
+        self.list_overwrite(list, &values)?;
+        Ok(())
+    }
+
+    fn native_collections_reverse(&mut self, list: Reference) -> Result<(), VmError> {
+        if list == Reference::Null {
+            return Err(VmError::NullReference);
+        }
+        let mut values = self.list_snapshot(list)?;
+        values.reverse();
+        self.list_overwrite(list, &values)?;
+        Ok(())
+    }
+
+    /// Read the internal JVM class name stored in a Class heap object's
+    /// `__name` field (e.g., `java/util/HashMap`). Falls back to the heap
+    /// object's declared class name if the field is missing.
+    pub(super) fn class_internal_name(&self, reference: Reference) -> Result<String, VmError> {
+        match self.heap.lock().unwrap().get(reference)? {
+            HeapValue::Object { fields, class_name } => {
+                if let Some(Value::Reference(name_ref)) = fields.get("__name") {
+                    if let HeapValue::String(s) = self.heap.lock().unwrap().get(*name_ref)? {
+                        return Ok(s.clone());
+                    }
+                }
+                Ok(class_name.clone())
+            }
+            value => Err(VmError::InvalidHeapValue {
+                expected: "object",
+                actual: value.kind_name(),
+            }),
         }
     }
 

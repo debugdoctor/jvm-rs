@@ -43,8 +43,12 @@ Goal: run code that uses the JDK without `ClassNotFound`, without shipping all o
 
 ### 12.3 Streams & Functional (`java.util.stream`, `java.util.function`)
 - [x] `Function`, `Predicate`, `Consumer`, `Supplier` — basic lambda support working
-- [ ] `Stream.count()`, `IntStream.sum()` — blocked by `operand stack overflow` (Stream implementation issue)
-- [ ] `Stream`, `IntStream`, `LongStream`, `DoubleStream` — blocked by `operand stack overflow` (Stream implementation issue)
+- [x] `Stream.count()`, `IntStream.sum()` — working via `__jvm_rs/NativeIntStream`
+- [x] `IntStream` — working via `__jvm_rs/NativeIntStream` (sum, count, toArray, min, max, average)
+- [x] `Stream` — basic operations (count, of) working through JDK bytecode
+- [x] `LongStream` — working via `__jvm_rs/NativeLongStream` (sum, count, min, max, average)
+- [x] `DoubleStream` — working via `__jvm_rs/NativeDoubleStream` (sum, count, min, max, average)
+- [x] `OptionalInt`, `OptionalLong`, `OptionalDouble` — basic working
 - [ ] `Collectors` (toList, toMap, groupingBy, joining, counting, reducing)
 - [ ] Full `java.util.function` (BiFunction, IntFunction, Consumer variants, and primitive specializations)
 

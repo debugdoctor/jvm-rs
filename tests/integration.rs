@@ -1323,3 +1323,77 @@ public class TestMapIter {
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["3"]);
 }
+
+#[test]
+fn java_util_arrays_stream_long() {
+    let (result, output) = compile_and_run(
+        "java_util_arrays_stream_long",
+        &[("demo/TestLongStream.java", r#"
+package demo;
+import java.util.Arrays;
+import java.util.stream.LongStream;
+public class TestLongStream {
+    public static void main(String[] args) {
+        long[] a = {1L, 2L, 3L, 4L, 5L};
+        LongStream s = Arrays.stream(a);
+        System.out.println(s.sum());
+        System.out.println(Arrays.stream(a).count());
+    }
+}
+"#)],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["15", "5"]);
+}
+
+#[test]
+fn java_util_arrays_stream_double() {
+    let (result, output) = compile_and_run(
+        "java_util_arrays_stream_double",
+        &[("demo/TestDoubleStream.java", r#"
+package demo;
+import java.util.Arrays;
+import java.util.stream.DoubleStream;
+public class TestDoubleStream {
+    public static void main(String[] args) {
+        double[] a = {1.0, 2.0, 3.0, 4.0, 5.0};
+        DoubleStream s = Arrays.stream(a);
+        System.out.println(s.sum());
+        System.out.println(Arrays.stream(a).count());
+    }
+}
+"#)],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["15.0", "5"]);
+}
+
+#[test]
+fn java_util_stream_optional_min_max() {
+    let (result, output) = compile_and_run(
+        "java_util_stream_optional_min_max",
+        &[("demo/TestOptMinMax.java", r#"
+package demo;
+import java.util.OptionalInt;
+import java.util.OptionalDouble;
+import java.util.stream.IntStream;
+import java.util.Arrays;
+public class TestOptMinMax {
+    public static void main(String[] args) {
+        OptionalInt min = Arrays.stream(new int[]{3, 1, 4, 1, 5}).min();
+        OptionalInt max = Arrays.stream(new int[]{3, 1, 4, 1, 5}).max();
+        System.out.println(min.isPresent());
+        System.out.println(min.getAsInt());
+        System.out.println(max.isPresent());
+        System.out.println(max.getAsInt());
+        
+        OptionalDouble avg = Arrays.stream(new int[]{1, 2, 3, 4, 5}).average();
+        System.out.println(avg.isPresent());
+        System.out.println(avg.getAsDouble());
+    }
+}
+"#)],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["true", "1", "true", "5", "true", "3.0"]);
+}

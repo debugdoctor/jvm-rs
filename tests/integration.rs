@@ -1397,3 +1397,89 @@ public class TestOptMinMax {
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["true", "1", "true", "5", "true", "3.0"]);
 }
+
+#[test]
+fn java_util_hash_map_iteration_and_remove() {
+    let (result, output) = compile_and_run(
+        "java_util_hashmap_iter_remove",
+        &[("demo/TestHashMapIterRemove.java", r#"
+package demo;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.Map;
+public class TestHashMapIterRemove {
+    public static void main(String[] args) {
+        HashMap<String, Integer> map = new HashMap<>();
+        map.put("a", 1);
+        map.put("b", 2);
+        map.put("c", 3);
+
+        int sum = 0;
+        for (Map.Entry<String, Integer> e : map.entrySet()) {
+            sum += e.getValue();
+        }
+        System.out.println(sum);
+
+        map.remove("b");
+        System.out.println(map.size());
+        System.out.println(map.containsKey("b"));
+        System.out.println(map.containsKey("a"));
+    }
+}
+"#)],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["6", "2", "false", "true"]);
+}
+
+#[test]
+fn java_util_linked_list_operations() {
+    let (result, output) = compile_and_run(
+        "java_util_linked_list_ops",
+        &[("demo/TestLinkedListOps.java", r#"
+package demo;
+import java.util.LinkedList;
+public class TestLinkedListOps {
+    public static void main(String[] args) {
+        LinkedList<String> list = new LinkedList<>();
+        list.add("first");
+        list.add("second");
+        list.add("third");
+        System.out.println(list.getFirst());
+        System.out.println(list.getLast());
+        System.out.println(list.removeFirst());
+        System.out.println(list.size());
+        System.out.println(list.getFirst());
+    }
+}
+"#)],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["first", "third", "first", "2", "second"]);
+}
+
+#[test]
+fn java_util_hash_set_operations() {
+    let (result, output) = compile_and_run(
+        "java_util_hash_set_ops",
+        &[("demo/TestHashSetOps.java", r#"
+package demo;
+import java.util.HashSet;
+public class TestHashSetOps {
+    public static void main(String[] args) {
+        HashSet<String> hs = new HashSet<>();
+        hs.add("apple");
+        hs.add("banana");
+        hs.add("cherry");
+        hs.add("apple");
+
+        System.out.println(hs.size());
+        System.out.println(hs.contains("banana"));
+        System.out.println(hs.contains("grape"));
+    }
+}
+"#)],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["3", "true", "false"]);
+}

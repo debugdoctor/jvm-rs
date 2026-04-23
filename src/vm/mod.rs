@@ -325,6 +325,16 @@ fn collect_garbage(&mut self, thread: &Thread) {
                     "equals",
                     "([Ljava/lang/Object;[Ljava/lang/Object;)Z",
                 )
+                | ("java/util/stream/Collectors", "toList", "()Ljava/util/stream/Collector;")
+                | ("java/util/stream/Collectors", "toSet", "()Ljava/util/stream/Collector;")
+                | ("java/util/stream/Collectors", "counting", "()Ljava/util/function/Supplier;")
+                | ("java/util/stream/Collectors", "joining", "()Ljava/util/stream/Collector;")
+                | ("java/util/stream/Collectors", "joining", "(Ljava/lang/CharSequence;)Ljava/util/stream/Collector;")
+                | ("java/util/stream/Collectors", "reducing", "(Ljava/lang/Object;Ljava/util/function/BinaryOperator;)Ljava/util/stream/Collector;")
+                | ("java/util/stream/Collectors", "toMap", "(Ljava/util/function/Function;Ljava/util/function/Function;)Ljava/util/stream/Collector;")
+                | ("__jvm_rs/NativeIntStream", "collect", "(Ljava/util/stream/Collector;)Ljava/lang/Object;")
+                | ("__jvm_rs/NativeLongStream", "collect", "(Ljava/util/stream/Collector;)Ljava/lang/Object;")
+                | ("__jvm_rs/NativeDoubleStream", "collect", "(Ljava/util/stream/Collector;)Ljava/lang/Object;")
         )
     }
 

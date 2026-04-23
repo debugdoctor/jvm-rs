@@ -543,6 +543,7 @@ impl Vm {
             ("toArray", "()[I"),
             ("asLongStream", "()Ljava/util/stream/LongStream;"),
             ("asDoubleStream", "()Ljava/util/stream/DoubleStream;"),
+            ("collect", "(Ljava/util/stream/Collector;)Ljava/lang/Object;"),
         ] {
             native_int_stream_methods.insert(
                 (name.to_string(), desc.to_string()),
@@ -570,6 +571,7 @@ impl Vm {
             ("average", "()Ljava/util/OptionalDouble;"),
             ("toArray", "()[J"),
             ("asDoubleStream", "()Ljava/util/stream/DoubleStream;"),
+            ("collect", "(Ljava/util/stream/Collector;)Ljava/lang/Object;"),
         ] {
             native_long_stream_methods.insert(
                 (name.to_string(), desc.to_string()),
@@ -596,6 +598,7 @@ impl Vm {
             ("max", "()Ljava/util/OptionalDouble;"),
             ("average", "()D"),
             ("toArray", "()[D"),
+            ("collect", "(Ljava/util/stream/Collector;)Ljava/lang/Object;"),
         ] {
             native_double_stream_methods.insert(
                 (name.to_string(), desc.to_string()),
@@ -613,7 +616,39 @@ impl Vm {
                 interfaces: vec!["java/util/stream/DoubleStream".to_string()],
             });
 
-        // java/util/stream/LongStream and DoubleStream — interface stubs
+        // __jvm_rs/NativeCollector — our non-lazy Collector backing for stream.collect().
+        let mut native_collector_methods = HashMap::new();
+        native_collector_methods.insert(
+            ("get".to_string(), "()Ljava/lang/Object;".to_string()),
+            ClassMethod::Native,
+        );
+        native_collector_methods.insert(
+            ("size".to_string(), "()I".to_string()),
+            ClassMethod::Native,
+        );
+        self.register_class(RuntimeClass {
+            name: "__jvm_rs/NativeCollector".to_string(),
+            super_class: Some("java/lang/Object".to_string()),
+            methods: native_collector_methods,
+            static_fields: HashMap::new(),
+            instance_fields: vec![
+                ("__array".to_string(), "[Ljava/lang/Object;".to_string()),
+                ("__mode".to_string(), "I".to_string()),
+            ],
+            interfaces: vec![],
+        });
+
+        // java/util/stream/Collectors — stub for JDK class loading
+        self.register_class(RuntimeClass {
+            name: "java/util/stream/Collectors".to_string(),
+            super_class: Some("java/lang/Object".to_string()),
+            methods: HashMap::new(),
+            static_fields: HashMap::new(),
+            instance_fields: vec![],
+            interfaces: vec![],
+        });
+
+        // java/util/OptionalInt / OptionalLong / OptionalDouble — stubs for stream terminal ops
         self.register_class(RuntimeClass {
                 name: "java/util/stream/LongStream".to_string(),
                 super_class: None,
@@ -2312,6 +2347,38 @@ impl Vm {
                 let array = self.native_double_stream_array(args[0].as_reference()?)?;
                 Ok(Some(Value::Reference(array)))
             }
+            ("__jvm_rs/NativeIntStream", "collect", "(Ljava/util/stream/Collector;)Ljava/lang/Object;") => {
+                self.native_int_stream_collect(args[0].as_reference()?, args[1].as_reference()?)
+            }
+            ("__jvm_rs/NativeLongStream", "collect", "(Ljava/util/stream/Collector;)Ljava/lang/Object;") => {
+                self.native_long_stream_collect(args[0].as_reference()?, args[1].as_reference()?)
+            }
+            ("__jvm_rs/NativeDoubleStream", "collect", "(Ljava/util/stream/Collector;)Ljava/lang/Object;") => {
+                self.native_double_stream_collect(args[0].as_reference()?, args[1].as_reference()?)
+            }
+
+            // --- java/util/stream/Collectors natives ---
+            ("java/util/stream/Collectors", "toList", "()Ljava/util/stream/Collector;") => {
+                self.native_collectors_to_list()
+            }
+            ("java/util/stream/Collectors", "toSet", "()Ljava/util/stream/Collector;") => {
+                self.native_collectors_to_set()
+            }
+            ("java/util/stream/Collectors", "counting", "()Ljava/util/function/Supplier;") => {
+                self.native_collectors_counting()
+            }
+            ("java/util/stream/Collectors", "joining", "()Ljava/util/stream/Collector;") => {
+                self.native_collectors_joining(None)
+            }
+            ("java/util/stream/Collectors", "joining", "(Ljava/lang/CharSequence;)Ljava/util/stream/Collector;") => {
+                self.native_collectors_joining(Some(args[0].as_reference()?))
+            }
+            ("java/util/stream/Collectors", "reducing", "(Ljava/lang/Object;Ljava/util/function/BinaryOperator;)Ljava/util/stream/Collector;") => {
+                self.native_collectors_reducing(args[0].as_reference()?, args[1].as_reference()?)
+            }
+            ("java/util/stream/Collectors", "toMap", "(Ljava/util/function/Function;Ljava/util/function/Function;)Ljava/util/stream/Collector;") => {
+                self.native_collectors_to_map(args[0].as_reference()?, args[1].as_reference()?)
+            }
 
             // --- __jvm_rs/NativeIntStream terminal ops ---
             ("__jvm_rs/NativeIntStream", "sum", "()I") => {
@@ -2959,7 +3026,199 @@ impl Vm {
         }
     }
 
-    /// Snapshot a `java.util.List`'s contents by calling `size()` and
+    fn native_collector_mode(&self, collector_ref: Reference) -> Result<i32, VmError> {
+        match self.heap.lock().unwrap().get(collector_ref)? {
+            HeapValue::Object { fields, .. } => match fields.get("__mode") {
+                Some(Value::Int(mode)) => Ok(*mode),
+                _ => Ok(0),
+            },
+            _ => Ok(0),
+        }
+    }
+
+    fn native_collector_array(&self, collector_ref: Reference) -> Result<Reference, VmError> {
+        match self.heap.lock().unwrap().get(collector_ref)? {
+            HeapValue::Object { fields, .. } => match fields.get("__array") {
+                Some(Value::Reference(r)) => Ok(*r),
+                _ => Err(VmError::NullReference),
+            },
+            value => Err(VmError::InvalidHeapValue {
+                expected: "object",
+                actual: value.kind_name(),
+            }),
+        }
+    }
+
+    fn native_int_stream_collect(&mut self, stream_ref: Reference, collector_ref: Reference) -> Result<Option<Value>, VmError> {
+        let source_array = self.native_int_stream_array(stream_ref)?;
+        let mode = self.native_collector_mode(collector_ref)?;
+        let heap = self.heap.lock().unwrap();
+        let elements: Vec<Reference> = match heap.get(source_array)? {
+            HeapValue::IntArray { values } => values.iter().map(|&v| Reference::Heap(v as usize)).collect(),
+            _ => return Ok(None),
+        };
+        drop(heap);
+        self.collect_with_mode(elements, mode, collector_ref)
+    }
+
+    fn native_long_stream_collect(&mut self, stream_ref: Reference, collector_ref: Reference) -> Result<Option<Value>, VmError> {
+        let source_array = self.native_long_stream_array(stream_ref)?;
+        let mode = self.native_collector_mode(collector_ref)?;
+        let heap = self.heap.lock().unwrap();
+        let elements: Vec<Reference> = match heap.get(source_array)? {
+            HeapValue::LongArray { values } => values.iter().map(|&v| Reference::Heap(v as usize)).collect(),
+            _ => return Ok(None),
+        };
+        drop(heap);
+        self.collect_with_mode(elements, mode, collector_ref)
+    }
+
+    fn native_double_stream_collect(&mut self, stream_ref: Reference, collector_ref: Reference) -> Result<Option<Value>, VmError> {
+        let source_array = self.native_double_stream_array(stream_ref)?;
+        let mode = self.native_collector_mode(collector_ref)?;
+        let heap = self.heap.lock().unwrap();
+        let elements: Vec<Reference> = match heap.get(source_array)? {
+            HeapValue::DoubleArray { values } => values.iter().map(|&v| Reference::Heap(v as usize)).collect(),
+            _ => return Ok(None),
+        };
+        drop(heap);
+        self.collect_with_mode(elements, mode, collector_ref)
+    }
+
+    fn collect_with_mode(&mut self, elements: Vec<Reference>, mode: i32, collector_ref: Reference) -> Result<Option<Value>, VmError> {
+        match mode {
+            1 => {
+                let list_ref = self.heap.lock().unwrap().allocate(HeapValue::Object {
+                    class_name: "java/util/ArrayList".to_string(),
+                    fields: std::collections::HashMap::new(),
+                });
+                for elem_ref in elements {
+                    self.call_virtual(list_ref, "add", "(Ljava/lang/Object;)Z", vec![Value::Reference(elem_ref)])?;
+                }
+                Ok(Some(Value::Reference(list_ref)))
+            }
+            2 => {
+                let set_ref = self.heap.lock().unwrap().allocate(HeapValue::Object {
+                    class_name: "java/util/HashSet".to_string(),
+                    fields: std::collections::HashMap::new(),
+                });
+                for elem_ref in elements {
+                    self.call_virtual(set_ref, "add", "(Ljava/lang/Object;)Z", vec![Value::Reference(elem_ref)])?;
+                }
+                Ok(Some(Value::Reference(set_ref)))
+            }
+            3 => {
+                let count = elements.len() as i64;
+                let mut fields = std::collections::HashMap::new();
+                fields.insert("value".to_string(), Value::Long(count));
+                let result = self.heap.lock().unwrap().allocate(HeapValue::Object {
+                    class_name: "java/lang/Long".to_string(),
+                    fields,
+                });
+                Ok(Some(Value::Reference(result)))
+            }
+            4 => {
+                let mut strs = Vec::new();
+                for elem_ref in elements {
+                    if elem_ref != Reference::Null {
+                        if let Ok(s) = self.stringify_heap(elem_ref) {
+                            strs.push(s);
+                        }
+                    }
+                }
+                let result = self.new_string(strs.join(""));
+                Ok(Some(result))
+            }
+            5 => {
+                let delimiter_ref = self.native_collector_array(collector_ref)?;
+                let delimiter = if delimiter_ref != Reference::Null {
+                    self.stringify_heap(delimiter_ref)?
+                } else {
+                    String::new()
+                };
+                let mut strs = Vec::new();
+                for elem_ref in elements {
+                    if elem_ref != Reference::Null {
+                        if let Ok(s) = self.stringify_heap(elem_ref) {
+                            strs.push(s);
+                        }
+                    }
+                }
+                let result = self.new_string(strs.join(&delimiter));
+                Ok(Some(result))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn native_collectors_to_list(&mut self) -> Result<Option<Value>, VmError> {
+        let mut fields = std::collections::HashMap::new();
+        fields.insert("__mode".to_string(), Value::Int(1));
+        let r = self.heap.lock().unwrap().allocate(HeapValue::Object {
+            class_name: "__jvm_rs/NativeCollector".to_string(),
+            fields,
+        });
+        Ok(Some(Value::Reference(r)))
+    }
+
+    fn native_collectors_to_set(&mut self) -> Result<Option<Value>, VmError> {
+        let mut fields = std::collections::HashMap::new();
+        fields.insert("__mode".to_string(), Value::Int(2));
+        let r = self.heap.lock().unwrap().allocate(HeapValue::Object {
+            class_name: "__jvm_rs/NativeCollector".to_string(),
+            fields,
+        });
+        Ok(Some(Value::Reference(r)))
+    }
+
+    fn native_collectors_counting(&mut self) -> Result<Option<Value>, VmError> {
+        let mut fields = std::collections::HashMap::new();
+        fields.insert("__mode".to_string(), Value::Int(3));
+        let r = self.heap.lock().unwrap().allocate(HeapValue::Object {
+            class_name: "__jvm_rs/NativeCollector".to_string(),
+            fields,
+        });
+        Ok(Some(Value::Reference(r)))
+    }
+
+    fn native_collectors_joining(&mut self, delimiter: Option<Reference>) -> Result<Option<Value>, VmError> {
+        let mut fields = std::collections::HashMap::new();
+        if let Some(d) = delimiter {
+            fields.insert("__mode".to_string(), Value::Int(5));
+            fields.insert("__array".to_string(), Value::Reference(d));
+        } else {
+            fields.insert("__mode".to_string(), Value::Int(4));
+        }
+        let r = self.heap.lock().unwrap().allocate(HeapValue::Object {
+            class_name: "__jvm_rs/NativeCollector".to_string(),
+            fields,
+        });
+        Ok(Some(Value::Reference(r)))
+    }
+
+    fn native_collectors_reducing(&mut self, identity: Reference, _combiner: Reference) -> Result<Option<Value>, VmError> {
+        let mut fields = std::collections::HashMap::new();
+        fields.insert("__mode".to_string(), Value::Int(6));
+        fields.insert("__array".to_string(), Value::Reference(identity));
+        let r = self.heap.lock().unwrap().allocate(HeapValue::Object {
+            class_name: "__jvm_rs/NativeCollector".to_string(),
+            fields,
+        });
+        Ok(Some(Value::Reference(r)))
+    }
+
+    fn native_collectors_to_map(&mut self, key_mapper: Reference, value_mapper: Reference) -> Result<Option<Value>, VmError> {
+        let mut fields = std::collections::HashMap::new();
+        fields.insert("__mode".to_string(), Value::Int(7));
+        fields.insert("__array".to_string(), Value::Reference(key_mapper));
+        let r = self.heap.lock().unwrap().allocate(HeapValue::Object {
+            class_name: "__jvm_rs/NativeCollector".to_string(),
+            fields,
+        });
+        Ok(Some(Value::Reference(r)))
+    }
+
+    /// Snapshot a `java.util/List`'s contents by calling `size()` and
     /// `get(i)` through virtual dispatch — works for ArrayList, LinkedList,
     /// and any user-defined List that implements the standard interface.
     fn list_snapshot(&mut self, list: Reference) -> Result<Vec<Reference>, VmError> {

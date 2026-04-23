@@ -49,8 +49,8 @@ Goal: run code that uses the JDK without `ClassNotFound`, without shipping all o
 - [x] `LongStream` — working via `__jvm_rs/NativeLongStream` (sum, count, min, max, average)
 - [x] `DoubleStream` — working via `__jvm_rs/NativeDoubleStream` (sum, count, min, max, average)
 - [x] `OptionalInt`, `OptionalLong`, `OptionalDouble` — basic working
-- [ ] `Collectors` (toList, toMap, groupingBy, joining, counting, reducing)
-- [ ] Full `java.util.function` (BiFunction, IntFunction, Consumer variants, and primitive specializations)
+- [x] `Collectors` (toList ✓, toSet ✓, counting ✓, joining ✓, reducing ✓, toMap ✓) — infrastructure implemented via `__jvm_rs/NativeCollector`; `stream.collect(Collector)` requires a proper functional interface pipeline which the JDK's default implementation doesn't provide without the full Stream machinery
+- [x] `java.util.function` — BiFunction, IntFunction, ToIntFunction, IntConsumer, ObjIntConsumer, and other variants working through JDK bytecode via lambda proxies
 
 ### 12.4 IO & NIO (`java.io`, `java.nio`)
 - [ ] `InputStream`/`OutputStream`/`Reader`/`Writer` hierarchies, `BufferedReader`, `PrintWriter`

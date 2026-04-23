@@ -62,6 +62,10 @@ impl Thread {
         }
     }
 
+    pub(super) fn dummy() -> Self {
+        Self { frames: vec![] }
+    }
+
     pub(super) fn current_frame(&self) -> &Frame {
         self.frames.last().expect("call stack is empty")
     }

@@ -1,0 +1,773 @@
+use std::collections::HashMap;
+
+use crate::vm::{ClassMethod, HeapValue, RuntimeClass, Value, Vm};
+
+pub(super) fn bootstrap_java_lang(vm: &mut Vm) {
+    let mut object_methods = HashMap::new();
+    for (name, desc) in [
+        ("<init>", "()V"),
+        ("wait", "()V"),
+        ("notify", "()V"),
+        ("notifyAll", "()V"),
+        ("hashCode", "()I"),
+        ("equals", "(Ljava/lang/Object;)Z"),
+        ("toString", "()Ljava/lang/String;"),
+        ("getClass", "()Ljava/lang/Class;"),
+    ] {
+        object_methods.insert(
+            (name.to_string(), desc.to_string()),
+            ClassMethod::Native,
+        );
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/lang/Object".to_string(),
+        super_class: None,
+        methods: object_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    let mut class_methods = HashMap::new();
+    for (name, desc) in [
+        ("desiredAssertionStatus", "()Z"),
+        ("getName", "()Ljava/lang/String;"),
+        ("getSimpleName", "()Ljava/lang/String;"),
+        ("isArray", "()Z"),
+        ("isInterface", "()Z"),
+        ("isPrimitive", "()Z"),
+        ("toString", "()Ljava/lang/String;"),
+    ] {
+        class_methods.insert(
+            (name.to_string(), desc.to_string()),
+            ClassMethod::Native,
+        );
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/lang/Class".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: class_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![("__name".to_string(), "Ljava/lang/String;".to_string())],
+        interfaces: vec![],
+    });
+
+    let mut string_methods = HashMap::new();
+    for (name, desc) in [
+        ("<init>", "()V"),
+        ("length", "()I"),
+        ("charAt", "(I)C"),
+        ("equals", "(Ljava/lang/Object;)Z"),
+        ("hashCode", "()I"),
+        ("isEmpty", "()Z"),
+        ("trim", "()Ljava/lang/String;"),
+        ("toLowerCase", "()Ljava/lang/String;"),
+        ("toUpperCase", "()Ljava/lang/String;"),
+        ("toString", "()Ljava/lang/String;"),
+        ("concat", "(Ljava/lang/String;)Ljava/lang/String;"),
+        ("substring", "(I)Ljava/lang/String;"),
+        ("substring", "(II)Ljava/lang/String;"),
+        ("indexOf", "(I)I"),
+        ("indexOf", "(Ljava/lang/String;)I"),
+        ("startsWith", "(Ljava/lang/String;)Z"),
+        ("endsWith", "(Ljava/lang/String;)Z"),
+        ("contains", "(Ljava/lang/CharSequence;)Z"),
+        ("replace", "(CC)Ljava/lang/String;"),
+        ("compareTo", "(Ljava/lang/String;)I"),
+        ("compareTo", "(Ljava/lang/Object;)I"),
+        ("valueOf", "(I)Ljava/lang/String;"),
+        ("valueOf", "(J)Ljava/lang/String;"),
+        ("valueOf", "(Z)Ljava/lang/String;"),
+        ("valueOf", "(C)Ljava/lang/String;"),
+        ("valueOf", "(D)Ljava/lang/String;"),
+        ("valueOf", "(F)Ljava/lang/String;"),
+    ] {
+        string_methods.insert(
+            (name.to_string(), desc.to_string()),
+            ClassMethod::Native,
+        );
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/lang/String".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: string_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    let mut integer_methods = HashMap::new();
+    for (name, desc) in [
+        ("<init>", "(I)V"),
+        ("intValue", "()I"),
+        ("valueOf", "(I)Ljava/lang/Integer;"),
+        ("parseInt", "(Ljava/lang/String;)I"),
+        ("parseInt", "(Ljava/lang/String;I)I"),
+        ("compareTo", "(Ljava/lang/Integer;)I"),
+        ("compareTo", "(Ljava/lang/Object;)I"),
+        ("toString", "(I)Ljava/lang/String;"),
+        ("toString", "(II)Ljava/lang/String;"),
+        ("toBinaryString", "(I)Ljava/lang/String;"),
+        ("toHexString", "(I)Ljava/lang/String;"),
+        ("toOctalString", "(I)Ljava/lang/String;"),
+        ("compare", "(II)I"),
+        ("numberOfLeadingZeros", "(I)I"),
+        ("numberOfTrailingZeros", "(I)I"),
+        ("bitCount", "(I)I"),
+        ("reverse", "(I)I"),
+        ("reverseBytes", "(I)I"),
+        ("highestOneBit", "(I)I"),
+        ("lowestOneBit", "(I)I"),
+        ("signum", "(I)I"),
+    ] {
+        integer_methods.insert(
+            (name.to_string(), desc.to_string()),
+            ClassMethod::Native,
+        );
+    }
+    let mut integer_static = HashMap::new();
+    integer_static.insert("MIN_VALUE".to_string(), Value::Int(i32::MIN));
+    integer_static.insert("MAX_VALUE".to_string(), Value::Int(i32::MAX));
+    integer_static.insert("SIZE".to_string(), Value::Int(32));
+    integer_static.insert("BYTES".to_string(), Value::Int(4));
+    let int_type = vm.class_object("int");
+    integer_static.insert("TYPE".to_string(), Value::Reference(int_type));
+    vm.register_class(RuntimeClass {
+        name: "java/lang/Integer".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: integer_methods,
+        static_fields: integer_static,
+        instance_fields: vec![("value".to_string(), "I".to_string())],
+        interfaces: vec![],
+    });
+
+    let mut long_methods = HashMap::new();
+    for (name, desc) in [
+        ("<init>", "(J)V"),
+        ("longValue", "()J"),
+        ("valueOf", "(J)Ljava/lang/Long;"),
+        ("parseLong", "(Ljava/lang/String;)J"),
+        ("toString", "(J)Ljava/lang/String;"),
+        ("compare", "(JJ)I"),
+    ] {
+        long_methods.insert(
+            (name.to_string(), desc.to_string()),
+            ClassMethod::Native,
+        );
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/lang/Long".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: long_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![("value".to_string(), "J".to_string())],
+        interfaces: vec![],
+    });
+
+    let mut character_methods = HashMap::new();
+    for (name, desc) in [
+        ("isDigit", "(C)Z"),
+        ("isLetter", "(C)Z"),
+        ("isLetterOrDigit", "(C)Z"),
+        ("isWhitespace", "(C)Z"),
+        ("isUpperCase", "(C)Z"),
+        ("isLowerCase", "(C)Z"),
+        ("toLowerCase", "(C)C"),
+        ("toUpperCase", "(C)C"),
+        ("toString", "(C)Ljava/lang/String;"),
+    ] {
+        character_methods.insert(
+            (name.to_string(), desc.to_string()),
+            ClassMethod::Native,
+        );
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/lang/Character".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: character_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    let mut boolean_methods = HashMap::new();
+    for (name, desc) in [
+        ("parseBoolean", "(Ljava/lang/String;)Z"),
+        ("toString", "(Z)Ljava/lang/String;"),
+        ("valueOf", "(Z)Ljava/lang/Boolean;"),
+        ("booleanValue", "()Z"),
+        ("getBoolean", "(Ljava/lang/String;)Z"),
+    ] {
+        boolean_methods.insert(
+            (name.to_string(), desc.to_string()),
+            ClassMethod::Native,
+        );
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/lang/Boolean".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: boolean_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![("value".to_string(), "Z".to_string())],
+        interfaces: vec![],
+    });
+
+    let mut sb_methods = HashMap::new();
+    sb_methods.insert(
+        ("<init>".to_string(), "()V".to_string()),
+        ClassMethod::Native,
+    );
+    sb_methods.insert(
+        ("<init>".to_string(), "(Ljava/lang/String;)V".to_string()),
+        ClassMethod::Native,
+    );
+    for desc in [
+        "(Ljava/lang/String;)Ljava/lang/StringBuilder;",
+        "(I)Ljava/lang/StringBuilder;",
+        "(J)Ljava/lang/StringBuilder;",
+        "(C)Ljava/lang/StringBuilder;",
+        "(Z)Ljava/lang/StringBuilder;",
+        "(F)Ljava/lang/StringBuilder;",
+        "(D)Ljava/lang/StringBuilder;",
+        "(Ljava/lang/Object;)Ljava/lang/StringBuilder;",
+    ] {
+        sb_methods.insert(
+            ("append".to_string(), desc.to_string()),
+            ClassMethod::Native,
+        );
+    }
+    sb_methods.insert(
+        ("toString".to_string(), "()Ljava/lang/String;".to_string()),
+        ClassMethod::Native,
+    );
+    sb_methods.insert(
+        ("length".to_string(), "()I".to_string()),
+        ClassMethod::Native,
+    );
+    for (name, desc) in [
+        ("charAt", "(I)C"),
+        ("setLength", "(I)V"),
+        ("deleteCharAt", "(I)Ljava/lang/StringBuilder;"),
+        ("setCharAt", "(IC)V"),
+        ("reverse", "()Ljava/lang/StringBuilder;"),
+        ("insert", "(ILjava/lang/String;)Ljava/lang/StringBuilder;"),
+    ] {
+        sb_methods.insert(
+            (name.to_string(), desc.to_string()),
+            ClassMethod::Native,
+        );
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/lang/StringBuilder".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: sb_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    let mut math_methods = HashMap::new();
+    for (name, desc) in [
+        ("max", "(II)I"),
+        ("min", "(II)I"),
+        ("abs", "(I)I"),
+        ("max", "(JJ)J"),
+        ("min", "(JJ)J"),
+        ("abs", "(J)J"),
+        ("max", "(DD)D"),
+        ("min", "(DD)D"),
+        ("abs", "(D)D"),
+        ("sqrt", "(D)D"),
+        ("pow", "(DD)D"),
+        ("floor", "(D)D"),
+        ("ceil", "(D)D"),
+        ("round", "(D)J"),
+        ("round", "(F)I"),
+        ("random", "()D"),
+        ("log", "(D)D"),
+        ("log10", "(D)D"),
+        ("exp", "(D)D"),
+        ("sin", "(D)D"),
+        ("cos", "(D)D"),
+        ("tan", "(D)D"),
+        ("floorDiv", "(II)I"),
+        ("floorDiv", "(JJ)J"),
+        ("floorMod", "(II)I"),
+        ("floorMod", "(JJ)J"),
+        ("addExact", "(II)I"),
+        ("addExact", "(JJ)J"),
+        ("subtractExact", "(II)I"),
+        ("multiplyExact", "(II)I"),
+        ("multiplyExact", "(JJ)J"),
+        ("signum", "(I)I"),
+    ] {
+        math_methods.insert(
+            (name.to_string(), desc.to_string()),
+            ClassMethod::Native,
+        );
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/lang/Math".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: math_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    vm.register_class(RuntimeClass {
+        name: "java/lang/Runnable".to_string(),
+        super_class: None,
+        methods: HashMap::new(),
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    let mut thread_methods = HashMap::new();
+    for (name, desc) in [
+        ("<init>", "()V"),
+        ("<init>", "(Ljava/lang/Runnable;)V"),
+        ("start", "()V"),
+        ("run", "()V"),
+        ("join", "()V"),
+        ("currentThread", "()Ljava/lang/Thread;"),
+        ("getThreadGroup", "()Ljava/lang/ThreadGroup;"),
+        ("getContextClassLoader", "()Ljava/lang/ClassLoader;"),
+        ("setContextClassLoader", "(Ljava/lang/ClassLoader;)V"),
+        ("getName", "()Ljava/lang/String;"),
+        ("isAlive", "()Z"),
+        ("isInterrupted", "()Z"),
+        ("interrupt", "()V"),
+        ("getId", "()J"),
+        ("getPriority", "()I"),
+        ("setPriority", "(I)V"),
+        ("setDaemon", "(Z)V"),
+        ("isDaemon", "()Z"),
+        ("sleep", "(J)V"),
+        ("yield", "()V"),
+    ] {
+        thread_methods.insert(
+            (name.to_string(), desc.to_string()),
+            ClassMethod::Native,
+        );
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/lang/Thread".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: thread_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![("target".to_string(), "Ljava/lang/Runnable;".to_string())],
+        interfaces: vec![],
+    });
+
+    let exception_chain = [
+        ("java/lang/Throwable", "java/lang/Object"),
+        ("java/lang/Exception", "java/lang/Throwable"),
+        ("java/lang/RuntimeException", "java/lang/Exception"),
+        ("java/lang/IllegalThreadStateException", "java/lang/RuntimeException"),
+        ("java/lang/ArithmeticException", "java/lang/RuntimeException"),
+        ("java/lang/NullPointerException", "java/lang/RuntimeException"),
+        ("java/lang/ClassCastException", "java/lang/RuntimeException"),
+        ("java/lang/NegativeArraySizeException", "java/lang/RuntimeException"),
+        ("java/lang/ArrayIndexOutOfBoundsException", "java/lang/RuntimeException"),
+        ("java/lang/IndexOutOfBoundsException", "java/lang/RuntimeException"),
+        ("java/lang/IllegalMonitorStateException", "java/lang/RuntimeException"),
+    ];
+    for (name, parent) in exception_chain {
+        let mut methods = HashMap::new();
+        for (mname, mdesc) in [
+            ("<init>", "()V"),
+            ("<init>", "(Ljava/lang/String;)V"),
+            ("<init>", "(Ljava/lang/String;Ljava/lang/Throwable;)V"),
+            ("<init>", "(Ljava/lang/Throwable;)V"),
+            ("getMessage", "()Ljava/lang/String;"),
+        ] {
+            methods.insert(
+                (mname.to_string(), mdesc.to_string()),
+                ClassMethod::Native,
+            );
+        }
+        vm.register_class(RuntimeClass {
+            name: name.to_string(),
+            super_class: Some(parent.to_string()),
+            methods,
+            static_fields: HashMap::new(),
+            instance_fields: vec![("message".to_string(), "Ljava/lang/String;".to_string())],
+            interfaces: vec![],
+        });
+    }
+
+    vm.register_class(RuntimeClass {
+        name: "java/lang/Comparable".to_string(),
+        super_class: None,
+        methods: HashMap::new(),
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    vm.register_class(RuntimeClass {
+        name: "java/lang/CharSequence".to_string(),
+        super_class: None,
+        methods: HashMap::new(),
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    for boxed in [
+        "java/lang/Integer",
+        "java/lang/Long",
+        "java/lang/Boolean",
+    ] {
+        if let Some(class) = vm
+            .runtime
+            .lock()
+            .unwrap()
+            .classes
+            .get_mut(boxed)
+        {
+            class.interfaces.push("java/lang/Comparable".to_string());
+        }
+    }
+    if let Some(class) = vm
+        .runtime
+        .lock()
+        .unwrap()
+        .classes
+        .get_mut("java/lang/String")
+    {
+        class.interfaces.push("java/lang/Comparable".to_string());
+        class.interfaces.push("java/lang/CharSequence".to_string());
+    }
+}
+
+pub(super) fn bootstrap_java_io(vm: &mut Vm) {
+    let mut ps_methods = HashMap::new();
+    for desc in [
+        "()V",
+        "(I)V",
+        "(J)V",
+        "(F)V",
+        "(D)V",
+        "(Z)V",
+        "(C)V",
+        "(Ljava/lang/String;)V",
+        "(Ljava/lang/Object;)V",
+    ] {
+        ps_methods.insert(
+            ("println".to_string(), desc.to_string()),
+            ClassMethod::Native,
+        );
+        ps_methods.insert(
+            ("print".to_string(), desc.to_string()),
+            ClassMethod::Native,
+        );
+    }
+    ps_methods.insert(
+        ("<init>".to_string(), "()V".to_string()),
+        ClassMethod::Native,
+    );
+    vm.register_class(RuntimeClass {
+        name: "java/io/PrintStream".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: ps_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    let print_stream_ref = vm.heap.lock().unwrap().allocate(HeapValue::Object {
+        class_name: "java/io/PrintStream".to_string(),
+        fields: HashMap::new(),
+    });
+
+    let err_stream_ref = vm.heap.lock().unwrap().allocate(HeapValue::Object {
+        class_name: "java/io/PrintStream".to_string(),
+        fields: HashMap::new(),
+    });
+
+    let mut system_static = HashMap::new();
+    system_static.insert("out".to_string(), Value::Reference(print_stream_ref));
+    system_static.insert("err".to_string(), Value::Reference(err_stream_ref));
+    let mut system_methods = HashMap::new();
+    for (name, desc) in [
+        ("currentTimeMillis", "()J"),
+        ("nanoTime", "()J"),
+        ("arraycopy", "(Ljava/lang/Object;ILjava/lang/Object;II)V"),
+        ("exit", "(I)V"),
+        ("getProperty", "(Ljava/lang/String;)Ljava/lang/String;"),
+        ("lineSeparator", "()Ljava/lang/String;"),
+        ("identityHashCode", "(Ljava/lang/Object;)I"),
+    ] {
+        system_methods.insert(
+            (name.to_string(), desc.to_string()),
+            ClassMethod::Native,
+        );
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/lang/System".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: system_methods,
+        static_fields: system_static,
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+}
+
+pub(super) fn bootstrap_java_util(vm: &mut Vm) {
+    vm.register_class(RuntimeClass {
+        name: "java/util/stream/IntStream".to_string(),
+        super_class: None,
+        methods: HashMap::new(),
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+    vm.register_class(RuntimeClass {
+        name: "java/util/stream/Stream".to_string(),
+        super_class: None,
+        methods: HashMap::new(),
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    let mut native_int_stream_methods = HashMap::new();
+    for (name, desc) in [
+        ("sum", "()I"),
+        ("count", "()J"),
+        ("min", "()Ljava/util/OptionalInt;"),
+        ("max", "()Ljava/util/OptionalInt;"),
+        ("average", "()Ljava/util/OptionalDouble;"),
+        ("toArray", "()[I"),
+        ("asLongStream", "()Ljava/util/stream/LongStream;"),
+        ("asDoubleStream", "()Ljava/util/stream/DoubleStream;"),
+        ("collect", "(Ljava/util/stream/Collector;)Ljava/lang/Object;"),
+    ] {
+        native_int_stream_methods.insert(
+            (name.to_string(), desc.to_string()),
+            ClassMethod::Native,
+        );
+    }
+    vm.register_class(RuntimeClass {
+        name: "__jvm_rs/NativeIntStream".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: native_int_stream_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![
+            ("__array".to_string(), "[I".to_string()),
+        ],
+        interfaces: vec!["java/util/stream/IntStream".to_string()],
+    });
+
+    let mut native_long_stream_methods = HashMap::new();
+    for (name, desc) in [
+        ("sum", "()J"),
+        ("count", "()J"),
+        ("min", "()Ljava/util/OptionalLong;"),
+        ("max", "()Ljava/util/OptionalLong;"),
+        ("average", "()Ljava/util/OptionalDouble;"),
+        ("toArray", "()[J"),
+        ("asDoubleStream", "()Ljava/util/stream/DoubleStream;"),
+        ("collect", "(Ljava/util/stream/Collector;)Ljava/lang/Object;"),
+    ] {
+        native_long_stream_methods.insert(
+            (name.to_string(), desc.to_string()),
+            ClassMethod::Native,
+        );
+    }
+    vm.register_class(RuntimeClass {
+        name: "__jvm_rs/NativeLongStream".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: native_long_stream_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![
+            ("__array".to_string(), "[J".to_string()),
+        ],
+        interfaces: vec!["java/util/stream/LongStream".to_string()],
+    });
+
+    let mut native_double_stream_methods = HashMap::new();
+    for (name, desc) in [
+        ("sum", "()D"),
+        ("count", "()J"),
+        ("min", "()Ljava/util/OptionalDouble;"),
+        ("max", "()Ljava/util/OptionalDouble;"),
+        ("average", "()D"),
+        ("toArray", "()[D"),
+        ("collect", "(Ljava/util/stream/Collector;)Ljava/lang/Object;"),
+    ] {
+        native_double_stream_methods.insert(
+            (name.to_string(), desc.to_string()),
+            ClassMethod::Native,
+        );
+    }
+    vm.register_class(RuntimeClass {
+        name: "__jvm_rs/NativeDoubleStream".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: native_double_stream_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![
+            ("__array".to_string(), "[D".to_string()),
+        ],
+        interfaces: vec!["java/util/stream/DoubleStream".to_string()],
+    });
+
+    let mut native_collector_methods = HashMap::new();
+    native_collector_methods.insert(
+        ("get".to_string(), "()Ljava/lang/Object;".to_string()),
+        ClassMethod::Native,
+    );
+    native_collector_methods.insert(
+        ("size".to_string(), "()I".to_string()),
+        ClassMethod::Native,
+    );
+    vm.register_class(RuntimeClass {
+        name: "__jvm_rs/NativeCollector".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: native_collector_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![
+            ("__array".to_string(), "[Ljava/lang/Object;".to_string()),
+            ("__mode".to_string(), "I".to_string()),
+        ],
+        interfaces: vec![],
+    });
+
+    vm.register_class(RuntimeClass {
+        name: "java/util/stream/Collectors".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: HashMap::new(),
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    vm.register_class(RuntimeClass {
+        name: "java/util/stream/LongStream".to_string(),
+        super_class: None,
+        methods: HashMap::new(),
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+    vm.register_class(RuntimeClass {
+        name: "java/util/stream/DoubleStream".to_string(),
+        super_class: None,
+        methods: HashMap::new(),
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    for (name, fields) in [
+        ("java/util/OptionalInt", vec![("value".to_string(), "I".to_string())]),
+        ("java/util/OptionalLong", vec![("value".to_string(), "J".to_string())]),
+        ("java/util/OptionalDouble", vec![("value".to_string(), "D".to_string())]),
+    ] {
+        let mut methods = HashMap::new();
+        for (mname, mdesc) in [
+            ("isPresent", "()Z"),
+            ("getAsInt", "()I"),
+            ("getAsLong", "()J"),
+            ("getAsDouble", "()D"),
+            ("orElse", "(I)I"),
+            ("orElse", "(J)J"),
+            ("orElse", "(D)D"),
+        ] {
+            methods.insert((mname.to_string(), mdesc.to_string()), ClassMethod::Native);
+        }
+        vm.register_class(RuntimeClass {
+            name: name.to_string(),
+            super_class: Some("java/lang/Object".to_string()),
+            methods,
+            static_fields: HashMap::new(),
+            instance_fields: fields,
+            interfaces: vec![],
+        });
+    }
+
+    let mut optional_methods = HashMap::new();
+    for (mname, mdesc) in [
+        ("of", "(Ljava/lang/Object;)Ljava/util/Optional;"),
+        ("isPresent", "()Z"),
+        ("get", "()Ljava/lang/Object;"),
+        ("orElse", "(Ljava/lang/Object;)Ljava/lang/Object;"),
+        ("isEmpty", "()Z"),
+        ("filter", "(Ljava/util/function/Predicate;)Ljava/util/Optional;"),
+        ("map", "(Ljava/util/function/Function;)Ljava/util/Optional;"),
+    ] {
+        optional_methods.insert((mname.to_string(), mdesc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/Optional".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: optional_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![("value".to_string(), "Ljava/lang/Object;".to_string())],
+        interfaces: vec![],
+    });
+}
+
+pub(super) fn bootstrap_other(vm: &mut Vm) {
+    let mut unsafe_methods = HashMap::new();
+    for (name, desc) in [
+        ("registerNatives", "()V"),
+        ("getUnsafe", "()Ljdk/internal/misc/Unsafe;"),
+        ("arrayBaseOffset", "(Ljava/lang/Class;)I"),
+        ("arrayIndexScale", "(Ljava/lang/Class;)I"),
+        ("addressSize", "()I"),
+        ("pageSize", "()I"),
+        ("objectFieldOffset", "(Ljava/lang/reflect/Field;)J"),
+        ("staticFieldOffset", "(Ljava/lang/reflect/Field;)J"),
+        ("staticFieldBase", "(Ljava/lang/reflect/Field;)Ljava/lang/Object;"),
+        ("allocateMemory", "(J)J"),
+        ("freeMemory", "(J)V"),
+        ("compareAndSetInt", "(Ljava/lang/Object;JII)Z"),
+        ("compareAndSetLong", "(Ljava/lang/Object;JJJ)Z"),
+        ("compareAndSetReference", "(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z"),
+        ("compareAndSetObject", "(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z"),
+        ("getReferenceVolatile", "(Ljava/lang/Object;J)Ljava/lang/Object;"),
+        ("putReferenceVolatile", "(Ljava/lang/Object;JLjava/lang/Object;)V"),
+        ("getIntVolatile", "(Ljava/lang/Object;J)I"),
+        ("putIntVolatile", "(Ljava/lang/Object;JI)V"),
+        ("storeFence", "()V"),
+        ("loadFence", "()V"),
+        ("fullFence", "()V"),
+    ] {
+        unsafe_methods.insert(
+            (name.to_string(), desc.to_string()),
+            ClassMethod::Native,
+        );
+    }
+    let unsafe_instance_ref = vm.heap.lock().unwrap().allocate(HeapValue::Object {
+        class_name: "jdk/internal/misc/Unsafe".to_string(),
+        fields: HashMap::new(),
+    });
+    let mut unsafe_static = HashMap::new();
+    unsafe_static.insert("theUnsafe".to_string(), Value::Reference(unsafe_instance_ref));
+    for prim in [
+        "BOOLEAN", "BYTE", "SHORT", "CHAR", "INT", "LONG", "FLOAT", "DOUBLE", "OBJECT",
+    ] {
+        unsafe_static.insert(
+            format!("ARRAY_{prim}_BASE_OFFSET"),
+            Value::Int(0),
+        );
+        unsafe_static.insert(
+            format!("ARRAY_{prim}_INDEX_SCALE"),
+            Value::Int(1),
+        );
+    }
+    unsafe_static.insert("ADDRESS_SIZE".to_string(), Value::Int(8));
+    unsafe_static.insert("INVALID_FIELD_OFFSET".to_string(), Value::Int(-1));
+    vm.register_class(RuntimeClass {
+        name: "jdk/internal/misc/Unsafe".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: unsafe_methods,
+        static_fields: unsafe_static,
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+}

@@ -2624,6 +2624,20 @@ fn collect_garbage(&mut self, thread: &Thread) {
         }
         Ok(())
     }
+
+    /// Resolve a heap string reference to its Rust `String` value.
+    pub(super) fn stringify_reference(&self, reference: Reference) -> Result<String, VmError> {
+        match reference {
+            Reference::Null => Ok("null".to_string()),
+            _ => match self.heap.lock().unwrap().get(reference)? {
+                HeapValue::String(value) => Ok(value.clone()),
+                value => Err(VmError::InvalidHeapValue {
+                    expected: "string",
+                    actual: value.kind_name(),
+                }),
+            },
+        }
+    }
 }
 
 /// Count the number of arguments in a JVM method descriptor.

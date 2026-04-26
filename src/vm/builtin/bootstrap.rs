@@ -1295,6 +1295,131 @@ pub(super) fn bootstrap_java_nio(vm: &mut Vm) {
         instance_fields: vec![],
         interfaces: vec![],
     });
+
+    // java.nio.file.OpenOption - marker interface for file open options
+    vm.register_class(RuntimeClass {
+        name: "java/nio/file/OpenOption".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: HashMap::new(),
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    // java.nio.file.StandardOpenOption - enum with file open options
+    let mut standard_open_option_methods = HashMap::new();
+    standard_open_option_methods.insert(
+        ("name".to_string(), "()Ljava/lang/String;".to_string()),
+        ClassMethod::Native,
+    );
+    standard_open_option_methods.insert(
+        ("ordinal".to_string(), "()I".to_string()),
+        ClassMethod::Native,
+    );
+
+    // Create enum constant instances
+    let read_name = vm.new_string("READ");
+    let write_name = vm.new_string("WRITE");
+    let append_name = vm.new_string("APPEND");
+    let truncate_existing_name = vm.new_string("TRUNCATE_EXISTING");
+    let create_name = vm.new_string("CREATE");
+    let create_new_name = vm.new_string("CREATE_NEW");
+    let delete_on_close_name = vm.new_string("DELETE_ON_CLOSE");
+
+    let read_ref = vm.heap.lock().unwrap().allocate(HeapValue::Object {
+        class_name: "java/nio/file/StandardOpenOption".to_string(),
+        fields: {
+            let mut f = HashMap::new();
+            f.insert("name".to_string(), read_name);
+            f.insert("ordinal".to_string(), Value::Int(0));
+            f
+        },
+    });
+    let write_ref = vm.heap.lock().unwrap().allocate(HeapValue::Object {
+        class_name: "java/nio/file/StandardOpenOption".to_string(),
+        fields: {
+            let mut f = HashMap::new();
+            f.insert("name".to_string(), write_name);
+            f.insert("ordinal".to_string(), Value::Int(1));
+            f
+        },
+    });
+    let append_ref = vm.heap.lock().unwrap().allocate(HeapValue::Object {
+        class_name: "java/nio/file/StandardOpenOption".to_string(),
+        fields: {
+            let mut f = HashMap::new();
+            f.insert("name".to_string(), append_name);
+            f.insert("ordinal".to_string(), Value::Int(2));
+            f
+        },
+    });
+    let truncate_existing_ref = vm.heap.lock().unwrap().allocate(HeapValue::Object {
+        class_name: "java/nio/file/StandardOpenOption".to_string(),
+        fields: {
+            let mut f = HashMap::new();
+            f.insert("name".to_string(), truncate_existing_name);
+            f.insert("ordinal".to_string(), Value::Int(3));
+            f
+        },
+    });
+    let create_ref = vm.heap.lock().unwrap().allocate(HeapValue::Object {
+        class_name: "java/nio/file/StandardOpenOption".to_string(),
+        fields: {
+            let mut f = HashMap::new();
+            f.insert("name".to_string(), create_name);
+            f.insert("ordinal".to_string(), Value::Int(4));
+            f
+        },
+    });
+    let create_new_ref = vm.heap.lock().unwrap().allocate(HeapValue::Object {
+        class_name: "java/nio/file/StandardOpenOption".to_string(),
+        fields: {
+            let mut f = HashMap::new();
+            f.insert("name".to_string(), create_new_name);
+            f.insert("ordinal".to_string(), Value::Int(5));
+            f
+        },
+    });
+    let delete_on_close_ref = vm.heap.lock().unwrap().allocate(HeapValue::Object {
+        class_name: "java/nio/file/StandardOpenOption".to_string(),
+        fields: {
+            let mut f = HashMap::new();
+            f.insert("name".to_string(), delete_on_close_name);
+            f.insert("ordinal".to_string(), Value::Int(6));
+            f
+        },
+    });
+
+    let mut static_fields = HashMap::new();
+    static_fields.insert("READ".to_string(), Value::Reference(read_ref));
+    static_fields.insert("WRITE".to_string(), Value::Reference(write_ref));
+    static_fields.insert("APPEND".to_string(), Value::Reference(append_ref));
+    static_fields.insert("TRUNCATE_EXISTING".to_string(), Value::Reference(truncate_existing_ref));
+    static_fields.insert("CREATE".to_string(), Value::Reference(create_ref));
+    static_fields.insert("CREATE_NEW".to_string(), Value::Reference(create_new_ref));
+    static_fields.insert("DELETE_ON_CLOSE".to_string(), Value::Reference(delete_on_close_ref));
+
+    vm.register_class(RuntimeClass {
+        name: "java/nio/file/StandardOpenOption".to_string(),
+        super_class: Some("java/lang/Enum".to_string()),
+        methods: standard_open_option_methods,
+        static_fields,
+        instance_fields: vec![
+            ("name".to_string(), "Ljava/lang/String;".to_string()),
+            ("ordinal".to_string(), "I".to_string()),
+        ],
+        interfaces: vec!["java/nio/file/OpenOption".to_string()],
+    });
+
+    // java.nio.file.CopyOption - marker interface (used by Files.copy/move)
+    vm.register_class(RuntimeClass {
+        name: "java/nio/file/CopyOption".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: HashMap::new(),
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
 }
 
 pub(super) fn bootstrap_other(vm: &mut Vm) {

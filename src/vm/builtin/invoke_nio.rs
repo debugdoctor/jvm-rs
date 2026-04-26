@@ -1009,6 +1009,39 @@ pub(super) fn invoke_nio(
         ("java/io/Console", "printf", "(Ljava/lang/String;[Ljava/lang/Object;)Ljava/io/Console;") => Ok(Some(Value::Reference(Reference::Null))),
         ("java/io/Console", "format", "(Ljava/lang/String;[Ljava/lang/Object;)Ljava/io/Console;") => Ok(Some(Value::Reference(Reference::Null))),
         ("java/io/Console", "flush", "()V") => Ok(None),
+        // --- StandardOpenOption stubs ---
+        ("java/nio/file/StandardOpenOption", "name", "()Ljava/lang/String;") => {
+            let obj_ref = args[0].as_reference()?;
+            let name = {
+                let heap = vm.heap.lock().unwrap();
+                match heap.get(obj_ref)? {
+                    HeapValue::Object { fields, .. } => {
+                        fields.get("name").and_then(|v| match v {
+                            Value::Reference(r) => Some(*r),
+                            _ => None,
+                        })
+                    }
+                    _ => None,
+                }
+            };
+            Ok(Some(Value::Reference(name.unwrap_or(Reference::Null))))
+        }
+        ("java/nio/file/StandardOpenOption", "ordinal", "()I") => {
+            let obj_ref = args[0].as_reference()?;
+            let ordinal = {
+                let heap = vm.heap.lock().unwrap();
+                match heap.get(obj_ref)? {
+                    HeapValue::Object { fields, .. } => {
+                        fields.get("ordinal").and_then(|v| match v {
+                            Value::Int(i) => Some(*i),
+                            _ => None,
+                        }).unwrap_or(0)
+                    }
+                    _ => 0,
+                }
+            };
+            Ok(Some(Value::Int(ordinal)))
+        }
         _ => Err(VmError::UnhandledException {
             class_name: "".to_string(),
         }),

@@ -1483,3 +1483,93 @@ public class TestHashSetOps {
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["3", "true", "false"]);
 }
+
+#[test]
+fn byte_array_output_stream_basic() {
+    let (result, output) = compile_and_run(
+        "baos_basic",
+        &[("demo/TestBAOS.java", r#"
+package demo;
+import java.io.ByteArrayOutputStream;
+public class TestBAOS {
+    public static void main(String[] args) throws Exception {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        baos.write(72);
+        baos.write(105);
+        baos.write(33);
+        System.out.println(baos.size());
+        System.out.println(baos.toString());
+    }
+}
+"#)],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["3", "Hi!"]);
+}
+
+#[test]
+fn byte_array_output_stream_write_bytes() {
+    let (result, output) = compile_and_run(
+        "baos_write_bytes",
+        &[("demo/TestBAOS2.java", r#"
+package demo;
+import java.io.ByteArrayOutputStream;
+public class TestBAOS2 {
+    public static void main(String[] args) throws Exception {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        byte[] buf = {65, 66, 67, 68};
+        baos.write(buf, 1, 2);
+        System.out.println(baos.size());
+        System.out.println(baos.toString());
+    }
+}
+"#)],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["2", "BC"]);
+}
+
+#[test]
+fn byte_array_output_stream_reset() {
+    let (result, output) = compile_and_run(
+        "baos_reset",
+        &[("demo/TestBAOS3.java", r#"
+package demo;
+import java.io.ByteArrayOutputStream;
+public class TestBAOS3 {
+    public static void main(String[] args) throws Exception {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        baos.write(65);
+        baos.write(66);
+        System.out.println(baos.size());
+        baos.reset();
+        System.out.println(baos.size());
+        baos.write(67);
+        System.out.println(baos.size());
+        System.out.println(baos.toString());
+    }
+}
+"#)],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["2", "0", "1", "C"]);
+}
+
+#[test]
+fn input_stream_stubs() {
+    let (result, output) = compile_and_run(
+        "input_stream_stubs",
+        &[("demo/TestIS.java", r#"
+package demo;
+import java.io.InputStream;
+public class TestIS {
+    public static void main(String[] args) throws Exception {
+        InputStream is = null;
+        System.out.println(is == null ? 0 : 1);
+    }
+}
+"#)],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["0"]);
+}

@@ -514,6 +514,84 @@ pub(super) fn bootstrap_java_io(vm: &mut Vm) {
         instance_fields: vec![],
         interfaces: vec![],
     });
+
+    // java/io/InputStream - abstract base for input streams
+    let mut input_stream_methods = HashMap::new();
+    for (name, desc) in [
+        ("read", "()I"),
+        ("read", "([B)I"),
+        ("read", "([BII)I"),
+        ("skip", "(J)J"),
+        ("available", "()I"),
+        ("close", "()V"),
+        ("reset", "()V"),
+        ("mark", "(I)V"),
+        ("markSupported", "()Z"),
+    ] {
+        input_stream_methods.insert(
+            (name.to_string(), desc.to_string()),
+            ClassMethod::Native,
+        );
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/io/InputStream".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: input_stream_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    // java/io/OutputStream - abstract base for output streams
+    let mut output_stream_methods = HashMap::new();
+    for (name, desc) in [
+        ("write", "(I)V"),
+        ("write", "([B)V"),
+        ("write", "([BII)V"),
+        ("flush", "()V"),
+        ("close", "()V"),
+    ] {
+        output_stream_methods.insert(
+            (name.to_string(), desc.to_string()),
+            ClassMethod::Native,
+        );
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/io/OutputStream".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: output_stream_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    // java/io/ByteArrayOutputStream - output stream backed by byte array
+    let mut baos_methods = HashMap::new();
+    baos_methods.insert(("<init>".to_string(), "()V".to_string()), ClassMethod::Native);
+    for (name, desc) in [
+        ("write", "(I)V"),
+        ("write", "([B)V"),
+        ("write", "([BII)V"),
+        ("flush", "()V"),
+        ("close", "()V"),
+        ("toString", "()Ljava/lang/String;"),
+        ("toByteArray", "()[B"),
+        ("size", "()I"),
+        ("reset", "()V"),
+    ] {
+        baos_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/io/ByteArrayOutputStream".to_string(),
+        super_class: Some("java/io/OutputStream".to_string()),
+        methods: baos_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![
+            ("buf".to_string(), "[B".to_string()),
+            ("count".to_string(), "I".to_string()),
+        ],
+        interfaces: vec![],
+    });
 }
 
 pub(super) fn bootstrap_java_util(vm: &mut Vm) {

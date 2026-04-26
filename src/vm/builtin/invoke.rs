@@ -1027,6 +1027,220 @@ pub(super) fn invoke_lang(
             vm.request_gc();
             Ok(None)
         }
+        // --- InputStream stubs ---
+        ("java/io/InputStream", "read", "()I") => Ok(Some(Value::Int(-1))),
+        ("java/io/InputStream", "read", "([B)I") => Ok(Some(Value::Int(-1))),
+        ("java/io/InputStream", "read", "([BII)I") => Ok(Some(Value::Int(-1))),
+        ("java/io/InputStream", "skip", "(J)J") => Ok(Some(Value::Long(0))),
+        ("java/io/InputStream", "available", "()I") => Ok(Some(Value::Int(0))),
+        ("java/io/InputStream", "close", "()V") => Ok(None),
+        ("java/io/InputStream", "reset", "()V") => Ok(None),
+        ("java/io/InputStream", "mark", "(I)V") => Ok(None),
+        ("java/io/InputStream", "markSupported", "()Z") => Ok(Some(Value::Int(0))),
+        // --- OutputStream stubs ---
+        ("java/io/OutputStream", "write", "(I)V") => Ok(None),
+        ("java/io/OutputStream", "write", "([B)V") => Ok(None),
+        ("java/io/OutputStream", "write", "([BII)V") => Ok(None),
+        ("java/io/OutputStream", "flush", "()V") => Ok(None),
+        ("java/io/OutputStream", "close", "()V") => Ok(None),
+        // --- ByteArrayOutputStream native impl ---
+        ("java/io/ByteArrayOutputStream", "<init>", "()V") => {
+            let obj_ref = args[0].as_reference()?;
+            let buf = vm.heap.lock().unwrap().allocate(HeapValue::IntArray {
+                values: vec![0; 32],
+            });
+            {
+                let mut heap = vm.heap.lock().unwrap();
+                if let HeapValue::Object { fields, .. } = heap.get_mut(obj_ref)? {
+                    fields.insert("buf".to_string(), Value::Reference(buf));
+                    fields.insert("count".to_string(), Value::Int(0));
+                }
+            }
+            Ok(None)
+        }
+        ("java/io/ByteArrayOutputStream", "write", "(I)V") => {
+            let obj_ref = args[0].as_reference()?;
+            let b = args[1].as_int()? as i32;
+            let (buf_ref, current_count) = {
+                let heap = vm.heap.lock().unwrap();
+                match heap.get(obj_ref)? {
+                    HeapValue::Object { fields, .. } => {
+                        let buf_ref = fields.get("buf").and_then(|v| match v {
+                            Value::Reference(r) => Some(*r),
+                            _ => None,
+                        });
+                        let count = fields.get("count").and_then(|v| match v {
+                            Value::Int(i) => Some(*i),
+                            _ => None,
+                        });
+                        (buf_ref, count)
+                    }
+                    _ => (None, None),
+                }
+            };
+            if let (Some(buf_ref), Some(current_count)) = (buf_ref, current_count) {
+                let mut heap = vm.heap.lock().unwrap();
+                if let HeapValue::IntArray { values } = heap.get_mut(buf_ref)? {
+                    if current_count as usize >= values.len() {
+                        values.push(b);
+                    } else {
+                        values[current_count as usize] = b;
+                    }
+                    drop(values);
+                    if let Ok(HeapValue::Object { fields, .. }) = heap.get_mut(obj_ref) {
+                        fields.insert("count".to_string(), Value::Int(current_count + 1));
+                    }
+                }
+            }
+            Ok(None)
+        }
+        ("java/io/ByteArrayOutputStream", "write", "([B)V")
+        | ("java/io/ByteArrayOutputStream", "write", "([BII)V") => {
+            let obj_ref = args[0].as_reference()?;
+            let buf_ref = args[1].as_reference()?;
+            let (src_values, src_count) = {
+                let heap = vm.heap.lock().unwrap();
+                match heap.get(buf_ref)? {
+                    HeapValue::IntArray { values } => (values.clone(), values.len() as i32),
+                    _ => (vec![], 0),
+                }
+            };
+            let offset = if args.len() > 2 { args[2].as_int()? } else { 0 };
+            let len = if args.len() > 3 { args[3].as_int()? } else { src_count };
+            let offset = offset.max(0);
+            let len = len.max(0).min(src_count.saturating_sub(offset));
+            let (target_buf, current_count) = {
+                let heap = vm.heap.lock().unwrap();
+                match heap.get(obj_ref)? {
+                    HeapValue::Object { fields, .. } => {
+                        let target_buf = fields.get("buf").and_then(|v| match v {
+                            Value::Reference(r) => Some(*r),
+                            _ => None,
+                        });
+                        let count = fields.get("count").and_then(|v| match v {
+                            Value::Int(i) => Some(*i),
+                            _ => None,
+                        });
+                        (target_buf, count)
+                    }
+                    _ => (None, None),
+                }
+            };
+            if let (Some(target_buf), Some(current_count)) = (target_buf, current_count) {
+                let mut heap = vm.heap.lock().unwrap();
+                if let HeapValue::IntArray { values: target } = heap.get_mut(target_buf)? {
+                    for i in 0..len {
+                        let idx = (offset + i) as usize;
+                        if idx < src_values.len() {
+                            target[(current_count + i) as usize] = src_values[idx];
+                        }
+                    }
+                    drop(target);
+                    if let Ok(HeapValue::Object { fields, .. }) = heap.get_mut(obj_ref) {
+                        fields.insert("count".to_string(), Value::Int(current_count + len));
+                    }
+                }
+            }
+            Ok(None)
+        }
+        ("java/io/ByteArrayOutputStream", "toString", "()Ljava/lang/String;") => {
+            let obj_ref = args[0].as_reference()?;
+            let (buf_ref, count) = {
+                let heap = vm.heap.lock().unwrap();
+                match heap.get(obj_ref)? {
+                    HeapValue::Object { fields, .. } => {
+                        let buf_ref = fields.get("buf").and_then(|v| match v {
+                            Value::Reference(r) => Some(*r),
+                            _ => None,
+                        });
+                        let count = fields.get("count").and_then(|v| match v {
+                            Value::Int(i) => Some(*i),
+                            _ => None,
+                        });
+                        (buf_ref, count)
+                    }
+                    _ => (None, None),
+                }
+            };
+            if let (Some(buf_ref), Some(count)) = (buf_ref, count) {
+                let chars: String = {
+                    let heap = vm.heap.lock().unwrap();
+                    match heap.get(buf_ref)? {
+                        HeapValue::IntArray { values } => {
+                            values.iter()
+                                .take(count as usize)
+                                .map(|&v| v as u8 as char)
+                                .collect()
+                        }
+                        _ => String::new(),
+                    }
+                };
+                Ok(Some(vm.new_string(chars)))
+            } else {
+                Ok(Some(Value::Reference(Reference::Null)))
+            }
+        }
+        ("java/io/ByteArrayOutputStream", "toByteArray", "()[B") => {
+            let obj_ref = args[0].as_reference()?;
+            let (buf_ref, count) = {
+                let heap = vm.heap.lock().unwrap();
+                match heap.get(obj_ref)? {
+                    HeapValue::Object { fields, .. } => {
+                        let buf_ref = fields.get("buf").and_then(|v| match v {
+                            Value::Reference(r) => Some(*r),
+                            _ => None,
+                        });
+                        let count = fields.get("count").and_then(|v| match v {
+                            Value::Int(i) => Some(*i),
+                            _ => None,
+                        });
+                        (buf_ref, count)
+                    }
+                    _ => (None, None),
+                }
+            };
+            if let (Some(buf_ref), Some(count)) = (buf_ref, count) {
+                let bytes: Vec<i32> = {
+                    let heap = vm.heap.lock().unwrap();
+                    match heap.get(buf_ref)? {
+                        HeapValue::IntArray { values } => {
+                            values.iter().take(count as usize).cloned().collect()
+                        }
+                        _ => vec![],
+                    }
+                };
+                let arr_ref = vm.heap.lock().unwrap().allocate(HeapValue::IntArray { values: bytes });
+                Ok(Some(Value::Reference(arr_ref)))
+            } else {
+                Ok(Some(Value::Reference(Reference::Null)))
+            }
+        }
+        ("java/io/ByteArrayOutputStream", "size", "()I") => {
+            let obj_ref = args[0].as_reference()?;
+            let count = {
+                let heap = vm.heap.lock().unwrap();
+                match heap.get(obj_ref)? {
+                    HeapValue::Object { fields, .. } => {
+                        fields.get("count").and_then(|v| match v {
+                            Value::Int(i) => Some(*i),
+                            _ => None,
+                        })
+                    }
+                    _ => None,
+                }
+            };
+            Ok(Some(count.map(Value::Int).unwrap_or(Value::Int(0))))
+        }
+        ("java/io/ByteArrayOutputStream", "reset", "()V") => {
+            let obj_ref = args[0].as_reference()?;
+            let mut heap = vm.heap.lock().unwrap();
+            if let HeapValue::Object { fields, .. } = heap.get_mut(obj_ref)? {
+                fields.insert("count".to_string(), Value::Int(0));
+            }
+            Ok(None)
+        }
+        ("java/io/ByteArrayOutputStream", "flush", "()V") => Ok(None),
+        ("java/io/ByteArrayOutputStream", "close", "()V") => Ok(None),
         _ => Err(VmError::UnhandledException {
             class_name: "".to_string(),
         }),

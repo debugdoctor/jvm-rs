@@ -1154,6 +1154,147 @@ pub(super) fn bootstrap_java_nio(vm: &mut Vm) {
         ],
         interfaces: vec!["java/lang/Appendable".to_string()],
     });
+
+    // java.nio.file.Path - file system path representation
+    let mut path_methods = HashMap::new();
+    for (name, desc) in [
+        ("getFileName", "()Ljava/lang/String;"),
+        ("getParent", "()Ljava/nio/file/Path;"),
+        ("getRoot", "()Ljava/nio/file/Path;"),
+        ("isAbsolute", "()Z"),
+        ("getNameCount", "()I"),
+        ("getName", "(I)Ljava/lang/String;"),
+        ("subpath", "(II)Ljava/nio/file/Path;"),
+        ("toString", "()Ljava/lang/String;"),
+        ("toUri", "()Ljava/net/URI;"),
+        ("toAbsolutePath", "()Ljava/nio/file/Path;"),
+        ("normalize", "()Ljava/nio/file/Path;"),
+        ("resolve", "(Ljava/lang/String;)Ljava/nio/file/Path;"),
+        ("startsWith", "(Ljava/lang/String;)Z"),
+        ("endsWith", "(Ljava/lang/String;)Z"),
+    ] {
+        path_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/nio/file/Path".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: path_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![("__path".to_string(), "Ljava/lang/String;".to_string())],
+        interfaces: vec![],
+    });
+
+    // java.nio.file.Paths - Path factory
+    let mut paths_methods = HashMap::new();
+    paths_methods.insert(
+        ("get".to_string(), "(Ljava/lang/String;[Ljava/lang/String;)Ljava/nio/file/Path;".to_string()),
+        ClassMethod::Native,
+    );
+    vm.register_class(RuntimeClass {
+        name: "java/nio/file/Paths".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: paths_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    // java.nio.file.Files - file operations utility
+    let mut files_methods = HashMap::new();
+    for (name, desc) in [
+        ("exists", "(Ljava/nio/file/Path;[Ljava/nio/file/attribute/FileAttribute;)Z"),
+        ("isRegularFile", "(Ljava/nio/file/Path;)Z"),
+        ("isDirectory", "(Ljava/nio/file/Path;)Z"),
+        ("createFile", "(Ljava/nio/file/Path;[Ljava/nio/file/attribute/FileAttribute;)Ljava/nio/file/Path;"),
+        ("delete", "(Ljava/nio/file/Path;)V"),
+        ("copy", "(Ljava/nio/file/Path;Ljava/nio/file/Path;[Ljava/nio/file/CopyOption;)Ljava/nio/file/Path;"),
+        ("move", "(Ljava/nio/file/Path;Ljava/nio/file/Path;[Ljava/nio/file/CopyOption;)Ljava/nio/file/Path;"),
+        ("readString", "(Ljava/nio/file/Path;)Ljava/lang/String;"),
+        ("writeString", "(Ljava/nio/file/Path;Ljava/lang/CharSequence;[Ljava/nio/file/OpenOption;[Ljava/nio/file/attribute/FileAttribute;)Ljava/nio/file/Path;"),
+        ("size", "(Ljava/nio/file/Path;)J"),
+        ("isHidden", "(Ljava/nio/file/Path;)Z"),
+        ("getFileStore", "(Ljava/nio/file/Path;)Ljava/nio/file/FileStore;"),
+        ("newInputStream", "(Ljava/nio/file/Path;[Ljava/nio/file/OpenOption;)Ljava/io/InputStream;"),
+        ("newOutputStream", "(Ljava/nio/file/Path;[Ljava/nio/file/OpenOption;)Ljava/io/OutputStream;"),
+        ("newBufferedReader", "(Ljava/nio/file/Path;)Ljava/io/BufferedReader;"),
+        ("newBufferedWriter", "(Ljava/nio/file/Path;[Ljava/nio/file/OpenOption;)Ljava/io/BufferedWriter;"),
+    ] {
+        files_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/nio/file/Files".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: files_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    // java.nio.file.FileStore - file store representation
+    let mut filestore_methods = HashMap::new();
+    for (name, desc) in [
+        ("name", "()Ljava/lang/String;"),
+        ("type", "()Ljava/lang/String;"),
+        ("getTotalSpace", "()J"),
+        ("getUsableSpace", "()J"),
+        ("getUnallocatedSpace", "()J"),
+        ("isReadOnly", "()Z"),
+    ] {
+        filestore_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/nio/file/FileStore".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: filestore_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    // java.nio.channels.Channels - channel utilities
+    let mut channels_methods = HashMap::new();
+    for (name, desc) in [
+        ("newInputStream", "(Ljava/nio/channels/ReadableByteChannel;)Ljava/io/InputStream;"),
+        ("newOutputStream", "(Ljava/nio/channels/WritableByteChannel;)Ljava/io/OutputStream;"),
+        ("newChannel", "(Ljava/io/InputStream;)Ljava/nio/channels/ReadableByteChannel;"),
+        ("newChannel", "(Ljava/io/OutputStream;)Ljava/nio/channels/WritableByteChannel;"),
+    ] {
+        channels_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/nio/channels/Channels".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: channels_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    // java.io.Console - console access
+    let mut console_methods = HashMap::new();
+    for (name, desc) in [
+        ("readLine", "()Ljava/lang/String;"),
+        ("readLine", "(Ljava/lang/String;;[Ljava/lang/Object;)Ljava/lang/String;"),
+        ("printf", "(Ljava/lang/String;[Ljava/lang/Object;)Ljava/io/Console;"),
+        ("format", "(Ljava/lang/String;[Ljava/lang/Object;)Ljava/io/Console;"),
+        ("flush", "()V"),
+    ] {
+        console_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    let console_ref = vm.heap.lock().unwrap().allocate(HeapValue::Object {
+        class_name: "java/io/Console".to_string(),
+        fields: HashMap::new(),
+    });
+    let mut console_static = HashMap::new();
+    console_static.insert("__instance".to_string(), Value::Reference(console_ref));
+    vm.register_class(RuntimeClass {
+        name: "java/io/Console".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: console_methods,
+        static_fields: console_static,
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
 }
 
 pub(super) fn bootstrap_other(vm: &mut Vm) {

@@ -58,7 +58,8 @@ Goal: run code that uses the JDK without `ClassNotFound`, without shipping all o
 - [x] `BufferedReader`, `PrintWriter` ✓ stub classes with println/print support
 - [x] `File` ✓ stub class with exists/isFile/isDirectory/length/getPath/etc. handlers
 - [x] `ByteBuffer`, `CharBuffer` ✓ stub classes with allocate/wrap/position/limit/get/put handlers
-- [ ] `Files`, `Path`, `Paths`, `StandardOpenOption`, `Channels`, `Console`
+- [x] `Files`, `Path`, `Paths`, `Channels`, `Console` ✓ stub classes for file operations and channel utilities
+- [ ] `StandardOpenOption`
 
 ### 12.5 Concurrency (`java.util.concurrent`)
 - [ ] `ExecutorService`, `ThreadPoolExecutor`, `Executors`, `Future`, `CompletableFuture`

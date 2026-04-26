@@ -1241,6 +1241,181 @@ pub(super) fn invoke_lang(
         }
         ("java/io/ByteArrayOutputStream", "flush", "()V") => Ok(None),
         ("java/io/ByteArrayOutputStream", "close", "()V") => Ok(None),
+        // --- Writer stubs ---
+        ("java/io/Writer", "write", "(I)V") => Ok(None),
+        ("java/io/Writer", "write", "([C)V") => Ok(None),
+        ("java/io/Writer", "write", "([CII)V") => Ok(None),
+        ("java/io/Writer", "write", "(Ljava/lang/String;)V") => Ok(None),
+        ("java/io/Writer", "write", "(Ljava/lang/String;II)V") => Ok(None),
+        ("java/io/Writer", "flush", "()V") => Ok(None),
+        ("java/io/Writer", "close", "()V") => Ok(None),
+        // --- BufferedWriter stubs ---
+        ("java/io/BufferedWriter", "<init>", "(Ljava/io/Writer;)V") => Ok(None),
+        ("java/io/BufferedWriter", "write", "(I)V") => Ok(None),
+        ("java/io/BufferedWriter", "write", "([C)V") => Ok(None),
+        ("java/io/BufferedWriter", "write", "([CII)V") => Ok(None),
+        ("java/io/BufferedWriter", "flush", "()V") => Ok(None),
+        ("java/io/BufferedWriter", "close", "()V") => Ok(None),
+        // --- PrintWriter println/print ---
+        ("java/io/PrintWriter", "println", "()V") => {
+            println!("");
+            vm.output.lock().unwrap().push(String::new());
+            Ok(None)
+        }
+        ("java/io/PrintWriter", "println", "(Z)V") => {
+            let line = if args[1].as_int()? != 0 { "true" } else { "false" }.to_string();
+            println!("{line}");
+            vm.output.lock().unwrap().push(line);
+            Ok(None)
+        }
+        ("java/io/PrintWriter", "println", "(C)V") => {
+            let ch = args[1].as_int()? as u8 as char;
+            let line = ch.to_string();
+            println!("{line}");
+            vm.output.lock().unwrap().push(line);
+            Ok(None)
+        }
+        ("java/io/PrintWriter", "println", "(I)V") => {
+            let line = args[1].as_int()?.to_string();
+            println!("{line}");
+            vm.output.lock().unwrap().push(line);
+            Ok(None)
+        }
+        ("java/io/PrintWriter", "println", "(J)V") => {
+            let line = args[1].as_long()?.to_string();
+            println!("{line}");
+            vm.output.lock().unwrap().push(line);
+            Ok(None)
+        }
+        ("java/io/PrintWriter", "println", "(F)V") => {
+            let line = super::format::format_float(args[1].as_float()? as f64);
+            println!("{line}");
+            vm.output.lock().unwrap().push(line);
+            Ok(None)
+        }
+        ("java/io/PrintWriter", "println", "(D)V") => {
+            let line = super::format::format_float(args[1].as_double()?);
+            println!("{line}");
+            vm.output.lock().unwrap().push(line);
+            Ok(None)
+        }
+        ("java/io/PrintWriter", "println", "(Ljava/lang/String;)V") => {
+            let reference = args[1].as_reference()?;
+            let line = crate::vm::builtin::helpers::stringify_reference(vm, reference)?;
+            println!("{line}");
+            vm.output.lock().unwrap().push(line);
+            Ok(None)
+        }
+        ("java/io/PrintWriter", "println", "(Ljava/lang/Object;)V") => {
+            let reference = args[1].as_reference()?;
+            let line = if reference == Reference::Null {
+                "null".to_string()
+            } else {
+                vm.stringify_heap(reference)?
+            };
+            println!("{line}");
+            vm.output.lock().unwrap().push(line);
+            Ok(None)
+        }
+        ("java/io/PrintWriter", "print", "(Z)V") => {
+            let text = if args[1].as_int()? != 0 { "true" } else { "false" }.to_string();
+            print!("{text}");
+            Ok(None)
+        }
+        ("java/io/PrintWriter", "print", "(C)V") => {
+            let ch = args[1].as_int()? as u8 as char;
+            print!("{ch}");
+            Ok(None)
+        }
+        ("java/io/PrintWriter", "print", "(I)V") => {
+            let text = args[1].as_int()?.to_string();
+            print!("{text}");
+            Ok(None)
+        }
+        ("java/io/PrintWriter", "print", "(J)V") => {
+            let text = args[1].as_long()?.to_string();
+            print!("{text}");
+            Ok(None)
+        }
+        ("java/io/PrintWriter", "print", "(F)V") => {
+            let text = super::format::format_float(args[1].as_float()? as f64);
+            print!("{text}");
+            Ok(None)
+        }
+        ("java/io/PrintWriter", "print", "(D)V") => {
+            let text = super::format::format_float(args[1].as_double()?);
+            print!("{text}");
+            Ok(None)
+        }
+        ("java/io/PrintWriter", "print", "(Ljava/lang/String;)V") => {
+            let reference = args[1].as_reference()?;
+            let text = crate::vm::builtin::helpers::stringify_reference(vm, reference)?;
+            print!("{text}");
+            Ok(None)
+        }
+        ("java/io/PrintWriter", "print", "(Ljava/lang/Object;)V") => {
+            let reference = args[1].as_reference()?;
+            let text = if reference == Reference::Null {
+                "null".to_string()
+            } else {
+                vm.stringify_heap(reference)?
+            };
+            print!("{text}");
+            Ok(None)
+        }
+        ("java/io/PrintWriter", "flush", "()V") => Ok(None),
+        ("java/io/PrintWriter", "close", "()V") => Ok(None),
+        ("java/io/PrintWriter", "append", "(C)Ljava/io/Writer;") => {
+            Ok(Some(Value::Reference(args[0].as_reference()?)))
+        }
+        ("java/io/PrintWriter", "append", "(Ljava/lang/CharSequence;)Ljava/io/Writer;") => {
+            Ok(Some(Value::Reference(args[0].as_reference()?)))
+        }
+        ("java/io/PrintWriter", "append", "(Ljava/lang/CharSequence;II)Ljava/io/Writer;") => {
+            Ok(Some(Value::Reference(args[0].as_reference()?)))
+        }
+        ("java/io/PrintWriter", "<init>", "(Ljava/io/OutputStream;)V") => Ok(None),
+        ("java/io/PrintWriter", "<init>", "(Ljava/io/Writer;)V") => Ok(None),
+        ("java/io/PrintWriter", "<init>", "()V") => Ok(None),
+        // --- Reader stubs ---
+        ("java/io/Reader", "read", "()I") => Ok(Some(Value::Int(-1))),
+        ("java/io/Reader", "read", "(I)I") => Ok(Some(Value::Int(-1))),
+        ("java/io/Reader", "read", "([C)I") => Ok(Some(Value::Int(-1))),
+        ("java/io/Reader", "read", "([CII)I") => Ok(Some(Value::Int(-1))),
+        ("java/io/Reader", "skip", "(J)J") => Ok(Some(Value::Long(0))),
+        ("java/io/Reader", "ready", "()Z") => Ok(Some(Value::Int(0))),
+        ("java/io/Reader", "close", "()V") => Ok(None),
+        ("java/io/Reader", "mark", "(I)V") => Ok(None),
+        ("java/io/Reader", "reset", "()V") => Ok(None),
+        ("java/io/Reader", "markSupported", "()Z") => Ok(Some(Value::Int(0))),
+        // --- BufferedReader stubs ---
+        ("java/io/BufferedReader", "<init>", "(Ljava/io/Reader;)V") => Ok(None),
+        ("java/io/BufferedReader", "read", "()I") => Ok(Some(Value::Int(-1))),
+        ("java/io/BufferedReader", "read", "(I)I") => Ok(Some(Value::Int(-1))),
+        ("java/io/BufferedReader", "read", "([C)I") => Ok(Some(Value::Int(-1))),
+        ("java/io/BufferedReader", "read", "([CII)I") => Ok(Some(Value::Int(-1))),
+        ("java/io/BufferedReader", "skip", "(J)J") => Ok(Some(Value::Long(0))),
+        ("java/io/BufferedReader", "ready", "()Z") => Ok(Some(Value::Int(0))),
+        ("java/io/BufferedReader", "close", "()V") => Ok(None),
+        ("java/io/BufferedReader", "readLine", "()Ljava/lang/String;") => {
+            Ok(Some(Value::Reference(Reference::Null)))
+        }
+        // --- InputStreamReader stubs ---
+        ("java/io/InputStreamReader", "<init>", "(Ljava/io/InputStream;)V") => Ok(None),
+        ("java/io/InputStreamReader", "read", "()I") => Ok(Some(Value::Int(-1))),
+        ("java/io/InputStreamReader", "read", "(I)I") => Ok(Some(Value::Int(-1))),
+        ("java/io/InputStreamReader", "read", "([C)I") => Ok(Some(Value::Int(-1))),
+        ("java/io/InputStreamReader", "read", "([CII)I") => Ok(Some(Value::Int(-1))),
+        ("java/io/InputStreamReader", "close", "()V") => Ok(None),
+        // --- OutputStreamWriter stubs ---
+        ("java/io/OutputStreamWriter", "<init>", "(Ljava/io/OutputStream;)V") => Ok(None),
+        ("java/io/OutputStreamWriter", "write", "(I)V") => Ok(None),
+        ("java/io/OutputStreamWriter", "write", "([C)V") => Ok(None),
+        ("java/io/OutputStreamWriter", "write", "([CII)V") => Ok(None),
+        ("java/io/OutputStreamWriter", "write", "(Ljava/lang/String;)V") => Ok(None),
+        ("java/io/OutputStreamWriter", "write", "(Ljava/lang/String;II)V") => Ok(None),
+        ("java/io/OutputStreamWriter", "flush", "()V") => Ok(None),
+        ("java/io/OutputStreamWriter", "close", "()V") => Ok(None),
         _ => Err(VmError::UnhandledException {
             class_name: "".to_string(),
         }),

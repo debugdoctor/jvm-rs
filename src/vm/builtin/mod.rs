@@ -18,6 +18,7 @@ impl Vm {
     pub(super) fn bootstrap(&mut self) {
         bootstrap::bootstrap_java_lang(self);
         bootstrap::bootstrap_java_io(self);
+        bootstrap::bootstrap_java_io_writer(self);
         bootstrap::bootstrap_java_util(self);
         bootstrap::bootstrap_other(self);
     }

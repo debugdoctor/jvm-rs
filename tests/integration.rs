@@ -1573,3 +1573,45 @@ public class TestIS {
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["0"]);
 }
+
+#[test]
+fn buffered_reader_stubs() {
+    let (result, output) = compile_and_run(
+        "buffered_reader_stubs",
+        &[("demo/TestBR.java", r#"
+package demo;
+import java.io.BufferedReader;
+import java.io.StringReader;
+public class TestBR {
+    public static void main(String[] args) throws Exception {
+        BufferedReader br = new BufferedReader(new StringReader("hello\nworld\n"));
+        String line = br.readLine();
+        System.out.println(line == null ? "null" : line);
+    }
+}
+"#)],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["null"]);
+}
+
+#[test]
+fn print_writer_system_out() {
+    let (result, output) = compile_and_run(
+        "print_writer_system_out",
+        &[("demo/TestPW.java", r#"
+package demo;
+import java.io.PrintWriter;
+public class TestPW {
+    public static void main(String[] args) throws Exception {
+        PrintWriter pw = new PrintWriter(System.out);
+        pw.println(42);
+        pw.flush();
+        System.out.println(1);
+    }
+}
+"#)],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["42", "1"]);
+}

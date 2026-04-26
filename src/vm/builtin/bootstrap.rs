@@ -594,6 +594,206 @@ pub(super) fn bootstrap_java_io(vm: &mut Vm) {
     });
 }
 
+pub(super) fn bootstrap_java_io_writer(vm: &mut Vm) {
+    // java/io/Writer - abstract base for character output streams
+    let mut writer_methods = HashMap::new();
+    for (name, desc) in [
+        ("write", "(I)V"),
+        ("write", "([C)V"),
+        ("write", "([CII)V"),
+        ("write", "(Ljava/lang/String;)V"),
+        ("write", "(Ljava/lang/String;II)V"),
+        ("flush", "()V"),
+        ("close", "()V"),
+    ] {
+        writer_methods.insert(
+            (name.to_string(), desc.to_string()),
+            ClassMethod::Native,
+        );
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/io/Writer".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: writer_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    // java/io/BufferedWriter - for efficient character output
+    let mut bw_methods = HashMap::new();
+    for (name, desc) in [
+        ("<init>", "(Ljava/io/Writer;)V"),
+        ("write", "(I)V"),
+        ("write", "([C)V"),
+        ("write", "([CII)V"),
+        ("flush", "()V"),
+        ("close", "()V"),
+    ] {
+        bw_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/io/BufferedWriter".to_string(),
+        super_class: Some("java/io/Writer".to_string()),
+        methods: bw_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    // java/io/PrintWriter - character output stream with println support
+    let mut pw_methods = HashMap::new();
+    for desc in [
+        "()V",
+        "(Ljava/io/Writer;)V",
+        "(Ljava/lang/String;)V",
+        "(Z)V",
+        "(C)V",
+        "(I)V",
+        "(J)V",
+        "(F)V",
+        "(D)V",
+        "(Ljava/lang/String;)V",
+        "(Ljava/lang/Object;)V",
+    ] {
+        pw_methods.insert(("println".to_string(), desc.to_string()), ClassMethod::Native);
+        pw_methods.insert(("print".to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    pw_methods.insert(
+        ("<init>".to_string(), "()V".to_string()),
+        ClassMethod::Native,
+    );
+    pw_methods.insert(
+        ("<init>".to_string(), "(Ljava/io/Writer;)V".to_string()),
+        ClassMethod::Native,
+    );
+    pw_methods.insert(
+        ("<init>".to_string(), "(Ljava/io/OutputStream;)V".to_string()),
+        ClassMethod::Native,
+    );
+    pw_methods.insert(
+        ("append".to_string(), "(C)Ljava/io/Writer;".to_string()),
+        ClassMethod::Native,
+    );
+    pw_methods.insert(
+        ("append".to_string(), "(Ljava/lang/CharSequence;)Ljava/io/Writer;".to_string()),
+        ClassMethod::Native,
+    );
+    pw_methods.insert(
+        ("append".to_string(), "(Ljava/lang/CharSequence;II)Ljava/io/Writer;".to_string()),
+        ClassMethod::Native,
+    );
+    pw_methods.insert(("flush".to_string(), "()V".to_string()), ClassMethod::Native);
+    pw_methods.insert(("close".to_string(), "()V".to_string()), ClassMethod::Native);
+    vm.register_class(RuntimeClass {
+        name: "java/io/PrintWriter".to_string(),
+        super_class: Some("java/io/Writer".to_string()),
+        methods: pw_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    // java/io/BufferedReader - for efficient character input
+    let mut br_methods = HashMap::new();
+    for (name, desc) in [
+        ("<init>", "(Ljava/io/Reader;)V"),
+        ("read", "()I"),
+        ("read", "(I)I"),
+        ("read", "([C)I"),
+        ("read", "([CII)I"),
+        ("skip", "(J)J"),
+        ("ready", "()Z"),
+        ("close", "()V"),
+    ] {
+        br_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    br_methods.insert(
+        ("readLine".to_string(), "()Ljava/lang/String;".to_string()),
+        ClassMethod::Native,
+    );
+    vm.register_class(RuntimeClass {
+        name: "java/io/BufferedReader".to_string(),
+        super_class: Some("java/io/Reader".to_string()),
+        methods: br_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    // java/io/Reader - abstract base for character input streams
+    let mut reader_methods = HashMap::new();
+    for (name, desc) in [
+        ("read", "()I"),
+        ("read", "(I)I"),
+        ("read", "([C)I"),
+        ("read", "([CII)I"),
+        ("skip", "(J)J"),
+        ("ready", "()Z"),
+        ("close", "()V"),
+        ("mark", "(I)V"),
+        ("reset", "()V"),
+        ("markSupported", "()Z"),
+    ] {
+        reader_methods.insert(
+            (name.to_string(), desc.to_string()),
+            ClassMethod::Native,
+        );
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/io/Reader".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: reader_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    // java/io/InputStreamReader - bridge from byte streams to characters
+    let mut isr_methods = HashMap::new();
+    for (name, desc) in [
+        ("<init>", "(Ljava/io/InputStream;)V"),
+        ("read", "()I"),
+        ("read", "(I)I"),
+        ("read", "([C)I"),
+        ("read", "([CII)I"),
+        ("close", "()V"),
+    ] {
+        isr_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/io/InputStreamReader".to_string(),
+        super_class: Some("java/io/Reader".to_string()),
+        methods: isr_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    // java/io/OutputStreamWriter - bridge from characters to byte streams
+    let mut osr_methods = HashMap::new();
+    for (name, desc) in [
+        ("<init>", "(Ljava/io/OutputStream;)V"),
+        ("write", "(I)V"),
+        ("write", "([C)V"),
+        ("write", "([CII)V"),
+        ("write", "(Ljava/lang/String;)V"),
+        ("write", "(Ljava/lang/String;II)V"),
+        ("flush", "()V"),
+        ("close", "()V"),
+    ] {
+        osr_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/io/OutputStreamWriter".to_string(),
+        super_class: Some("java/io/Writer".to_string()),
+        methods: osr_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+}
+
 pub(super) fn bootstrap_java_util(vm: &mut Vm) {
     vm.register_class(RuntimeClass {
         name: "java/util/stream/IntStream".to_string(),

@@ -55,7 +55,7 @@ Goal: run code that uses the JDK without `ClassNotFound`, without shipping all o
 ### 12.4 IO & NIO (`java.io`, `java.nio`)
 - [x] `InputStream`/`OutputStream` hierarchies — stub classes registered with native method handlers (read returns -1, write no-ops, etc.) to avoid JDK FilterInputStream/BufferedInputStream machinery
 - [x] `ByteArrayOutputStream` — native implementation with write(int), write(byte[]), toString, toByteArray, size, reset (byte storage uses IntArray since HeapValue has no dedicated byte array variant)
-- [ ] `BufferedReader`, `PrintWriter`
+- [x] `BufferedReader`, `PrintWriter` — stub classes with basic println/print support
 - [ ] `File`, `Files`, `Path`, `Paths`, `StandardOpenOption`
 - [ ] `ByteBuffer`, `CharBuffer`, `Channels` (enough to run logging frameworks)
 - [ ] `Scanner` (full Locale-less subset), `Console`

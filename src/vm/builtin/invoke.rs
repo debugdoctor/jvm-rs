@@ -1416,6 +1416,71 @@ pub(super) fn invoke_lang(
         ("java/io/OutputStreamWriter", "write", "(Ljava/lang/String;II)V") => Ok(None),
         ("java/io/OutputStreamWriter", "flush", "()V") => Ok(None),
         ("java/io/OutputStreamWriter", "close", "()V") => Ok(None),
+        // --- File stubs ---
+        ("java/io/File", "<init>", "(Ljava/lang/String;)V") => {
+            let obj_ref = args[0].as_reference()?;
+            let path_str = args[1].as_reference()?;
+            if let Ok(HeapValue::Object { fields, .. }) = vm.heap.lock().unwrap().get_mut(obj_ref) {
+                fields.insert("path".to_string(), Value::Reference(path_str));
+            }
+            Ok(None)
+        }
+        ("java/io/File", "exists", "()Z") => Ok(Some(Value::Int(0))),
+        ("java/io/File", "isFile", "()Z") => Ok(Some(Value::Int(0))),
+        ("java/io/File", "isDirectory", "()Z") => Ok(Some(Value::Int(0))),
+        ("java/io/File", "isHidden", "()Z") => Ok(Some(Value::Int(0))),
+        ("java/io/File", "length", "()J") => Ok(Some(Value::Long(0))),
+        ("java/io/File", "getPath", "()Ljava/lang/String;") => {
+            let obj_ref = args[0].as_reference()?;
+            let path_ref = {
+                let heap = vm.heap.lock().unwrap();
+                match heap.get(obj_ref)? {
+                    HeapValue::Object { fields, .. } => fields.get("path").and_then(|v| match v {
+                        Value::Reference(r) => Some(*r),
+                        _ => None,
+                    }),
+                    _ => None,
+                }
+            };
+            Ok(Some(path_ref.map(Value::Reference).unwrap_or(Value::Reference(Reference::Null))))
+        }
+        ("java/io/File", "getName", "()Ljava/lang/String;") => {
+            let obj_ref = args[0].as_reference()?;
+            let name = {
+                let heap = vm.heap.lock().unwrap();
+                match heap.get(obj_ref)? {
+                    HeapValue::Object { fields, .. } => {
+                        let path_ref = fields.get("path").and_then(|v| match v {
+                            Value::Reference(r) => Some(*r),
+                            _ => None,
+                        });
+                        if let Some(path_ref) = path_ref {
+                            if let HeapValue::String(s) = heap.get(path_ref)? {
+                                Some(s.clone())
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                }
+            };
+            let name = name.and_then(|s| s.rsplit('/').next().map(|s| s.to_string())).unwrap_or_default();
+            Ok(Some(vm.new_string(name)))
+        }
+        ("java/io/File", "getParent", "()Ljava/lang/String;") => {
+            Ok(Some(Value::Reference(Reference::Null)))
+        }
+        ("java/io/File", "canRead", "()Z") => Ok(Some(Value::Int(0))),
+        ("java/io/File", "canWrite", "()Z") => Ok(Some(Value::Int(0))),
+        ("java/io/File", "canExecute", "()Z") => Ok(Some(Value::Int(0))),
+        ("java/io/File", "mkdir", "()Z") => Ok(Some(Value::Int(0))),
+        ("java/io/File", "createNewFile", "()Z") => Ok(Some(Value::Int(0))),
+        ("java/io/File", "delete", "()Z") => Ok(Some(Value::Int(0))),
+        ("java/io/File", "list", "()[Ljava/lang/String;") => Ok(Some(Value::Reference(Reference::Null))),
+        ("java/io/File", "listFiles", "()[Ljava/io/File;") => Ok(Some(Value::Reference(Reference::Null))),
         _ => Err(VmError::UnhandledException {
             class_name: "".to_string(),
         }),

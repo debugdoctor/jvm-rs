@@ -3,6 +3,7 @@ pub(super) mod format;
 pub(super) mod helpers;
 pub(super) mod invoke;
 pub(super) mod invoke_other;
+pub(super) mod invoke_nio;
 pub(super) mod invoke_util;
 
 use std::collections::HashMap;
@@ -20,6 +21,7 @@ impl Vm {
         bootstrap::bootstrap_java_io(self);
         bootstrap::bootstrap_java_io_writer(self);
         bootstrap::bootstrap_java_util(self);
+        bootstrap::bootstrap_java_nio(self);
         bootstrap::bootstrap_other(self);
     }
 
@@ -55,6 +57,14 @@ impl Vm {
         }
 
         let result = invoke_other::invoke_other(self, class_name, method_name, descriptor, args);
+        match result {
+            Ok(Some(v)) => return Ok(Some(v)),
+            Ok(None) => return Ok(None),
+            Err(e) if is_not_handled(&e) => {}
+            Err(e) => return Err(e),
+        }
+
+        let result = invoke_nio::invoke_nio(self, class_name, method_name, descriptor, args);
         match result {
             Ok(Some(v)) => return Ok(Some(v)),
             Ok(None) => return Ok(None),

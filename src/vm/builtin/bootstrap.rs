@@ -792,6 +792,38 @@ pub(super) fn bootstrap_java_io_writer(vm: &mut Vm) {
         instance_fields: vec![],
         interfaces: vec![],
     });
+
+    // java/io/File - represents file/directory paths
+    let mut file_methods = HashMap::new();
+    for (name, desc) in [
+        ("<init>", "(Ljava/lang/String;)V"),
+        ("exists", "()Z"),
+        ("isFile", "()Z"),
+        ("isDirectory", "()Z"),
+        ("isHidden", "()Z"),
+        ("length", "()J"),
+        ("getPath", "()Ljava/lang/String;"),
+        ("getName", "()Ljava/lang/String;"),
+        ("getParent", "()Ljava/lang/String;"),
+        ("canRead", "()Z"),
+        ("canWrite", "()Z"),
+        ("canExecute", "()Z"),
+        ("mkdir", "()Z"),
+        ("createNewFile", "()Z"),
+        ("delete", "()Z"),
+        ("list", "()[Ljava/lang/String;"),
+        ("listFiles", "()[Ljava/io/File;"),
+    ] {
+        file_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/io/File".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: file_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![("path".to_string(), "Ljava/lang/String;".to_string())],
+        interfaces: vec![],
+    });
 }
 
 pub(super) fn bootstrap_java_util(vm: &mut Vm) {
@@ -986,6 +1018,141 @@ pub(super) fn bootstrap_java_util(vm: &mut Vm) {
         static_fields: HashMap::new(),
         instance_fields: vec![("value".to_string(), "Ljava/lang/Object;".to_string())],
         interfaces: vec![],
+    });
+
+    // java/util/Scanner - for parsing input (Locale-less subset)
+    let mut scanner_methods = HashMap::new();
+    for (name, desc) in [
+        ("<init>", "(Ljava/io/InputStream;)V"),
+        ("<init>", "(Ljava/lang/String;)V"),
+        ("hasNext", "()Z"),
+        ("next", "()Ljava/lang/String;"),
+        ("nextLine", "()Ljava/lang/String;"),
+        ("hasNextInt", "()Z"),
+        ("nextInt", "()I"),
+        ("hasNextLong", "()Z"),
+        ("nextLong", "()J"),
+        ("hasNextDouble", "()Z"),
+        ("nextDouble", "()D"),
+        ("close", "()V"),
+    ] {
+        scanner_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/Scanner".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: scanner_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![("__input".to_string(), "Ljava/lang/String;".to_string())],
+        interfaces: vec![],
+    });
+}
+
+pub(super) fn bootstrap_java_nio(vm: &mut Vm) {
+    let mut byte_buffer_methods = HashMap::new();
+    for (name, desc) in [
+        ("allocate", "(I)Ljava/nio/ByteBuffer;"),
+        ("wrap", "( [B)Ljava/nio/ByteBuffer;"),
+        ("wrap", "( [BII)Ljava/nio/ByteBuffer;"),
+        ("capacity", "()I"),
+        ("position", "()I"),
+        ("position", "(I)Ljava/nio/Buffer;"),
+        ("limit", "()I"),
+        ("limit", "(I)Ljava/nio/Buffer;"),
+        ("mark", "()Ljava/nio/Buffer;"),
+        ("reset", "()Ljava/nio/Buffer;"),
+        ("clear", "()Ljava/nio/Buffer;"),
+        ("flip", "()Ljava/nio/Buffer;"),
+        ("rewind", "()Ljava/nio/Buffer;"),
+        ("remaining", "()I"),
+        ("hasRemaining", "()Z"),
+        ("get", "()B"),
+        ("get", "(I)B"),
+        ("put", "(B)Ljava/nio/ByteBuffer;"),
+        ("put", "(IB)Ljava/nio/ByteBuffer;"),
+        ("array", "()[B"),
+        ("isDirect", "()Z"),
+    ] {
+        byte_buffer_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/nio/ByteBuffer".to_string(),
+        super_class: Some("java/nio/Buffer".to_string()),
+        methods: byte_buffer_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![
+            ("__backing".to_string(), "[B".to_string()),
+            ("__offset".to_string(), "I".to_string()),
+        ],
+        interfaces: vec![],
+    });
+
+    let mut buffer_methods = HashMap::new();
+    for (name, desc) in [
+        ("capacity", "()I"),
+        ("position", "()I"),
+        ("position", "(I)Ljava/nio/Buffer;"),
+        ("limit", "()I"),
+        ("limit", "(I)Ljava/nio/Buffer;"),
+        ("mark", "()Ljava/nio/Buffer;"),
+        ("reset", "()Ljava/nio/Buffer;"),
+        ("clear", "()Ljava/nio/Buffer;"),
+        ("flip", "()Ljava/nio/Buffer;"),
+        ("rewind", "()Ljava/nio/Buffer;"),
+        ("remaining", "()I"),
+        ("hasRemaining", "()Z"),
+    ] {
+        buffer_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/nio/Buffer".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: buffer_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![
+            ("__capacity".to_string(), "I".to_string()),
+            ("__position".to_string(), "I".to_string()),
+            ("__limit".to_string(), "I".to_string()),
+        ],
+        interfaces: vec![],
+    });
+
+    let mut char_buffer_methods = HashMap::new();
+    for (name, desc) in [
+        ("allocate", "(I)Ljava/nio/CharBuffer;"),
+        ("wrap", "([C)Ljava/nio/CharBuffer;"),
+        ("wrap", "([CII)Ljava/nio/CharBuffer;"),
+        ("capacity", "()I"),
+        ("position", "()I"),
+        ("position", "(I)Ljava/nio/Buffer;"),
+        ("limit", "()I"),
+        ("limit", "(I)Ljava/nio/Buffer;"),
+        ("mark", "()Ljava/nio/Buffer;"),
+        ("reset", "()Ljava/nio/Buffer;"),
+        ("clear", "()Ljava/nio/Buffer;"),
+        ("flip", "()Ljava/nio/Buffer;"),
+        ("rewind", "()Ljava/nio/Buffer;"),
+        ("remaining", "()I"),
+        ("hasRemaining", "()Z"),
+        ("get", "()C"),
+        ("get", "(I)C"),
+        ("put", "(C)Ljava/nio/CharBuffer;"),
+        ("put", "(IC)Ljava/nio/CharBuffer;"),
+        ("array", "()[C"),
+        ("length", "()I"),
+    ] {
+        char_buffer_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/nio/CharBuffer".to_string(),
+        super_class: Some("java/nio/Buffer".to_string()),
+        methods: char_buffer_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![
+            ("__backing".to_string(), "[C".to_string()),
+            ("__offset".to_string(), "I".to_string()),
+        ],
+        interfaces: vec!["java/lang/Appendable".to_string()],
     });
 }
 

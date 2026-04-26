@@ -704,6 +704,19 @@ pub(super) fn invoke_util(
                 _ => Ok(Some(Value::Double(fallback))),
             }
         }
+        // --- Scanner stubs ---
+        ("java/util/Scanner", "<init>", "(Ljava/io/InputStream;)V") => Ok(None),
+        ("java/util/Scanner", "<init>", "(Ljava/lang/String;)V") => Ok(None),
+        ("java/util/Scanner", "hasNext", "()Z") => Ok(Some(Value::Int(0))),
+        ("java/util/Scanner", "next", "()Ljava/lang/String;") => Ok(Some(Value::Reference(Reference::Null))),
+        ("java/util/Scanner", "nextLine", "()Ljava/lang/String;") => Ok(Some(Value::Reference(Reference::Null))),
+        ("java/util/Scanner", "hasNextInt", "()Z") => Ok(Some(Value::Int(0))),
+        ("java/util/Scanner", "nextInt", "()I") => Ok(Some(Value::Int(0))),
+        ("java/util/Scanner", "hasNextLong", "()Z") => Ok(Some(Value::Int(0))),
+        ("java/util/Scanner", "nextLong", "()J") => Ok(Some(Value::Long(0))),
+        ("java/util/Scanner", "hasNextDouble", "()Z") => Ok(Some(Value::Int(0))),
+        ("java/util/Scanner", "nextDouble", "()D") => Ok(Some(Value::Double(0.0))),
+        ("java/util/Scanner", "close", "()V") => Ok(None),
         _ => Err(VmError::UnhandledException {
             class_name: "".to_string(),
         }),

@@ -53,12 +53,12 @@ Goal: run code that uses the JDK without `ClassNotFound`, without shipping all o
 - [x] `java.util.function` — BiFunction, IntFunction, ToIntFunction, IntConsumer, ObjIntConsumer, and other variants working through JDK bytecode via lambda proxies
 
 ### 12.4 IO & NIO (`java.io`, `java.nio`)
-- [x] `InputStream`/`OutputStream` hierarchies — stub classes registered with native method handlers (read returns -1, write no-ops, etc.) to avoid JDK FilterInputStream/BufferedInputStream machinery
-- [x] `ByteArrayOutputStream` — native implementation with write(int), write(byte[]), toString, toByteArray, size, reset (byte storage uses IntArray since HeapValue has no dedicated byte array variant)
-- [x] `BufferedReader`, `PrintWriter` — stub classes with basic println/print support
-- [ ] `File`, `Files`, `Path`, `Paths`, `StandardOpenOption`
-- [ ] `ByteBuffer`, `CharBuffer`, `Channels` (enough to run logging frameworks)
-- [ ] `Scanner` (full Locale-less subset), `Console`
+- [x] `InputStream`/`OutputStream` hierarchies ✓ stub classes registered with native method handlers (read returns -1, write no-ops, etc.) to avoid JDK FilterInputStream/BufferedInputStream machinery
+- [x] `ByteArrayOutputStream` ✓ native implementation with write(int), write(byte[],offset,len), toString, toByteArray, size, reset (byte storage uses IntArray since HeapValue has no dedicated byte array variant)
+- [x] `BufferedReader`, `PrintWriter` ✓ stub classes with println/print support
+- [x] `File` ✓ stub class with exists/isFile/isDirectory/length/getPath/etc. handlers
+- [x] `ByteBuffer`, `CharBuffer` ✓ stub classes with allocate/wrap/position/limit/get/put handlers
+- [ ] `Files`, `Path`, `Paths`, `StandardOpenOption`, `Channels`, `Console`
 
 ### 12.5 Concurrency (`java.util.concurrent`)
 - [ ] `ExecutorService`, `ThreadPoolExecutor`, `Executors`, `Future`, `CompletableFuture`

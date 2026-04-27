@@ -125,7 +125,7 @@ Goal: run code that uses the JDK without `ClassNotFound`, without shipping all o
 Goal: beat HotSpot on cold-start and match-within-2x on steady state, via a simpler pipeline.
 
 ### 13.1 Interpreter
-- [ ] Replace the `match Opcode` dispatch loop with a threaded/computed-goto interpreter (or Rust `#[inline(always)]` dispatch table) — cuts branch misprediction on the hot path
+- [x] Replace the `match Opcode` dispatch loop with a threaded/computed-goto interpreter (or Rust `#[inline(always)]` dispatch table) — cuts branch misprediction on the hot path
 - [ ] Quicken resolved constant-pool entries in place (`_quick` opcode variants) so repeat invokes skip resolution
 - [ ] Inline caching for `invokevirtual` / `invokeinterface` call sites (monomorphic → polymorphic → megamorphic)
 - [ ] Stack-allocated frames where escape analysis permits, instead of `Vec<Frame>` heap growth

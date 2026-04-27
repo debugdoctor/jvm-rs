@@ -2,6 +2,7 @@ mod builtin;
 mod classloader;
 mod frame;
 mod heap;
+mod interpreter;
 mod thread;
 mod types;
 pub mod verify;
@@ -18,6 +19,15 @@ use heap::{Heap, HeapValue};
 use thread::{
     ClassInitializationState, JavaThreadState, RuntimeState, SharedMonitors,
     SharedThreads, Thread,
+};
+use interpreter::{
+    execute_aconst_null, execute_iconst, execute_lconst, execute_fconst, execute_dconst,
+    execute_bipush, execute_sipush, execute_ldc, execute_ldc_w,
+    execute_iload, execute_lload, execute_fload, execute_dload, execute_aload,
+    execute_istore, execute_lstore, execute_fstore, execute_dstore, execute_astore,
+    execute_iadd, execute_isub, execute_imul,
+    execute_pop, execute_dup,
+    execute_ireturn_full, execute_lreturn_full, execute_areturn_full, execute_return_full,
 };
 use types::{default_value_for_descriptor, format_vm_float, parse_arg_count, parse_arg_types};
 
@@ -1011,46 +1021,30 @@ fn collect_garbage(&mut self, thread: &Thread) {
         opcode_pc: usize,
     ) -> Result<Option<ExecutionResult>, VmError> {
             match opcode {
-                Opcode::AconstNull => thread
-                    .current_frame_mut()
-                    .push(Value::Reference(Reference::Null))?,
-                Opcode::IconstM1 => thread.current_frame_mut().push(Value::Int(-1))?,
-                Opcode::Iconst0 => thread.current_frame_mut().push(Value::Int(0))?,
-                Opcode::Iconst1 => thread.current_frame_mut().push(Value::Int(1))?,
-                Opcode::Iconst2 => thread.current_frame_mut().push(Value::Int(2))?,
-                Opcode::Iconst3 => thread.current_frame_mut().push(Value::Int(3))?,
-                Opcode::Iconst4 => thread.current_frame_mut().push(Value::Int(4))?,
-                Opcode::Iconst5 => thread.current_frame_mut().push(Value::Int(5))?,
-                Opcode::Bipush => {
-                    let value = thread.current_frame_mut().read_u8()? as i8 as i32;
-                    thread.current_frame_mut().push(Value::Int(value))?;
-                }
-                Opcode::Sipush => {
-                    let value = thread.current_frame_mut().read_i16()? as i32;
-                    thread.current_frame_mut().push(Value::Int(value))?;
-                }
-                Opcode::Ldc => {
-                    let index = thread.current_frame_mut().read_u8()? as usize;
-                    let value = thread.current_frame().load_constant(index)?;
-                    thread.current_frame_mut().push(value)?;
-                }
-                Opcode::LdcW => {
-                    let index = thread.current_frame_mut().read_u16()? as usize;
-                    let value = thread.current_frame().load_constant(index)?;
-                    thread.current_frame_mut().push(value)?;
-                }
+                Opcode::AconstNull => execute_aconst_null(thread)?,
+                Opcode::IconstM1 => execute_iconst(thread, -1)?,
+                Opcode::Iconst0 => execute_iconst(thread, 0)?,
+                Opcode::Iconst1 => execute_iconst(thread, 1)?,
+                Opcode::Iconst2 => execute_iconst(thread, 2)?,
+                Opcode::Iconst3 => execute_iconst(thread, 3)?,
+                Opcode::Iconst4 => execute_iconst(thread, 4)?,
+                Opcode::Iconst5 => execute_iconst(thread, 5)?,
+                Opcode::Bipush => execute_bipush(thread)?,
+                Opcode::Sipush => execute_sipush(thread)?,
+                Opcode::Ldc => execute_ldc(thread)?,
+                Opcode::LdcW => execute_ldc_w(thread)?,
                 Opcode::Ldc2W => {
                     let index = thread.current_frame_mut().read_u16()? as usize;
                     let value = thread.current_frame().load_constant(index)?;
                     thread.current_frame_mut().push(value)?;
                 }
-                Opcode::Lconst0 => thread.current_frame_mut().push(Value::Long(0))?,
-                Opcode::Lconst1 => thread.current_frame_mut().push(Value::Long(1))?,
-                Opcode::Fconst0 => thread.current_frame_mut().push(Value::Float(0.0))?,
-                Opcode::Fconst1 => thread.current_frame_mut().push(Value::Float(1.0))?,
-                Opcode::Fconst2 => thread.current_frame_mut().push(Value::Float(2.0))?,
-                Opcode::Dconst0 => thread.current_frame_mut().push(Value::Double(0.0))?,
-                Opcode::Dconst1 => thread.current_frame_mut().push(Value::Double(1.0))?,
+                Opcode::Lconst0 => execute_lconst(thread, 0)?,
+                Opcode::Lconst1 => execute_lconst(thread, 1)?,
+                Opcode::Fconst0 => execute_fconst(thread, 0.0)?,
+                Opcode::Fconst1 => execute_fconst(thread, 1.0)?,
+                Opcode::Fconst2 => execute_fconst(thread, 2.0)?,
+                Opcode::Dconst0 => execute_dconst(thread, 0.0)?,
+                Opcode::Dconst1 => execute_dconst(thread, 1.0)?,
                 Opcode::Newarray => {
                     let atype = thread.current_frame_mut().read_u8()?;
                     let count = thread.current_frame_mut().pop()?.as_int()?;
@@ -1100,46 +1094,28 @@ fn collect_garbage(&mut self, thread: &Thread) {
                 }
                 Opcode::Aload => {
                     let index = thread.current_frame_mut().read_u8()? as usize;
-                    let value = thread.current_frame().load_local(index)?;
-                    thread.current_frame_mut().push(value)?;
+                    execute_aload(thread, index)?;
                 }
                 Opcode::Iload | Opcode::Lload | Opcode::Fload | Opcode::Dload => {
                     let index = thread.current_frame_mut().read_u8()? as usize;
-                    let value = thread.current_frame().load_local(index)?;
-                    thread.current_frame_mut().push(value)?;
+                    execute_iload(thread, index)?;
                 }
                 Opcode::Iload0 | Opcode::Lload0 | Opcode::Fload0 | Opcode::Dload0 => {
-                    let value = thread.current_frame().load_local(0)?;
-                    thread.current_frame_mut().push(value)?;
+                    execute_iload(thread, 0)?;
                 }
                 Opcode::Iload1 | Opcode::Lload1 | Opcode::Fload1 | Opcode::Dload1 => {
-                    let value = thread.current_frame().load_local(1)?;
-                    thread.current_frame_mut().push(value)?;
+                    execute_iload(thread, 1)?;
                 }
                 Opcode::Iload2 | Opcode::Lload2 | Opcode::Fload2 | Opcode::Dload2 => {
-                    let value = thread.current_frame().load_local(2)?;
-                    thread.current_frame_mut().push(value)?;
+                    execute_iload(thread, 2)?;
                 }
                 Opcode::Iload3 | Opcode::Lload3 | Opcode::Fload3 | Opcode::Dload3 => {
-                    let value = thread.current_frame().load_local(3)?;
-                    thread.current_frame_mut().push(value)?;
+                    execute_iload(thread, 3)?;
                 }
-                Opcode::Aload0 => {
-                    let value = thread.current_frame().load_local(0)?;
-                    thread.current_frame_mut().push(value)?;
-                }
-                Opcode::Aload1 => {
-                    let value = thread.current_frame().load_local(1)?;
-                    thread.current_frame_mut().push(value)?;
-                }
-                Opcode::Aload2 => {
-                    let value = thread.current_frame().load_local(2)?;
-                    thread.current_frame_mut().push(value)?;
-                }
-                Opcode::Aload3 => {
-                    let value = thread.current_frame().load_local(3)?;
-                    thread.current_frame_mut().push(value)?;
-                }
+                Opcode::Aload0 => execute_iload(thread, 0)?,
+                Opcode::Aload1 => execute_iload(thread, 1)?,
+                Opcode::Aload2 => execute_iload(thread, 2)?,
+                Opcode::Aload3 => execute_iload(thread, 3)?,
                 Opcode::Iaload => {
                     let index = thread.current_frame_mut().pop()?.as_int()?;
                     let array_ref = thread.current_frame_mut().pop()?.as_reference()?;
@@ -1209,46 +1185,28 @@ fn collect_garbage(&mut self, thread: &Thread) {
                 }
                 Opcode::Astore => {
                     let index = thread.current_frame_mut().read_u8()? as usize;
-                    let value = thread.current_frame_mut().pop()?;
-                    thread.current_frame_mut().store_local(index, value)?;
+                    execute_astore(thread, index)?;
                 }
                 Opcode::Istore | Opcode::Lstore | Opcode::Fstore | Opcode::Dstore => {
                     let index = thread.current_frame_mut().read_u8()? as usize;
-                    let value = thread.current_frame_mut().pop()?;
-                    thread.current_frame_mut().store_local(index, value)?;
+                    execute_istore(thread, index)?;
                 }
                 Opcode::Istore0 | Opcode::Lstore0 | Opcode::Fstore0 | Opcode::Dstore0 => {
-                    let value = thread.current_frame_mut().pop()?;
-                    thread.current_frame_mut().store_local(0, value)?;
+                    execute_istore(thread, 0)?;
                 }
                 Opcode::Istore1 | Opcode::Lstore1 | Opcode::Fstore1 | Opcode::Dstore1 => {
-                    let value = thread.current_frame_mut().pop()?;
-                    thread.current_frame_mut().store_local(1, value)?;
+                    execute_istore(thread, 1)?;
                 }
                 Opcode::Istore2 | Opcode::Lstore2 | Opcode::Fstore2 | Opcode::Dstore2 => {
-                    let value = thread.current_frame_mut().pop()?;
-                    thread.current_frame_mut().store_local(2, value)?;
+                    execute_istore(thread, 2)?;
                 }
                 Opcode::Istore3 | Opcode::Lstore3 | Opcode::Fstore3 | Opcode::Dstore3 => {
-                    let value = thread.current_frame_mut().pop()?;
-                    thread.current_frame_mut().store_local(3, value)?;
+                    execute_istore(thread, 3)?;
                 }
-                Opcode::Astore0 => {
-                    let value = thread.current_frame_mut().pop()?;
-                    thread.current_frame_mut().store_local(0, value)?;
-                }
-                Opcode::Astore1 => {
-                    let value = thread.current_frame_mut().pop()?;
-                    thread.current_frame_mut().store_local(1, value)?;
-                }
-                Opcode::Astore2 => {
-                    let value = thread.current_frame_mut().pop()?;
-                    thread.current_frame_mut().store_local(2, value)?;
-                }
-                Opcode::Astore3 => {
-                    let value = thread.current_frame_mut().pop()?;
-                    thread.current_frame_mut().store_local(3, value)?;
-                }
+                Opcode::Astore0 => execute_istore(thread, 0)?,
+                Opcode::Astore1 => execute_istore(thread, 1)?,
+                Opcode::Astore2 => execute_istore(thread, 2)?,
+                Opcode::Astore3 => execute_istore(thread, 3)?,
                 Opcode::Iastore => {
                     let value = thread.current_frame_mut().pop()?.as_int()?;
                     let index = thread.current_frame_mut().pop()?.as_int()?;
@@ -1258,9 +1216,12 @@ fn collect_garbage(&mut self, thread: &Thread) {
                         .unwrap()
                         .store_int_array_element(array_ref, index, value)?;
                 }
-                Opcode::Pop => {
-                    let _ = thread.current_frame_mut().pop()?;
+Opcode::Pop => execute_pop(thread)?,
+                Opcode::Pop2 => {
+                    thread.current_frame_mut().pop()?;
+                    thread.current_frame_mut().pop()?;
                 }
+                Opcode::Dup => execute_dup(thread)?,
                 Opcode::Pop2 => {
                     let _ = thread.current_frame_mut().pop()?;
                     let _ = thread.current_frame_mut().pop()?;
@@ -1322,21 +1283,9 @@ fn collect_garbage(&mut self, thread: &Thread) {
                     thread.current_frame_mut().push(top)?;
                     thread.current_frame_mut().push(below)?;
                 }
-                Opcode::Iadd => {
-                    let rhs = thread.current_frame_mut().pop()?.as_int()?;
-                    let lhs = thread.current_frame_mut().pop()?.as_int()?;
-                    thread.current_frame_mut().push(Value::Int(lhs + rhs))?;
-                }
-                Opcode::Isub => {
-                    let rhs = thread.current_frame_mut().pop()?.as_int()?;
-                    let lhs = thread.current_frame_mut().pop()?.as_int()?;
-                    thread.current_frame_mut().push(Value::Int(lhs - rhs))?;
-                }
-                Opcode::Imul => {
-                    let rhs = thread.current_frame_mut().pop()?.as_int()?;
-                    let lhs = thread.current_frame_mut().pop()?.as_int()?;
-                    thread.current_frame_mut().push(Value::Int(lhs * rhs))?;
-                }
+                Opcode::Iadd => execute_iadd(thread)?,
+                Opcode::Isub => execute_isub(thread)?,
+                Opcode::Imul => execute_imul(thread)?,
                 Opcode::Idiv => {
                     let rhs = thread.current_frame_mut().pop()?.as_int()?;
                     if rhs == 0 {
@@ -2286,18 +2235,10 @@ fn collect_garbage(&mut self, thread: &Thread) {
 
                 Opcode::Areturn | Opcode::Ireturn | Opcode::Lreturn
                 | Opcode::Freturn | Opcode::Dreturn => {
-                    let value = thread.current_frame_mut().pop()?;
-                    if thread.depth() == 1 {
-                        return Ok(Some(ExecutionResult::Value(value)));
-                    }
-                    thread.pop_frame();
-                    thread.current_frame_mut().push(value)?;
+                    return execute_ireturn_full(thread);
                 }
                 Opcode::Return => {
-                    if thread.depth() == 1 {
-                        return Ok(Some(ExecutionResult::Void));
-                    }
-                    thread.pop_frame();
+                    return execute_return_full(thread);
                 }
 
                 Opcode::Arraylength => {

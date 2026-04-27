@@ -1842,14 +1842,65 @@ Opcode::Pop => execute_pop(thread)?,
                     if should_return_false {
                         thread.current_frame_mut().push(Value::Int(0))?;
                     } else {
-                        let class_name = self.get_object_class(receiver)?;
-                        self.dispatch_instance_method(
-                            &mut thread,
-                            &class_name,
-                            &method_ref,
-                            receiver,
-                            args,
-                        )?;
+                        let receiver_class = self.get_object_class(receiver)?;
+
+                        if let Some(cached_method) =
+                            thread.current_frame().get_cached_invoke(index, &receiver_class)
+                        {
+                            let mut all_args = vec![Value::Reference(receiver)];
+                            all_args.extend(args);
+                            match cached_method {
+                                ClassMethod::Native => {
+                                    let result = self.invoke_native(
+                                        &receiver_class,
+                                        &method_ref.method_name,
+                                        &method_ref.descriptor,
+                                        &all_args,
+                                    )?;
+                                    if let Some(value) = result {
+                                        thread.current_frame_mut().push(value)?;
+                                    }
+                                }
+                                ClassMethod::Bytecode(bytecode_method) => {
+                                    let callee = bytecode_method
+                                        .clone()
+                                        .with_initial_locals(Vm::args_to_locals(all_args));
+                                    thread.push_frame(Frame::new(callee));
+                                }
+                            }
+                        } else {
+                            let (resolved_class, class_method) = self.resolve_method(
+                                &receiver_class,
+                                &method_ref.method_name,
+                                &method_ref.descriptor,
+                            )?;
+                            thread.current_frame_mut().cache_invoke(
+                                index,
+                                resolved_class.clone(),
+                                class_method.clone(),
+                            );
+                            let mut all_args = vec![Value::Reference(receiver)];
+                            all_args.extend(args);
+                            match class_method {
+                                ClassMethod::Native => {
+                                    let result = self.invoke_native(
+                                        &resolved_class,
+                                        &method_ref.method_name,
+                                        &method_ref.descriptor,
+                                        &all_args,
+                                    )?;
+                                    if let Some(value) = result {
+                                        thread.current_frame_mut().push(value)?;
+                                    }
+                                }
+                                ClassMethod::Bytecode(bytecode_method) => {
+                                    let callee = bytecode_method
+                                        .clone()
+                                        .with_initial_locals(Vm::args_to_locals(all_args));
+                                    thread.push_frame(Frame::new(callee));
+                                }
+                            }
+                        }
                     }
                 }
                 Opcode::Invokespecial => {

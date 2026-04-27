@@ -178,6 +178,12 @@ pub struct MethodRef {
 }
 
 #[derive(Debug, Clone)]
+pub struct ResolvedMethod {
+    pub resolved_class: String,
+    pub class_method: ClassMethod,
+}
+
+#[derive(Debug, Clone)]
 pub struct RuntimeClass {
     pub name: String,
     pub super_class: Option<String>,

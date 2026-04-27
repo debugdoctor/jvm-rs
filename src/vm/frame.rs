@@ -2,7 +2,8 @@
 //! and cached resolutions from the constant pool.
 
 use super::types::{
-    ExceptionHandler, FieldRef, InvokeDynamicSite, Method, MethodRef, Value, VmError,
+    ClassMethod, ExceptionHandler, FieldRef, InvokeDynamicSite, Method, MethodRef, ResolvedMethod,
+    Value, VmError,
 };
 
 #[derive(Debug)]
@@ -23,12 +24,14 @@ pub(super) struct Frame {
     #[allow(dead_code)]
     pub(super) line_numbers: Vec<(u16, u16)>,
     pub(super) invoke_dynamic_sites: Vec<Option<InvokeDynamicSite>>,
+    pub(super) invoke_cache: Vec<Option<ResolvedMethod>>,
 }
 
 impl Frame {
     /// Builds the initial execution frame for a method and seeds any preloaded locals
     /// such as launcher-provided `main` arguments.
     pub(super) fn new(method: Method) -> Self {
+        let method_refs_len = method.method_refs.len();
         let mut locals = vec![None; method.max_locals];
         for (index, value) in method.initial_locals.into_iter().enumerate() {
             if index >= locals.len() {
@@ -53,6 +56,7 @@ impl Frame {
             exception_handlers: method.exception_handlers,
             line_numbers: method.line_numbers,
             invoke_dynamic_sites: method.invoke_dynamic_sites,
+            invoke_cache: vec![None; method_refs_len],
         }
     }
 
@@ -168,6 +172,34 @@ impl Frame {
                 index,
                 constant_count: self.method_refs.len().saturating_sub(1),
             })
+    }
+
+    pub(super) fn get_cached_invoke(
+        &self,
+        index: usize,
+        receiver_class: &str,
+    ) -> Option<&ClassMethod> {
+        let cached = self.invoke_cache.get(index)?;
+        let cached = cached.as_ref()?;
+        if cached.resolved_class == receiver_class {
+            Some(&cached.class_method)
+        } else {
+            None
+        }
+    }
+
+    pub(super) fn cache_invoke(
+        &mut self,
+        index: usize,
+        resolved_class: String,
+        class_method: ClassMethod,
+    ) {
+        if let Some(cache_entry) = self.invoke_cache.get_mut(index) {
+            *cache_entry = Some(ResolvedMethod {
+                resolved_class,
+                class_method,
+            });
+        }
     }
 
     /// Applies a JVM-style relative branch offset from the current opcode position.

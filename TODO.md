@@ -77,8 +77,48 @@ Goal: run code that uses the JDK without `ClassNotFound`, without shipping all o
 - [x] `java.lang.Class` metadata reachable from user code (`getClass()`, `getName()`, literals via `ldc`)
 
 ### 12.7 Build Story
-- [ ] Decide how classes are packaged (embedded in the binary via `include_bytes!`, sidecar `jvm-rs-stdlib.jar`, or lazy-download)
-- [ ] Maintain a compatibility matrix per class — which methods run on real bytecode vs. Rust native stubs
+- [x] Decide how classes are packaged (embedded in the binary via `include_bytes!`, sidecar `jvm-rs-stdlib.jar`, or lazy-download)
+- [x] Maintain a compatibility matrix per class — which methods run on real bytecode vs. Rust native stubs
+
+**Class Packaging Strategy:**
+
+| Class Category | Packaging | Loading |
+|---|---|---|
+| `java.*`, `jdk.*`, `sun.*` (bootstrap) | Real bytecode from `$JAVA_HOME/lib/classes.jar` | `BootstrapClassLoader` |
+| stdlib stubs (Object, String, Integer, etc.) | Rust native via `vm.register_class()` | Bootstrap + native dispatch |
+| User classes | User classpath | `UserClassLoader` (on-demand) |
+
+**Native Stub Classes (Rust-implemented, no bytecode):**
+- `java.lang.Object` - hashCode, equals, toString, getClass, wait/notify
+- `java.lang.Class` - getName, getSimpleName, isArray, isInterface, isPrimitive, desiredAssertionStatus
+- `java.lang.String` - length, charAt, equals, hashCode, indexOf, substring, etc.
+- `java.lang.Integer/Long/Float/Double/Boolean/Character` - parsing, conversion, bit operations
+- `java.lang.StringBuilder` - append, toString
+- `java.lang.System` - currentTimeMillis, nanoTime, arraycopy, getProperty, exit
+- `java.lang.Thread` - start, join, sleep, interrupt, isAlive, currentThread
+- `java.lang.reflect.Method/Field/Constructor` - invoke, get, set
+- `java.lang.reflect.AccessibleObject` - setAccessible
+- `java.lang.reflect.Modifier` - isPublic, isPrivate, isStatic, isFinal
+- `java.util.concurrent.*` (40+ classes) - atomic, locks, queues, executors
+- `java.util.regex.Pattern/Matcher` - compile, matches, find, replace (Rust regex)
+- `java.time.*` - Instant, Duration, LocalDate, LocalDateTime, ZonedDateTime, Clock
+- `java.text.*` - DecimalFormat, MessageFormat, NumberFormat
+- `java.io.*` - InputStream, OutputStream, Reader, Writer (stubs)
+- `java.nio.*` - ByteBuffer, CharBuffer, Channels, Files (stubs)
+
+**Bytecode-executed Classes (from real JDK classfiles):**
+- `java.util.ArrayList`, `java.util.HashMap`, `java.util.HashSet`
+- `java.util.Iterator`, `java.util.ListIterator`
+- `java.util.stream.Stream`, `java.util.stream.IntStream`, `java.util.stream.LongStream`, `java.util.stream.DoubleStream`
+- `java.util.Optional`, `java.util.OptionalInt`, `java.util.OptionalLong`, `java.util.OptionalDouble`
+- `java.util.function.*` (Consumer, Supplier, Function, Predicate, etc.)
+- `java.lang.instrument.ClassFileTransformer`
+- All user classes from classpath
+
+**Compatibility Notes:**
+- Native stub classes intercept specific method signatures; unhandled methods fall through to bytecode when available
+- `ldc` of Class literals uses `vm.class_object()` which creates a real `java/lang/Class` heap object
+- Reflection on native stub classes works via `RuntimeClass` metadata (getDeclaredMethod, getDeclaredField)
 
 ## 13. Performance — Open
 

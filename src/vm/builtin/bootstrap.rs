@@ -1482,3 +1482,1242 @@ pub(super) fn bootstrap_other(vm: &mut Vm) {
         interfaces: vec![],
     });
 }
+
+pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
+    // --- java.util.concurrent.atomic ---
+    let mut atomic_integer_methods = HashMap::new();
+    for (name, desc) in [
+        ("<init>", "(I)V"),
+        ("get", "()I"),
+        ("set", "(I)V"),
+        ("getAndSet", "(I)I"),
+        ("compareAndSet", "(II)Z"),
+        ("incrementAndGet", "()I"),
+        ("decrementAndGet", "()I"),
+        ("getAndIncrement", "()I"),
+        ("getAndDecrement", "()I"),
+        ("addAndGet", "(I)I"),
+        ("getAndAdd", "(I)I"),
+    ] {
+        atomic_integer_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/atomic/AtomicInteger".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: atomic_integer_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![("__value".to_string(), "I".to_string())],
+        interfaces: vec![],
+    });
+
+    let mut atomic_long_methods = HashMap::new();
+    for (name, desc) in [
+        ("<init>", "(J)V"),
+        ("get", "()J"),
+        ("set", "(J)V"),
+        ("getAndSet", "(J)J"),
+        ("compareAndSet", "(JJ)Z"),
+        ("incrementAndGet", "()J"),
+        ("decrementAndGet", "()J"),
+        ("addAndGet", "(J)J"),
+    ] {
+        atomic_long_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/atomic/AtomicLong".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: atomic_long_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![("__value".to_string(), "J".to_string())],
+        interfaces: vec![],
+    });
+
+    let mut atomic_reference_methods = HashMap::new();
+    for (name, desc) in [
+        ("<init>", "(Ljava/lang/Object;)V"),
+        ("get", "()Ljava/lang/Object;"),
+        ("set", "(Ljava/lang/Object;)V"),
+        ("getAndSet", "(Ljava/lang/Object;)Ljava/lang/Object;"),
+        ("compareAndSet", "(Ljava/lang/Object;Ljava/lang/Object;)Z"),
+    ] {
+        atomic_reference_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/atomic/AtomicReference".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: atomic_reference_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![("__value".to_string(), "Ljava/lang/Object;".to_string())],
+        interfaces: vec![],
+    });
+
+    let mut long_adder_methods = HashMap::new();
+    for (name, desc) in [
+        ("<init>", "()V"),
+        ("add", "(J)V"),
+        ("sum", "()J"),
+        ("increment", "()V"),
+        ("decrement", "()V"),
+        ("reset", "()V"),
+    ] {
+        long_adder_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/atomic/LongAdder".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: long_adder_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![("__value".to_string(), "J".to_string())],
+        interfaces: vec![],
+    });
+
+    let mut double_adder_methods = HashMap::new();
+    for (name, desc) in [
+        ("<init>", "()V"),
+        ("add", "(D)V"),
+        ("sum", "()D"),
+        ("sumThenReset", "()D"),
+    ] {
+        double_adder_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/atomic/DoubleAdder".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: double_adder_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![("__value".to_string(), "D".to_string())],
+        interfaces: vec![],
+    });
+
+    let mut long_accumulator_methods = HashMap::new();
+    for (name, desc) in [
+        ("<init>", "(Ljava/util/function/LongBinaryOperator;J)V"),
+        ("get", "()J"),
+        ("reset", "()V"),
+        ("getThenReset", "()J"),
+        ("accumulate", "(J)V"),
+    ] {
+        long_accumulator_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/atomic/LongAccumulator".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: long_accumulator_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    let mut double_accumulator_methods = HashMap::new();
+    for (name, desc) in [
+        ("<init>", "(Ljava/util/function/DoubleBinaryOperator;D)V"),
+        ("get", "()D"),
+        ("reset", "()V"),
+        ("getThenReset", "()D"),
+        ("accumulate", "(D)V"),
+    ] {
+        double_accumulator_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/atomic/DoubleAccumulator".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: double_accumulator_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    // --- java.util.concurrent.locks ---
+    let mut reentrant_lock_methods = HashMap::new();
+    for (name, desc) in [
+        ("<init>", "()V"),
+        ("<init>", "(Z)V"),
+        ("lock", "()V"),
+        ("unlock", "()V"),
+        ("tryLock", "()Z"),
+        ("isHeldByCurrentThread", "()Z"),
+        ("getHoldCount", "()I"),
+    ] {
+        reentrant_lock_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/locks/ReentrantLock".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: reentrant_lock_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![("__held".to_string(), "I".to_string())],
+        interfaces: vec!["java/util/concurrent/locks/Lock".to_string()],
+    });
+
+    let mut read_write_lock_methods = HashMap::new();
+    for (name, desc) in [
+        ("readLock", "()Ljava/util/concurrent/locks/Lock;"),
+        ("writeLock", "()Ljava/util/concurrent/locks/Lock;"),
+    ] {
+        read_write_lock_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/locks/ReadWriteLock".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: read_write_lock_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    let mut lock_methods = HashMap::new();
+    for (name, desc) in [
+        ("lock", "()V"),
+        ("unlock", "()V"),
+        ("tryLock", "()Z"),
+        ("newCondition", "()Ljava/util/concurrent/locks/Condition;"),
+    ] {
+        lock_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/locks/Lock".to_string(),
+        super_class: None,
+        methods: lock_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    let mut condition_methods = HashMap::new();
+    for (name, desc) in [
+        ("await", "()V"),
+        ("signal", "()V"),
+        ("signalAll", "()V"),
+    ] {
+        condition_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/locks/Condition".to_string(),
+        super_class: None,
+        methods: condition_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    let mut stamped_lock_methods = HashMap::new();
+    for (name, desc) in [
+        ("<init>", "()V"),
+        ("readLock", "()J"),
+        ("writeLock", "()J"),
+        ("tryReadLock", "()J"),
+        ("tryWriteLock", "()J"),
+        ("unlockRead", "(J)V"),
+        ("unlockWrite", "(J)V"),
+        ("unlock", "(J)V"),
+        ("tryConvertToReadLock", "(J)J"),
+        ("tryConvertToWriteLock", "(J)J"),
+        ("isReadLocked", "()Z"),
+        ("isWriteLocked", "()Z"),
+        ("getReadLockCount", "()I"),
+        ("validate", "(J)Z"),
+    ] {
+        stamped_lock_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/locks/StampedLock".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: stamped_lock_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    let mut abstract_ownable_synchronizer_methods = HashMap::new();
+    for (name, desc) in [
+        ("setExclusiveOwnerThread", "(Ljava/lang/Thread;)V"),
+        ("getExclusiveOwnerThread", "()Ljava/lang/Thread;"),
+    ] {
+        abstract_ownable_synchronizer_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/locks/AbstractOwnableSynchronizer".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: abstract_ownable_synchronizer_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    // --- java.util.concurrent ---
+    let mut concurrent_hash_map_methods = HashMap::new();
+    for (name, desc) in [
+        ("<init>", "()V"),
+        ("<init>", "(I)V"),
+        ("<init>", "(IF)V"),
+        ("<init>", "(Ljava/util/Map;)V"),
+        ("size", "()I"),
+        ("isEmpty", "()Z"),
+        ("get", "(Ljava/lang/Object;)Ljava/lang/Object;"),
+        ("put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"),
+        ("putIfAbsent", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"),
+        ("remove", "(Ljava/lang/Object;)Ljava/lang/Object;"),
+        ("containsKey", "(Ljava/lang/Object;)Z"),
+        ("contains", "(Ljava/lang/Object;)Z"),
+        ("clear", "()V"),
+        ("keys", "()Ljava/util/Enumeration;"),
+        ("elements", "()Ljava/util/Enumeration;"),
+    ] {
+        concurrent_hash_map_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/ConcurrentHashMap".to_string(),
+        super_class: Some("java/lang/AbstractMap".to_string()),
+        methods: concurrent_hash_map_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    let mut concurrent_linked_queue_methods = HashMap::new();
+    for (name, desc) in [
+        ("<init>", "()V"),
+        ("<init>", "(Ljava/util/Collection;)V"),
+        ("size", "()I"),
+        ("isEmpty", "()Z"),
+        ("offer", "(Ljava/lang/Object;)Z"),
+        ("poll", "()Ljava/lang/Object;"),
+        ("peek", "()Ljava/lang/Object;"),
+        ("remove", "(Ljava/lang/Object;)Z"),
+        ("contains", "(Ljava/lang/Object;)Z"),
+    ] {
+        concurrent_linked_queue_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/ConcurrentLinkedQueue".to_string(),
+        super_class: Some("java/lang/AbstractQueue".to_string()),
+        methods: concurrent_linked_queue_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec!["java/util/concurrent/BlockingQueue".to_string()],
+    });
+
+    let mut concurrent_linked_deque_methods = HashMap::new();
+    for (name, desc) in [
+        ("<init>", "()V"),
+        ("<init>", "(Ljava/util/Collection;)V"),
+        ("addFirst", "(Ljava/lang/Object;)V"),
+        ("addLast", "(Ljava/lang/Object;)V"),
+        ("offerFirst", "(Ljava/lang/Object;)Z"),
+        ("offerLast", "(Ljava/lang/Object;)Z"),
+        ("pollFirst", "()Ljava/lang/Object;"),
+        ("pollLast", "()Ljava/lang/Object;"),
+        ("peekFirst", "()Ljava/lang/Object;"),
+        ("peekLast", "()Ljava/lang/Object;"),
+        ("removeFirst", "()Ljava/lang/Object;"),
+        ("removeLast", "()Ljava/lang/Object;"),
+        ("size", "()I"),
+        ("isEmpty", "()Z"),
+    ] {
+        concurrent_linked_deque_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/ConcurrentLinkedDeque".to_string(),
+        super_class: Some("java/lang/AbstractQueue".to_string()),
+        methods: concurrent_linked_deque_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    let mut copy_on_write_array_list_methods = HashMap::new();
+    for (name, desc) in [
+        ("<init>", "()V"),
+        ("<init>", "([Ljava/lang/Object;)V"),
+        ("<init>", "(Ljava/util/Collection;)V"),
+        ("size", "()I"),
+        ("isEmpty", "()Z"),
+        ("get", "(I)Ljava/lang/Object;"),
+        ("set", "(ILjava/lang/Object;)Ljava/lang/Object;"),
+        ("add", "(ILjava/lang/Object;)V"),
+        ("add", "(Ljava/lang/Object;)Z"),
+        ("remove", "(Ljava/lang/Object;)Z"),
+        ("remove", "(I)Ljava/lang/Object;"),
+        ("contains", "(Ljava/lang/Object;)Z"),
+        ("clear", "()V"),
+    ] {
+        copy_on_write_array_list_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/CopyOnWriteArrayList".to_string(),
+        super_class: Some("java/lang/AbstractList".to_string()),
+        methods: copy_on_write_array_list_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    // --- Synchronizers ---
+    let mut semaphore_methods = HashMap::new();
+    for (name, desc) in [
+        ("<init>", "(I)V"),
+        ("<init>", "(IZ)V"),
+        ("acquire", "()V"),
+        ("acquire", "(I)V"),
+        ("release", "()V"),
+        ("release", "(I)V"),
+        ("tryAcquire", "()Z"),
+        ("tryAcquire", "(I)Z"),
+        ("drainPermits", "()I"),
+        ("availablePermits", "()I"),
+    ] {
+        semaphore_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/Semaphore".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: semaphore_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![("__permits".to_string(), "I".to_string())],
+        interfaces: vec![],
+    });
+
+    let mut count_down_latch_methods = HashMap::new();
+    for (name, desc) in [
+        ("<init>", "(J)V"),
+        ("await", "()V"),
+        ("await", "(JLjava/util/concurrent/TimeUnit;)Z"),
+        ("countDown", "()V"),
+        ("getCount", "()J"),
+    ] {
+        count_down_latch_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/CountDownLatch".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: count_down_latch_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![("__count".to_string(), "J".to_string())],
+        interfaces: vec![],
+    });
+
+    let mut cyclic_barrier_methods = HashMap::new();
+    for (name, desc) in [
+        ("<init>", "(I)V"),
+        ("<init>", "(ILjava/lang/Runnable;)V"),
+        ("await", "()I"),
+        ("await", "(JLjava/util/concurrent/TimeUnit;)I"),
+        ("reset", "()V"),
+        ("getNumberWaiting", "()I"),
+        ("isBroken", "()Z"),
+    ] {
+        cyclic_barrier_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/CyclicBarrier".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: cyclic_barrier_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![("__parties".to_string(), "I".to_string())],
+        interfaces: vec![],
+    });
+
+    let mut exchanger_methods = HashMap::new();
+    for (name, desc) in [
+        ("<init>", "()V"),
+        ("exchange", "(Ljava/lang/Object;)Ljava/lang/Object;"),
+        ("exchange", "(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;"),
+    ] {
+        exchanger_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/Exchanger".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: exchanger_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    let mut phaser_methods = HashMap::new();
+    for (name, desc) in [
+        ("<init>", "()V"),
+        ("<init>", "(I)V"),
+        ("<init>", "(Ljava/util/concurrent/Phaser;)V"),
+        ("register", "()I"),
+        ("arrive", "()I"),
+        ("arriveAndAwaitAdvance", "()I"),
+        ("arriveAndDeregister", "()I"),
+        ("bulkRegister", "(I)I"),
+        ("getPhase", "()I"),
+        ("getRegisteredParties", "()I"),
+        ("getArrivedParties", "()I"),
+        ("getUnarrivedParties", "()I"),
+        ("forceTermination", "()V"),
+    ] {
+        phaser_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/Phaser".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: phaser_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    // --- BlockingQueue implementations ---
+    let mut array_blocking_queue_methods = HashMap::new();
+    for (name, desc) in [
+        ("<init>", "(I)V"),
+        ("<init>", "(ILZ)V"),
+        ("<init>", "(ILZLjava/util/Collection;)V"),
+        ("offer", "(Ljava/lang/Object;)Z"),
+        ("poll", "()Ljava/lang/Object;"),
+        ("peek", "()Ljava/lang/Object;"),
+        ("size", "()I"),
+        ("isEmpty", "()Z"),
+        ("remainingCapacity", "()I"),
+        ("clear", "()V"),
+        ("contains", "(Ljava/lang/Object;)Z"),
+    ] {
+        array_blocking_queue_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/ArrayBlockingQueue".to_string(),
+        super_class: Some("java/lang/AbstractQueue".to_string()),
+        methods: array_blocking_queue_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec!["java/util/concurrent/BlockingQueue".to_string()],
+    });
+
+    let mut linked_blocking_queue_methods = HashMap::new();
+    for (name, desc) in [
+        ("<init>", "()V"),
+        ("<init>", "(I)V"),
+        ("<init>", "(Ljava/util/Collection;)V"),
+        ("offer", "(Ljava/lang/Object;)Z"),
+        ("offer", "(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z"),
+        ("poll", "()Ljava/lang/Object;"),
+        ("poll", "(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;"),
+        ("take", "()Ljava/lang/Object;"),
+        ("peek", "()Ljava/lang/Object;"),
+        ("size", "()I"),
+        ("isEmpty", "()Z"),
+        ("remainingCapacity", "()I"),
+        ("clear", "()V"),
+        ("contains", "(Ljava/lang/Object;)Z"),
+    ] {
+        linked_blocking_queue_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/LinkedBlockingQueue".to_string(),
+        super_class: Some("java/lang/AbstractQueue".to_string()),
+        methods: linked_blocking_queue_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec!["java/util/concurrent/BlockingQueue".to_string()],
+    });
+
+    let mut linked_blocking_deque_methods = HashMap::new();
+    for (name, desc) in [
+        ("<init>", "()V"),
+        ("<init>", "(I)V"),
+        ("<init>", "(Ljava/util/Collection;)V"),
+        ("offerFirst", "(Ljava/lang/Object;)Z"),
+        ("offerLast", "(Ljava/lang/Object;)Z"),
+        ("offer", "(Ljava/lang/Object;)Z"),
+        ("offer", "(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z"),
+        ("pollFirst", "()Ljava/lang/Object;"),
+        ("pollLast", "()Ljava/lang/Object;"),
+        ("poll", "()Ljava/lang/Object;"),
+        ("poll", "(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;"),
+        ("takeFirst", "()Ljava/lang/Object;"),
+        ("takeLast", "()Ljava/lang/Object;"),
+        ("peekFirst", "()Ljava/lang/Object;"),
+        ("peekLast", "()Ljava/lang/Object;"),
+        ("size", "()I"),
+        ("isEmpty", "()Z"),
+        ("clear", "()V"),
+        ("contains", "(Ljava/lang/Object;)Z"),
+    ] {
+        linked_blocking_deque_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/LinkedBlockingDeque".to_string(),
+        super_class: Some("java/lang/AbstractDeque".to_string()),
+        methods: linked_blocking_deque_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec!["java/util/concurrent/BlockingDeque".to_string()],
+    });
+
+    let mut synchronous_queue_methods = HashMap::new();
+    for (name, desc) in [
+        ("<init>", "()V"),
+        ("<init>", "(Z)V"),
+        ("offer", "(Ljava/lang/Object;)Z"),
+        ("offer", "(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z"),
+        ("poll", "()Ljava/lang/Object;"),
+        ("poll", "(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;"),
+        ("isEmpty", "()Z"),
+        ("size", "()I"),
+    ] {
+        synchronous_queue_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/SynchronousQueue".to_string(),
+        super_class: Some("java/lang/AbstractQueue".to_string()),
+        methods: synchronous_queue_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec!["java/util/concurrent/BlockingQueue".to_string()],
+    });
+
+    let mut priority_blocking_queue_methods = HashMap::new();
+    for (name, desc) in [
+        ("<init>", "()V"),
+        ("<init>", "(I)V"),
+        ("<init>", "(Ljava/util/Collection;)V"),
+        ("<init>", "(ILjava/util/Comparator;)V"),
+        ("offer", "(Ljava/lang/Object;)Z"),
+        ("offer", "(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z"),
+        ("poll", "()Ljava/lang/Object;"),
+        ("poll", "(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;"),
+        ("take", "()Ljava/lang/Object;"),
+        ("peek", "()Ljava/lang/Object;"),
+        ("size", "()I"),
+        ("isEmpty", "()Z"),
+        ("clear", "()V"),
+        ("contains", "(Ljava/lang/Object;)Z"),
+    ] {
+        priority_blocking_queue_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/PriorityBlockingQueue".to_string(),
+        super_class: Some("java/lang/AbstractQueue".to_string()),
+        methods: priority_blocking_queue_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec!["java/util/concurrent/BlockingQueue".to_string()],
+    });
+
+    let mut delay_queue_methods = HashMap::new();
+    for (name, desc) in [
+        ("<init>", "()V"),
+        ("<init>", "(Ljava/util/Collection;)V"),
+        ("offer", "(Ljava/lang/Object;)Z"),
+        ("offer", "(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z"),
+        ("poll", "()Ljava/lang/Object;"),
+        ("poll", "(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;"),
+        ("take", "()Ljava/lang/Object;"),
+        ("peek", "()Ljava/lang/Object;"),
+        ("size", "()I"),
+        ("isEmpty", "()Z"),
+        ("clear", "()V"),
+        ("contains", "(Ljava/lang/Object;)Z"),
+    ] {
+        delay_queue_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/DelayQueue".to_string(),
+        super_class: Some("java/lang/AbstractQueue".to_string()),
+        methods: delay_queue_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec!["java/util/concurrent/BlockingQueue".to_string()],
+    });
+
+    // --- Queue interfaces ---
+    let mut blocking_queue_methods = HashMap::new();
+    for (name, desc) in [
+        ("put", "(Ljava/lang/Object;)V"),
+        ("offer", "(Ljava/lang/Object;)Z"),
+        ("offer", "(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z"),
+        ("take", "()Ljava/lang/Object;"),
+        ("poll", "(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;"),
+    ] {
+        blocking_queue_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/BlockingQueue".to_string(),
+        super_class: None,
+        methods: blocking_queue_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/BlockingDeque".to_string(),
+        super_class: None,
+        methods: HashMap::new(),
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    // --- Thread pools and executors ---
+    let mut executor_service_methods = HashMap::new();
+    for (name, desc) in [
+        ("shutdown", "()V"),
+        ("shutdownNow", "()Ljava/util/List;"),
+        ("isShutdown", "()Z"),
+        ("isTerminated", "()Z"),
+        ("awaitTermination", "(JLjava/util/concurrent/TimeUnit;)Z"),
+        ("submit", "(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;"),
+        ("submit", "(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/Future;"),
+        ("submit", "(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/Future;"),
+    ] {
+        executor_service_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/ExecutorService".to_string(),
+        super_class: None,
+        methods: executor_service_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec!["java/util/concurrent/Executor".to_string()],
+    });
+
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/Executor".to_string(),
+        super_class: None,
+        methods: {
+            let mut m = HashMap::new();
+            m.insert(("execute".to_string(), "(Ljava/lang/Runnable;)V".to_string()), ClassMethod::Native);
+            m
+        },
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    let mut thread_pool_executor_methods = HashMap::new();
+    for (name, desc) in [
+        ("<init>", "(ILjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;)V"),
+        ("<init>", "(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;)V"),
+        ("<init>", "(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;Ljava/lang/ThreadFactory;)V"),
+        ("<init>", "(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;Ljava/util/concurrent/RejectedExecutionHandler;)V"),
+        ("<init>", "(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;Ljava/lang/ThreadFactory;Ljava/util/concurrent/RejectedExecutionHandler;)V"),
+        ("execute", "(Ljava/lang/Runnable;)V"),
+        ("shutdown", "()V"),
+        ("shutdownNow", "()Ljava/util/List;"),
+        ("isShutdown", "()Z"),
+        ("isTerminated", "()Z"),
+        ("isTerminating", "()Z"),
+        ("awaitTermination", "(JLjava/util/concurrent/TimeUnit;)Z"),
+        ("submit", "(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;"),
+        ("getPoolSize", "()I"),
+        ("getActiveCount", "()I"),
+        ("getTaskCount", "()J"),
+        ("getCompletedTaskCount", "()J"),
+        ("remove", "(Ljava/lang/Runnable;)Z"),
+        ("purge", "()V"),
+    ] {
+        thread_pool_executor_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/ThreadPoolExecutor".to_string(),
+        super_class: Some("java/util/concurrent/AbstractExecutorService".to_string()),
+        methods: thread_pool_executor_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    let mut abstract_executor_service_methods = HashMap::new();
+    for (name, desc) in [
+        ("submit", "(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;"),
+        ("submit", "(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/Future;"),
+        ("submit", "(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/Future;"),
+        ("invokeAll", "(Ljava/util/Collection;)Ljava/util/List;"),
+        ("invokeAll", "(Ljava/util/Collection;JLjava/util/concurrent/TimeUnit;)Ljava/util/List;"),
+        ("invokeAny", "(Ljava/util/Collection;)Ljava/lang/Object;"),
+        ("invokeAny", "(Ljava/util/Collection;JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;"),
+    ] {
+        abstract_executor_service_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/AbstractExecutorService".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: abstract_executor_service_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec!["java/util/concurrent/ExecutorService".to_string()],
+    });
+
+    let mut executors_methods = HashMap::new();
+    for (name, desc) in [
+        ("newSingleThreadExecutor", "()Ljava/util/concurrent/ExecutorService;"),
+        ("newFixedThreadPool", "(I)Ljava/util/concurrent/ExecutorService;"),
+        ("newCachedThreadPool", "()Ljava/util/concurrent/ExecutorService;"),
+        ("newSingleThreadScheduledExecutor", "()Ljava/util/concurrent/ScheduledExecutorService;"),
+        ("newScheduledThreadPool", "(I)Ljava/util/concurrent/ScheduledExecutorService;"),
+    ] {
+        executors_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/Executors".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: executors_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    // --- ScheduledExecutorService ---
+    let mut scheduled_executor_service_methods = HashMap::new();
+    for (name, desc) in [
+        ("schedule", "(Ljava/lang/Runnable;JLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/ScheduledFuture;"),
+        ("schedule", "(Ljava/util/concurrent/Callable;JLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/ScheduledFuture;"),
+        ("scheduleAtFixedRate", "(Ljava/lang/Runnable;JJLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/ScheduledFuture;"),
+        ("scheduleWithFixedDelay", "(Ljava/lang/Runnable;JJLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/ScheduledFuture;"),
+    ] {
+        scheduled_executor_service_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/ScheduledExecutorService".to_string(),
+        super_class: None,
+        methods: scheduled_executor_service_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec!["java/util/concurrent/ExecutorService".to_string()],
+    });
+
+    let mut scheduled_future_methods = HashMap::new();
+    scheduled_future_methods.insert(("getDelay".to_string(), "(Ljava/util/concurrent/TimeUnit;)J".to_string()), ClassMethod::Native);
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/ScheduledFuture".to_string(),
+        super_class: None,
+        methods: scheduled_future_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec!["java/util/concurrent/Delayed".to_string()],
+    });
+
+    let mut delayed_methods = HashMap::new();
+    delayed_methods.insert(("getDelay".to_string(), "(Ljava/util/concurrent/TimeUnit;)J".to_string()), ClassMethod::Native);
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/Delayed".to_string(),
+        super_class: None,
+        methods: delayed_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec!["java/lang/Comparable".to_string()],
+    });
+
+    // --- ForkJoin ---
+    let mut fork_join_pool_methods = HashMap::new();
+    for (name, desc) in [
+        ("<init>", "(I)V"),
+        ("<init>", "(ILjava/util/concurrent/ForkJoinPool$Factory;)V"),
+        ("<init>", "(ILjava/util/concurrent/ForkJoinPool$Factory;Ljava/util/concurrent/RejectedExecutionHandler;Z)V"),
+        ("submit", "(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;"),
+        ("submit", "(Ljava/util/concurrent/ForkJoinTask;)Ljava/util/concurrent/ForkJoinTask;"),
+        ("invoke", "(Ljava/util/concurrent/ForkJoinTask;)Ljava/lang/Object;"),
+        ("execute", "(Ljava/lang/Runnable;)V"),
+        ("shutdown", "()V"),
+        ("shutdownNow", "()Ljava/util/List;"),
+        ("isShutdown", "()Z"),
+        ("isTerminated", "()Z"),
+        ("isTerminating", "()Z"),
+        ("awaitTermination", "(JLjava/util/concurrent/TimeUnit;)Z"),
+        ("getPoolSize", "()I"),
+        ("getActiveThreadCount", "()I"),
+        ("getStealCount", "()J"),
+        ("getQueuedTaskCount", "()J"),
+        ("getQueuedSubmissionCount", "()I"),
+        ("hasQueuedSubmissions", "()Z"),
+        ("commonPool", "()Ljava/util/concurrent/ForkJoinPool;"),
+    ] {
+        fork_join_pool_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/ForkJoinPool".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: fork_join_pool_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    let mut fork_join_task_methods = HashMap::new();
+    for (name, desc) in [
+        ("fork", "()Ljava/util/concurrent/ForkJoinTask;"),
+        ("join", "()Ljava/lang/Object;"),
+        ("invoke", "()Ljava/lang/Object;"),
+        ("cancel", "(Z)Z"),
+        ("isDone", "()Z"),
+        ("isCompletedNormally", "()Z"),
+        ("isCompletedAbnormally", "()Z"),
+        ("isCancelled", "()Z"),
+        ("quietlyJoin", "()V"),
+        ("quietlyFork", "()V"),
+        ("get", "()Ljava/lang/Object;"),
+        ("get", "(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;"),
+    ] {
+        fork_join_task_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/ForkJoinTask".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: fork_join_task_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec!["java/util/concurrent/Future".to_string()],
+    });
+
+    let mut counted_completer_methods = HashMap::new();
+    for (name, desc) in [
+        ("compute", "()V"),
+        ("onCompletion", "(Ljava/util/concurrent/CountedCompleter;)V"),
+        ("getRawResult", "()Ljava/lang/Object;"),
+    ] {
+        counted_completer_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/CountedCompleter".to_string(),
+        super_class: Some("java/util/concurrent/ForkJoinTask".to_string()),
+        methods: counted_completer_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    let mut recursive_task_methods = HashMap::new();
+    for (name, desc) in [
+        ("compute", "()Ljava/lang/Object;"),
+        ("getRawResult", "()Ljava/lang/Object;"),
+    ] {
+        recursive_task_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/RecursiveTask".to_string(),
+        super_class: Some("java/util/concurrent/ForkJoinTask".to_string()),
+        methods: recursive_task_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    let mut recursive_action_methods = HashMap::new();
+    for (name, desc) in [
+        ("compute", "()V"),
+        ("getRawResult", "()Ljava/lang/Object;"),
+    ] {
+        recursive_action_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/RecursiveAction".to_string(),
+        super_class: Some("java/util/concurrent/ForkJoinTask".to_string()),
+        methods: recursive_action_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    // --- Futures ---
+    let mut future_methods = HashMap::new();
+    for (name, desc) in [
+        ("get", "()Ljava/lang/Object;"),
+        ("get", "(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;"),
+        ("isDone", "()Z"),
+        ("isCancelled", "()Z"),
+        ("cancel", "(Z)Z"),
+    ] {
+        future_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/Future".to_string(),
+        super_class: None,
+        methods: future_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    let mut completable_future_methods = HashMap::new();
+    for (name, desc) in [
+        ("<init>", "()V"),
+        ("get", "()Ljava/lang/Object;"),
+        ("get", "(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;"),
+        ("isDone", "()Z"),
+        ("isCancelled", "()Z"),
+        ("cancel", "(Z)Z"),
+        ("complete", "(Ljava/lang/Object;)Z"),
+        ("completedFuture", "(Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;"),
+        ("runAsync", "(Ljava/lang/Runnable;)Ljava/util/concurrent/CompletableFuture;"),
+        ("supplyAsync", "(Ljava/util/function/Supplier;)Ljava/util/concurrent/CompletableFuture;"),
+        ("thenApply", "(Ljava/util/function/Function;)Ljava/util/concurrent/CompletableFuture;"),
+        ("thenApplyAsync", "(Ljava/util/function/Function;)Ljava/util/concurrent/CompletableFuture;"),
+        ("thenAccept", "(Ljava/util/function/Consumer;)Ljava/util/concurrent/CompletableFuture;"),
+        ("thenRun", "(Ljava/lang/Runnable;)Ljava/util/concurrent/CompletableFuture;"),
+        ("join", "()Ljava/lang/Object;"),
+    ] {
+        completable_future_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/CompletableFuture".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: completable_future_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec!["java/util/concurrent/Future".to_string(), "java/util/concurrent/CompletionStage".to_string()],
+    });
+
+    let mut completion_stage_methods = HashMap::new();
+    for (name, desc) in [
+        ("thenApply", "(Ljava/util/function/Function;)Ljava/util/concurrent/CompletionStage;"),
+        ("thenApplyAsync", "(Ljava/util/function/Function;)Ljava/util/concurrent/CompletionStage;"),
+        ("thenAccept", "(Ljava/util/function/Consumer;)Ljava/util/concurrent/CompletionStage;"),
+        ("thenAcceptAsync", "(Ljava/util/function/Consumer;)Ljava/util/concurrent/CompletionStage;"),
+        ("thenRun", "(Ljava/lang/Runnable;)Ljava/util/concurrent/CompletionStage;"),
+        ("thenRunAsync", "(Ljava/lang/Runnable;)Ljava/util/concurrent/CompletionStage;"),
+        ("thenCombine", "(Ljava/util/concurrent/CompletionStage;Ljava/util/function/BiFunction;)Ljava/util/concurrent/CompletionStage;"),
+        ("thenCompose", "(Ljava/util/function/Function;)Ljava/util/concurrent/CompletionStage;"),
+        ("exceptionally", "(Ljava/util/function/Function;)Ljava/util/concurrent/CompletionStage;"),
+        ("whenComplete", "(Ljava/util/function/BiConsumer;)Ljava/util/concurrent/CompletionStage;"),
+        ("handle", "(Ljava/util/function/BiFunction;)Ljava/util/concurrent/CompletionStage;"),
+    ] {
+        completion_stage_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/CompletionStage".to_string(),
+        super_class: None,
+        methods: completion_stage_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    // --- TimeUnit ---
+    let mut time_unit_methods = HashMap::new();
+    for (name, desc) in [
+        ("toNanos", "(J)J"),
+        ("toMicros", "(J)J"),
+        ("toMillis", "(J)J"),
+        ("toSeconds", "(J)J"),
+        ("sleep", "(J)V"),
+    ] {
+        time_unit_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/TimeUnit".to_string(),
+        super_class: Some("java/lang/Enum".to_string()),
+        methods: time_unit_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    // --- Concurrent collection views ---
+    let mut concurrent_skip_list_map_methods = HashMap::new();
+    for (name, desc) in [
+        ("<init>", "()V"),
+        ("<init>", "(Ljava/util/Comparator;)V"),
+        ("<init>", "(Ljava/util/Map;)V"),
+        ("size", "()I"),
+        ("isEmpty", "()Z"),
+        ("get", "(Ljava/lang/Object;)Ljava/lang/Object;"),
+        ("put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"),
+        ("remove", "(Ljava/lang/Object;)Ljava/lang/Object;"),
+        ("containsKey", "(Ljava/lang/Object;)Z"),
+        ("clear", "()V"),
+        ("firstKey", "()Ljava/lang/Object;"),
+        ("lastKey", "()Ljava/lang/Object;"),
+    ] {
+        concurrent_skip_list_map_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/ConcurrentSkipListMap".to_string(),
+        super_class: Some("java/lang/AbstractMap".to_string()),
+        methods: concurrent_skip_list_map_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    let mut concurrent_skip_list_set_methods = HashMap::new();
+    for (name, desc) in [
+        ("<init>", "()V"),
+        ("<init>", "(Ljava/util/Comparator;)V"),
+        ("<init>", "(Ljava/util/Collection;)V"),
+        ("<init>", "(Ljava/util/SortedSet;)V"),
+        ("size", "()I"),
+        ("isEmpty", "()Z"),
+        ("add", "(Ljava/lang/Object;)Z"),
+        ("remove", "(Ljava/lang/Object;)Z"),
+        ("contains", "(Ljava/lang/Object;)Z"),
+        ("clear", "()V"),
+        ("first", "()Ljava/lang/Object;"),
+        ("last", "()Ljava/lang/Object;"),
+    ] {
+        concurrent_skip_list_set_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/ConcurrentSkipListSet".to_string(),
+        super_class: Some("java/lang/AbstractSet".to_string()),
+        methods: concurrent_skip_list_set_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    let mut key_set_view_methods = HashMap::new();
+    for (name, desc) in [
+        ("<init>", "(Ljava/util/concurrent/ConcurrentHashMap;Ljava/lang/Object;)V"),
+        ("size", "()I"),
+        ("isEmpty", "()Z"),
+        ("contains", "(Ljava/lang/Object;)Z"),
+        ("add", "(Ljava/lang/Object;)Z"),
+        ("remove", "(Ljava/lang/Object;)Z"),
+        ("getMap", "()Ljava/util/concurrent/ConcurrentHashMap;"),
+    ] {
+        key_set_view_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/ConcurrentHashMap$KeySetView".to_string(),
+        super_class: Some("java/lang/AbstractSet".to_string()),
+        methods: key_set_view_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    // --- SubmissionPublisher (Flow) ---
+    let mut submission_publisher_methods = HashMap::new();
+    for (name, desc) in [
+        ("<init>", "()V"),
+        ("<init>", "(Ljava/util/concurrent/ExecutorService;I)V"),
+        ("submit", "(Ljava/lang/Object;)I"),
+        ("offer", "(Ljava/lang/Object;Ljava/util/concurrent/TimeUnit;)I"),
+        ("close", "()V"),
+        ("isClosed", "()Z"),
+        ("hasSubscribers", "()Z"),
+        ("getSubscriberCount", "()I"),
+    ] {
+        submission_publisher_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/SubmissionPublisher".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: submission_publisher_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec!["java/util/concurrent/Flow$Publisher".to_string()],
+    });
+
+    let mut flow_subscriber_methods = HashMap::new();
+    for (name, desc) in [
+        ("onNext", "(Ljava/lang/Object;)V"),
+        ("onError", "(Ljava/lang/Throwable;)V"),
+        ("onComplete", "()V"),
+        ("onSubscribe", "(Ljava/util/concurrent/Flow$Subscription;)V"),
+    ] {
+        flow_subscriber_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/Flow$Subscriber".to_string(),
+        super_class: None,
+        methods: flow_subscriber_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    let mut flow_subscription_methods = HashMap::new();
+    for (name, desc) in [
+        ("request", "(J)V"),
+        ("cancel", "()V"),
+    ] {
+        flow_subscription_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/Flow$Subscription".to_string(),
+        super_class: None,
+        methods: flow_subscription_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    let mut flow_processor_methods = HashMap::new();
+    for (name, desc) in [
+        ("onNext", "(Ljava/lang/Object;)V"),
+        ("onError", "(Ljava/lang/Throwable;)V"),
+        ("onComplete", "()V"),
+        ("onSubscribe", "(Ljava/util/concurrent/Flow$Subscription;)V"),
+    ] {
+        flow_processor_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/Flow$Processor".to_string(),
+        super_class: None,
+        methods: flow_processor_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec!["java/util/concurrent/Flow$Subscriber".to_string(), "java/util/concurrent/Flow$Publisher".to_string()],
+    });
+
+    let mut flow_publisher_methods = HashMap::new();
+    flow_publisher_methods.insert(("subscribe".to_string(), "(Ljava/util/concurrent/Flow$Subscriber;)V".to_string()), ClassMethod::Native);
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/Flow$Publisher".to_string(),
+        super_class: None,
+        methods: flow_publisher_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    // --- Callable and ThreadFactory ---
+    let mut callable_methods = HashMap::new();
+    callable_methods.insert(("call".to_string(), "()Ljava/lang/Object;".to_string()), ClassMethod::Native);
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/Callable".to_string(),
+        super_class: None,
+        methods: callable_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    let mut thread_factory_methods = HashMap::new();
+    thread_factory_methods.insert(("newThread".to_string(), "(Ljava/lang/Runnable;)Ljava/lang/Thread;".to_string()), ClassMethod::Native);
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/ThreadFactory".to_string(),
+        super_class: None,
+        methods: thread_factory_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    let mut rejected_execution_handler_methods = HashMap::new();
+    rejected_execution_handler_methods.insert(("rejectedExecution".to_string(), "(Ljava/lang/Runnable;Ljava/util/concurrent/ThreadPoolExecutor;)V".to_string()), ClassMethod::Native);
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/RejectedExecutionHandler".to_string(),
+        super_class: None,
+        methods: rejected_execution_handler_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+
+    // --- VarHandle ---
+    let mut varhandle_methods = HashMap::new();
+    for (name, desc) in [
+        ("get", "(Ljava/lang/Object;)Ljava/lang/Object;"),
+        ("set", "(Ljava/lang/Object;Ljava/lang/Object;)V"),
+        ("compareAndSet", "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Z"),
+        ("weakCompareAndSet", "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Z"),
+        ("getAndSet", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"),
+    ] {
+        varhandle_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/concurrent/atomic/VarHandle".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: varhandle_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        interfaces: vec![],
+    });
+}

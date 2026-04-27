@@ -1,10 +1,19 @@
 pub(super) mod bootstrap;
+pub(super) mod bootstrap_reflect;
+pub(super) mod bootstrap_regex;
+pub(super) mod bootstrap_text;
+pub(super) mod bootstrap_time;
 pub(super) mod format;
 pub(super) mod helpers;
 pub(super) mod invoke;
 pub(super) mod invoke_other;
 pub(super) mod invoke_nio;
+pub(super) mod invoke_reflect;
+pub(super) mod invoke_regex;
+pub(super) mod invoke_text;
+pub(super) mod invoke_time;
 pub(super) mod invoke_util;
+pub(super) mod invoke_concurrent;
 
 use std::collections::HashMap;
 
@@ -22,6 +31,11 @@ impl Vm {
         bootstrap::bootstrap_java_io_writer(self);
         bootstrap::bootstrap_java_util(self);
         bootstrap::bootstrap_java_nio(self);
+        bootstrap::bootstrap_java_util_concurrent(self);
+        bootstrap_reflect::bootstrap_java_lang_reflect(self);
+        bootstrap_regex::bootstrap_java_util_regex(self);
+        bootstrap_text::bootstrap_java_text(self);
+        bootstrap_time::bootstrap_java_time(self);
         bootstrap::bootstrap_other(self);
     }
 
@@ -65,6 +79,46 @@ impl Vm {
         }
 
         let result = invoke_nio::invoke_nio(self, class_name, method_name, descriptor, args);
+        match result {
+            Ok(Some(v)) => return Ok(Some(v)),
+            Ok(None) => return Ok(None),
+            Err(e) if is_not_handled(&e) => {}
+            Err(e) => return Err(e),
+        }
+
+        let result = invoke_concurrent::invoke_concurrent(self, class_name, method_name, descriptor, args);
+        match result {
+            Ok(Some(v)) => return Ok(Some(v)),
+            Ok(None) => return Ok(None),
+            Err(e) if is_not_handled(&e) => {}
+            Err(e) => return Err(e),
+        }
+
+        let result = invoke_text::invoke_text(self, class_name, method_name, descriptor, args);
+        match result {
+            Ok(Some(v)) => return Ok(Some(v)),
+            Ok(None) => return Ok(None),
+            Err(e) if is_not_handled(&e) => {}
+            Err(e) => return Err(e),
+        }
+
+        let result = invoke_regex::invoke_regex(self, class_name, method_name, descriptor, args);
+        match result {
+            Ok(Some(v)) => return Ok(Some(v)),
+            Ok(None) => return Ok(None),
+            Err(e) if is_not_handled(&e) => {}
+            Err(e) => return Err(e),
+        }
+
+        let result = invoke_time::invoke_time(self, class_name, method_name, descriptor, args);
+        match result {
+            Ok(Some(v)) => return Ok(Some(v)),
+            Ok(None) => return Ok(None),
+            Err(e) if is_not_handled(&e) => {}
+            Err(e) => return Err(e),
+        }
+
+        let result = invoke_reflect::invoke_reflect(self, class_name, method_name, descriptor, args);
         match result {
             Ok(Some(v)) => return Ok(Some(v)),
             Ok(None) => return Ok(None),

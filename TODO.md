@@ -63,18 +63,18 @@ Goal: run code that uses the JDK without `ClassNotFound`, without shipping all o
 - [x] `OpenOption`, `CopyOption` ✓ marker interfaces
 
 ### 12.5 Concurrency (`java.util.concurrent`)
-- [ ] `ExecutorService`, `ThreadPoolExecutor`, `Executors`, `Future`, `CompletableFuture`
-- [ ] `ConcurrentHashMap`, `ConcurrentLinkedQueue`, `CopyOnWriteArrayList`
-- [ ] `AtomicInteger`, `AtomicLong`, `AtomicReference`, `LongAdder`
-- [ ] `ReentrantLock`, `ReadWriteLock`, `Semaphore`, `CountDownLatch`, `CyclicBarrier`
-- [ ] `VarHandle` / `Unsafe`-lite intrinsics that concurrent collections rely on
+- [x] `ExecutorService`, `ThreadPoolExecutor`, `Executors`, `Future`, `CompletableFuture`
+- [x] `ConcurrentHashMap`, `ConcurrentLinkedQueue`, `CopyOnWriteArrayList`
+- [x] `AtomicInteger`, `AtomicLong`, `AtomicReference`, `LongAdder`
+- [x] `ReentrantLock`, `ReadWriteLock`, `Semaphore`, `CountDownLatch`, `CyclicBarrier`
+- [x] `VarHandle` / `Unsafe`-lite intrinsics that concurrent collections rely on
 
 ### 12.6 Text, Regex, Time, Reflection
-- [ ] `java.util.regex.Pattern`, `Matcher` (wrap the Rust `regex` crate, or port a subset)
-- [ ] `java.time` (Instant, Duration, LocalDate, LocalDateTime, ZonedDateTime, Clock)
-- [ ] `java.text.DecimalFormat`, `MessageFormat`, `NumberFormat`
-- [ ] `java.lang.reflect.{Class, Method, Field, Constructor}` backed by `RuntimeClass`
-- [ ] `java.lang.Class` metadata reachable from user code (`getClass()`, `getName()`, literals via `ldc`)
+- [x] `java.util.regex.Pattern`, `Matcher` (wrap the Rust `regex` crate, or port a subset)
+- [x] `java.time` (Instant, Duration, LocalDate, LocalDateTime, ZonedDateTime, Clock)
+- [x] `java.text.DecimalFormat`, `MessageFormat`, `NumberFormat`
+- [x] `java.lang.reflect.{Class, Method, Field, Constructor}` backed by `RuntimeClass`
+- [x] `java.lang.Class` metadata reachable from user code (`getClass()`, `getName()`, literals via `ldc`)
 
 ### 12.7 Build Story
 - [ ] Decide how classes are packaged (embedded in the binary via `include_bytes!`, sidecar `jvm-rs-stdlib.jar`, or lazy-download)

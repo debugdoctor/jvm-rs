@@ -1218,19 +1218,10 @@ fn collect_garbage(&mut self, thread: &Thread) {
                 }
 Opcode::Pop => execute_pop(thread)?,
                 Opcode::Pop2 => {
-                    thread.current_frame_mut().pop()?;
-                    thread.current_frame_mut().pop()?;
+                    let _ = thread.current_frame_mut().pop()?;
+                    let _ = thread.current_frame_mut().pop()?;
                 }
                 Opcode::Dup => execute_dup(thread)?,
-                Opcode::Pop2 => {
-                    let _ = thread.current_frame_mut().pop()?;
-                    let _ = thread.current_frame_mut().pop()?;
-                }
-                Opcode::Dup => {
-                    let value = thread.current_frame_mut().pop()?;
-                    thread.current_frame_mut().push(value)?;
-                    thread.current_frame_mut().push(value)?;
-                }
                 Opcode::DupX1 => {
                     let top = thread.current_frame_mut().pop()?;
                     let below = thread.current_frame_mut().pop()?;

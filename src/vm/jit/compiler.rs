@@ -1,5 +1,5 @@
 use cranelift::prelude::*;
-use cranelift::codegen::ir::Function;
+use cranelift::codegen::ir::{Function, TrapCode};
 use cranelift_module::Module;
 use cranelift_frontend::Variable;
 
@@ -898,8 +898,11 @@ impl<'a> BytecodeCompiler<'a> {
     }
 
     fn lower_putfield(&mut self) -> Result<(), JitError> {
-        let val = self.pop();
-        let obj = self.pop();
+        let _field_index = ((self.method.code[self.pc_offset + 1] as usize) << 8)
+            | (self.method.code[self.pc_offset + 2] as usize);
+        let _value = self.pop();
+        let _obj = self.pop();
+        self.builder.ins().trap(TrapCode::UnreachableCodeReached);
         Ok(())
     }
 
@@ -998,12 +1001,14 @@ impl<'a> BytecodeCompiler<'a> {
     }
 
     fn lower_monitorenter(&mut self) -> Result<(), JitError> {
-        let obj_ref = self.pop();
+        let _obj_ref = self.pop();
+        self.builder.ins().trap(TrapCode::UnreachableCodeReached);
         Ok(())
     }
 
     fn lower_monitorexit(&mut self) -> Result<(), JitError> {
-        let obj_ref = self.pop();
+        let _obj_ref = self.pop();
+        self.builder.ins().trap(TrapCode::UnreachableCodeReached);
         Ok(())
     }
 

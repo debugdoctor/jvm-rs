@@ -338,51 +338,51 @@ impl<'a> BytecodeCompiler<'a> {
 
     fn lower_istore(&mut self) -> Result<(), JitError> {
         let index = self.method.code[self.pc_offset + 1] as usize;
-        self.store_local(index)
+        self.store_local(index, types::I32)
     }
 
     fn lower_lstore(&mut self) -> Result<(), JitError> {
         let index = self.method.code[self.pc_offset + 1] as usize;
-        self.store_local(index)
+        self.store_local(index, types::I64)
     }
 
     fn lower_fstore(&mut self) -> Result<(), JitError> {
         let index = self.method.code[self.pc_offset + 1] as usize;
-        self.store_local(index)
+        self.store_local(index, types::F32)
     }
 
     fn lower_dstore(&mut self) -> Result<(), JitError> {
         let index = self.method.code[self.pc_offset + 1] as usize;
-        self.store_local(index)
+        self.store_local(index, types::F64)
     }
 
     fn lower_astore(&mut self) -> Result<(), JitError> {
         let index = self.method.code[self.pc_offset + 1] as usize;
-        self.store_local(index)
+        self.store_local(index, types::I64)
     }
 
-    fn store_local(&mut self, _index: usize) -> Result<(), JitError> {
+    fn store_local(&mut self, _index: usize, _ty: Type) -> Result<(), JitError> {
         Ok(())
     }
 
     fn lower_istore_n(&mut self, n: usize) -> Result<(), JitError> {
-        self.store_local(n)
+        self.store_local(n, types::I32)
     }
 
     fn lower_lstore_n(&mut self, n: usize) -> Result<(), JitError> {
-        self.store_local(n)
+        self.store_local(n, types::I64)
     }
 
     fn lower_fstore_n(&mut self, n: usize) -> Result<(), JitError> {
-        self.store_local(n)
+        self.store_local(n, types::F32)
     }
 
     fn lower_dstore_n(&mut self, n: usize) -> Result<(), JitError> {
-        self.store_local(n)
+        self.store_local(n, types::F64)
     }
 
     fn lower_astore_n(&mut self, n: usize) -> Result<(), JitError> {
-        self.store_local(n)
+        self.store_local(n, types::I64)
     }
 
     fn lower_iastore(&mut self) -> Result<(), JitError> {

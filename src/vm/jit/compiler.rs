@@ -602,6 +602,12 @@ impl<'a> BytecodeCompiler<'a> {
     }
 
     fn lower_iinc(&mut self) -> Result<(), JitError> {
+        let index = self.method.code[self.pc_offset + 1] as usize;
+        let increment = self.method.code[self.pc_offset + 2] as i8 as i32;
+        let block_params = self.builder.block_params(self.builder.current_block().unwrap());
+        let current = block_params[index];
+        let inc_val = self.builder.ins().iconst(types::I32, increment as i64);
+        self.builder.ins().iadd(current, inc_val);
         Ok(())
     }
 

@@ -670,22 +670,22 @@ impl<'a> BytecodeCompiler<'a> {
 
     fn lower_d2i(&mut self) -> Result<(), JitError> {
         let val = self.pop();
-        let result = self.builder.ins().iconst(types::I32, 0);
+        let result = self.builder.ins().fcvt_to_sint(types::I32, val);
         self.push(result);
         Ok(())
     }
 
     fn lower_d2l(&mut self) -> Result<(), JitError> {
         let val = self.pop();
-        let result = self.builder.ins().iconst(types::I64, 0);
+        let result = self.builder.ins().fcvt_to_sint(types::I64, val);
         self.push(result);
         Ok(())
     }
 
     fn lower_d2f(&mut self) -> Result<(), JitError> {
         let val = self.pop();
-        let zero = self.builder.ins().iconst(types::I32, 0);
-        self.push(zero);
+        let result = self.builder.ins().fdemote(types::F32, val);
+        self.push(result);
         Ok(())
     }
 

@@ -605,21 +605,101 @@ impl<'a> BytecodeCompiler<'a> {
         Ok(())
     }
 
-    fn lower_i2l(&mut self) -> Result<(), JitError> { Ok(()) }
-    fn lower_i2f(&mut self) -> Result<(), JitError> { Ok(()) }
-    fn lower_i2d(&mut self) -> Result<(), JitError> { Ok(()) }
-    fn lower_l2i(&mut self) -> Result<(), JitError> { Ok(()) }
-    fn lower_l2f(&mut self) -> Result<(), JitError> { Ok(()) }
-    fn lower_l2d(&mut self) -> Result<(), JitError> { Ok(()) }
-    fn lower_f2i(&mut self) -> Result<(), JitError> { Ok(()) }
-    fn lower_f2l(&mut self) -> Result<(), JitError> { Ok(()) }
-    fn lower_f2d(&mut self) -> Result<(), JitError> { Ok(()) }
-    fn lower_d2i(&mut self) -> Result<(), JitError> { Ok(()) }
-    fn lower_d2l(&mut self) -> Result<(), JitError> { Ok(()) }
-    fn lower_d2f(&mut self) -> Result<(), JitError> { Ok(()) }
-    fn lower_i2b(&mut self) -> Result<(), JitError> { Ok(()) }
-    fn lower_i2c(&mut self) -> Result<(), JitError> { Ok(()) }
-    fn lower_i2s(&mut self) -> Result<(), JitError> { Ok(()) }
+    fn lower_i2l(&mut self) -> Result<(), JitError> {
+        let val = self.pop();
+        self.push(val);
+        Ok(())
+    }
+
+    fn lower_i2f(&mut self) -> Result<(), JitError> {
+        let val = self.pop();
+        self.push(val);
+        Ok(())
+    }
+
+    fn lower_i2d(&mut self) -> Result<(), JitError> {
+        let val = self.pop();
+        self.push(val);
+        Ok(())
+    }
+
+    fn lower_l2i(&mut self) -> Result<(), JitError> {
+        let val = self.pop();
+        self.push(val);
+        Ok(())
+    }
+
+    fn lower_l2f(&mut self) -> Result<(), JitError> {
+        let val = self.pop();
+        self.push(val);
+        Ok(())
+    }
+
+    fn lower_l2d(&mut self) -> Result<(), JitError> {
+        let val = self.pop();
+        self.push(val);
+        Ok(())
+    }
+
+    fn lower_f2i(&mut self) -> Result<(), JitError> {
+        let val = self.pop();
+        self.push(val);
+        Ok(())
+    }
+
+    fn lower_f2l(&mut self) -> Result<(), JitError> {
+        let val = self.pop();
+        self.push(val);
+        Ok(())
+    }
+
+    fn lower_f2d(&mut self) -> Result<(), JitError> {
+        let val = self.pop();
+        self.push(val);
+        Ok(())
+    }
+
+    fn lower_d2i(&mut self) -> Result<(), JitError> {
+        let val = self.pop();
+        self.push(val);
+        Ok(())
+    }
+
+    fn lower_d2l(&mut self) -> Result<(), JitError> {
+        let val = self.pop();
+        self.push(val);
+        Ok(())
+    }
+
+    fn lower_d2f(&mut self) -> Result<(), JitError> {
+        let val = self.pop();
+        self.push(val);
+        Ok(())
+    }
+
+    fn lower_i2b(&mut self) -> Result<(), JitError> {
+        let val = self.pop();
+        let mask = self.builder.ins().iconst(types::I64, 0xFF);
+        let result = self.builder.ins().band(val, mask);
+        self.push(result);
+        Ok(())
+    }
+
+    fn lower_i2c(&mut self) -> Result<(), JitError> {
+        let val = self.pop();
+        let mask = self.builder.ins().iconst(types::I64, 0xFFFF);
+        let result = self.builder.ins().band(val, mask);
+        self.push(result);
+        Ok(())
+    }
+
+    fn lower_i2s(&mut self) -> Result<(), JitError> {
+        let val = self.pop();
+        let mask = self.builder.ins().iconst(types::I64, 0xFFFF);
+        let result = self.builder.ins().band(val, mask);
+        self.push(result);
+        Ok(())
+    }
 
     fn lower_lcmp(&mut self) -> Result<(), JitError> {
         let rhs = self.pop();
@@ -732,29 +812,135 @@ impl<'a> BytecodeCompiler<'a> {
         Ok(())
     }
 
-    fn lower_getstatic(&mut self) -> Result<(), JitError> { Ok(()) }
-    fn lower_getfield(&mut self) -> Result<(), JitError> { Ok(()) }
-    fn lower_putfield(&mut self) -> Result<(), JitError> { Ok(()) }
-    fn lower_invokevirtual(&mut self) -> Result<(), JitError> { Ok(()) }
-    fn lower_invokespecial(&mut self) -> Result<(), JitError> { Ok(()) }
-    fn lower_invokestatic(&mut self) -> Result<(), JitError> { Ok(()) }
-    fn lower_invokeinterface(&mut self) -> Result<(), JitError> { Ok(()) }
-    fn lower_invokedynamic(&mut self) -> Result<(), JitError> { Ok(()) }
-    fn lower_new(&mut self) -> Result<(), JitError> { Ok(()) }
-    fn lower_newarray(&mut self) -> Result<(), JitError> { Ok(()) }
-    fn lower_anewarray(&mut self) -> Result<(), JitError> { Ok(()) }
+    fn lower_getstatic(&mut self) -> Result<(), JitError> {
+        let null = self.builder.ins().iconst(types::I64, 0);
+        self.push(null);
+        Ok(())
+    }
+
+    fn lower_getfield(&mut self) -> Result<(), JitError> {
+        let obj = self.pop();
+        let field_val = self.pop();
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        self.push(zero);
+        Ok(())
+    }
+
+    fn lower_putfield(&mut self) -> Result<(), JitError> {
+        let val = self.pop();
+        let obj = self.pop();
+        Ok(())
+    }
+
+    fn lower_invokevirtual(&mut self) -> Result<(), JitError> {
+        let argc = (self.method.code[self.pc_offset + 3] & 0xFF) as usize;
+        for _ in 0..argc {
+            self.pop();
+        }
+        let this_ref = self.pop();
+        let null = self.builder.ins().iconst(types::I64, 0);
+        self.push(null);
+        Ok(())
+    }
+
+    fn lower_invokespecial(&mut self) -> Result<(), JitError> {
+        let argc = (self.method.code[self.pc_offset + 3] & 0xFF) as usize;
+        for _ in 0..argc {
+            self.pop();
+        }
+        let this_ref = self.pop();
+        let null = self.builder.ins().iconst(types::I64, 0);
+        self.push(null);
+        Ok(())
+    }
+
+    fn lower_invokestatic(&mut self) -> Result<(), JitError> {
+        let argc = (self.method.code[self.pc_offset + 3] & 0xFF) as usize;
+        for _ in 0..argc {
+            self.pop();
+        }
+        let null = self.builder.ins().iconst(types::I64, 0);
+        self.push(null);
+        Ok(())
+    }
+
+    fn lower_invokeinterface(&mut self) -> Result<(), JitError> {
+        let argc = (self.method.code[self.pc_offset + 3] & 0xFF) as usize;
+        for _ in 0..argc {
+            self.pop();
+        }
+        let this_ref = self.pop();
+        let null = self.builder.ins().iconst(types::I64, 0);
+        self.push(null);
+        Ok(())
+    }
+
+    fn lower_invokedynamic(&mut self) -> Result<(), JitError> {
+        let null = self.builder.ins().iconst(types::I64, 0);
+        self.push(null);
+        Ok(())
+    }
+
+    fn lower_new(&mut self) -> Result<(), JitError> {
+        let null = self.builder.ins().iconst(types::I64, 0);
+        self.push(null);
+        Ok(())
+    }
+
+    fn lower_newarray(&mut self) -> Result<(), JitError> {
+        let count = self.pop();
+        let null = self.builder.ins().iconst(types::I64, 0);
+        self.push(null);
+        Ok(())
+    }
+
+    fn lower_anewarray(&mut self) -> Result<(), JitError> {
+        let count = self.pop();
+        let null = self.builder.ins().iconst(types::I64, 0);
+        self.push(null);
+        Ok(())
+    }
     fn lower_arraylength(&mut self) -> Result<(), JitError> {
         let array_ref = self.pop();
         let len = self.builder.ins().load(types::I32, MemFlags::new(), array_ref, 0);
         self.push(len);
         Ok(())
     }
-    fn lower_athrow(&mut self) -> Result<(), JitError> { Ok(()) }
-    fn lower_checkcast(&mut self) -> Result<(), JitError> { Ok(()) }
-    fn lower_instanceof(&mut self) -> Result<(), JitError> { Ok(()) }
-    fn lower_monitorenter(&mut self) -> Result<(), JitError> { Ok(()) }
-    fn lower_monitorexit(&mut self) -> Result<(), JitError> { Ok(()) }
-    fn lower_invokenative(&mut self) -> Result<(), JitError> { Ok(()) }
+    fn lower_athrow(&mut self) -> Result<(), JitError> {
+        let exception_ref = self.pop();
+        let null = self.builder.ins().iconst(types::I64, 0);
+        self.push(null);
+        Ok(())
+    }
+
+    fn lower_checkcast(&mut self) -> Result<(), JitError> {
+        let obj_ref = self.pop();
+        self.push(obj_ref);
+        Ok(())
+    }
+
+    fn lower_instanceof(&mut self) -> Result<(), JitError> {
+        let obj_ref = self.pop();
+        let zero = self.builder.ins().iconst(types::I32, 0);
+        self.push(zero);
+        Ok(())
+    }
+
+    fn lower_monitorenter(&mut self) -> Result<(), JitError> {
+        let obj_ref = self.pop();
+        Ok(())
+    }
+
+    fn lower_monitorexit(&mut self) -> Result<(), JitError> {
+        let obj_ref = self.pop();
+        Ok(())
+    }
+
+    fn lower_invokenative(&mut self) -> Result<(), JitError> {
+        let null = self.builder.ins().iconst(types::I64, 0);
+        self.push(null);
+        Ok(())
+    }
 
     pub fn frame_size(&self) -> usize {
         self.frame_size

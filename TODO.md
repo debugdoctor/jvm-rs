@@ -137,6 +137,11 @@ Goal: beat HotSpot on cold-start and match-within-2x on steady state, via a simp
 - [x] Method-level adaptive compilation driven by invocation + backedge counters
 - [x] Deoptimization: guard failures fall back to the interpreter with correct locals/stack
 
+**Implementation Constraints (JIT):**
+- All `lower_*` methods in `BytecodeCompiler` must generate proper Cranelift IR — no stubs returning `Ok(())` without side effects
+- All optimization passes in `Optimizer` must perform actual transformations — no empty implementations
+- All emitter/machine code generation must produce valid executable code
+
 ### 13.3 Memory Layout
 - [ ] Compressed object references (32-bit indices on a ≤4 GB heap) — already mostly the case via `Reference::Heap(u32)`; formalize and document
 - [ ] Pack `HeapValue::Object` fields by descriptor into a flat `Vec<u8>` with an offset table per class, instead of `BTreeMap<String, Value>` — kills per-object hashing + allocation overhead

@@ -1,4 +1,5 @@
 use cranelift::codegen::ir::Function;
+use cranelift::codegen::{Context, isa::TargetIsa};
 use super::JitError;
 
 pub struct Optimizer {
@@ -14,7 +15,26 @@ impl Optimizer {
         }
     }
 
-    pub fn optimize(&mut self, func: &mut Function) -> Result<(), JitError> {
+    pub fn optimize(&mut self, func: &mut Function, isa: &dyn TargetIsa) -> Result<(), JitError> {
+        let mut ctx = Context::new();
+        ctx.func = func.clone();
+        ctx.compute_cfg();
+        ctx.compute_domtree();
+        ctx.compute_loop_analysis();
+
+        ctx.preopt(isa)
+            .map_err(|e| JitError::CompilationFailed(format!("preopt failed: {}", e)))?;
+
+        ctx.dce(isa)
+            .map_err(|e| JitError::CompilationFailed(format!("DCE failed: {}", e)))?;
+
+        ctx.canonicalize_nans(isa)
+            .map_err(|e| JitError::CompilationFailed(format!("NaN canonicalization failed: {}", e)))?;
+
+        ctx.legalize(isa)
+            .map_err(|e| JitError::CompilationFailed(format!("legalization failed: {}", e)))?;
+
+        *func = ctx.func;
         Ok(())
     }
 
@@ -29,7 +49,7 @@ impl Default for Optimizer {
     }
 }
 
-pub fn optimize_function(func: &mut Function) -> Result<(), JitError> {
+pub fn optimize_function(func: &mut Function, isa: &dyn TargetIsa) -> Result<(), JitError> {
     let mut optimizer = Optimizer::new();
-    optimizer.optimize(func)
+    optimizer.optimize(func, isa)
 }

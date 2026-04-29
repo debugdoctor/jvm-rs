@@ -16,6 +16,7 @@ pub use types::{
 };
 use frame::Frame;
 use heap::{Heap, HeapValue};
+use smallvec::SmallVec;
 use thread::{
     ClassInitializationState, JavaThreadState, RuntimeState, SharedMonitors,
     SharedThreads, Thread,
@@ -216,7 +217,7 @@ fn collect_garbage(&mut self, thread: &Thread) {
     /// the VM trigger collections on its own.
     pub fn request_gc(&mut self) {
         let thread = Thread {
-            frames: Vec::new(),
+            frames: SmallVec::new(),
         };
         self.collect_garbage(&thread);
     }

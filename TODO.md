@@ -128,7 +128,7 @@ Goal: beat HotSpot on cold-start and match-within-2x on steady state, via a simp
 - [x] Replace the `match Opcode` dispatch loop with a threaded/computed-goto interpreter (or Rust `#[inline(always)]` dispatch table) — cuts branch misprediction on the hot path
 - [x] Inline cache skeleton for `invokevirtual` / `invokeinterface` call sites (monomorphic → polymorphic → megamorphic) — skeleton code added to interpreter.rs
 - [x] Quicken resolved constant-pool entries in place so repeat invokes skip resolution — implemented monomorphic inline cache in Frame.invoke_cache for invokevirtual
-- [ ] Stack-allocated frames where escape analysis permits, instead of `Vec<Frame>` heap growth
+- [x] Stack-allocated frames where escape analysis permits, instead of `Vec<Frame>` heap growth
 
 ### 13.2 JIT
 - [ ] Tier 1: template JIT that emits straight-line machine code per bytecode (via Cranelift) — target 5–10× over interpreter

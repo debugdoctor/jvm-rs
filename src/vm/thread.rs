@@ -6,6 +6,8 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Condvar, Mutex};
 
+use smallvec::SmallVec;
+
 use super::frame::Frame;
 use super::types::{ExecutionResult, Method, RuntimeClass, VmError};
 
@@ -52,18 +54,18 @@ impl fmt::Debug for SharedThreads {
 
 #[derive(Debug)]
 pub(super) struct Thread {
-    pub(super) frames: Vec<Frame>,
+    pub(super) frames: SmallVec<[Frame; 8]>,
 }
 
 impl Thread {
     pub(super) fn new(method: Method) -> Self {
-        Self {
-            frames: vec![Frame::new(method)],
-        }
+        let mut frames = SmallVec::<[Frame; 8]>::new();
+        frames.push(Frame::new(method));
+        Self { frames }
     }
 
     pub(super) fn dummy() -> Self {
-        Self { frames: vec![] }
+        Self { frames: SmallVec::new() }
     }
 
     pub(super) fn current_frame(&self) -> &Frame {

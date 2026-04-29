@@ -884,14 +884,26 @@ impl<'a> BytecodeCompiler<'a> {
     }
 
     fn lower_getstatic(&mut self) -> Result<(), JitError> {
+        let cp_index = ((self.method.code[self.pc_offset + 1] as usize) << 8)
+            | (self.method.code[self.pc_offset + 2] as usize);
+        self.stack_slots.push(StackSlot {
+            size: 8,
+            offset: cp_index as i32,
+        });
         let null = self.builder.ins().iconst(types::I64, 0);
         self.push(null);
         Ok(())
     }
 
     fn lower_getfield(&mut self) -> Result<(), JitError> {
+        let cp_index = ((self.method.code[self.pc_offset + 1] as usize) << 8)
+            | (self.method.code[self.pc_offset + 2] as usize);
         let obj = self.pop();
-        let field_val = self.pop();
+        self.stack_slots.push(StackSlot {
+            size: 8,
+            offset: cp_index as i32,
+        });
+        self.builder.ins().trapz(obj, TrapCode::UnreachableCodeReached);
         let zero = self.builder.ins().iconst(types::I64, 0);
         self.push(zero);
         Ok(())
@@ -907,69 +919,124 @@ impl<'a> BytecodeCompiler<'a> {
     }
 
     fn lower_invokevirtual(&mut self) -> Result<(), JitError> {
+        let cp_index = ((self.method.code[self.pc_offset + 1] as usize) << 8)
+            | (self.method.code[self.pc_offset + 2] as usize);
         let argc = (self.method.code[self.pc_offset + 3] & 0xFF) as usize;
         for _ in 0..argc {
             self.pop();
         }
         let this_ref = self.pop();
+        self.stack_slots.push(StackSlot {
+            size: 8,
+            offset: cp_index as i32,
+        });
+        self.builder.ins().trapz(this_ref, TrapCode::UnreachableCodeReached);
         let null = self.builder.ins().iconst(types::I64, 0);
         self.push(null);
         Ok(())
     }
 
     fn lower_invokespecial(&mut self) -> Result<(), JitError> {
+        let cp_index = ((self.method.code[self.pc_offset + 1] as usize) << 8)
+            | (self.method.code[self.pc_offset + 2] as usize);
         let argc = (self.method.code[self.pc_offset + 3] & 0xFF) as usize;
         for _ in 0..argc {
             self.pop();
         }
         let this_ref = self.pop();
+        self.stack_slots.push(StackSlot {
+            size: 8,
+            offset: cp_index as i32,
+        });
+        self.builder.ins().trapz(this_ref, TrapCode::UnreachableCodeReached);
         let null = self.builder.ins().iconst(types::I64, 0);
         self.push(null);
         Ok(())
     }
 
     fn lower_invokestatic(&mut self) -> Result<(), JitError> {
+        let cp_index = ((self.method.code[self.pc_offset + 1] as usize) << 8)
+            | (self.method.code[self.pc_offset + 2] as usize);
         let argc = (self.method.code[self.pc_offset + 3] & 0xFF) as usize;
         for _ in 0..argc {
             self.pop();
         }
+        self.stack_slots.push(StackSlot {
+            size: 8,
+            offset: cp_index as i32,
+        });
+        self.builder.ins().trap(TrapCode::UnreachableCodeReached);
         let null = self.builder.ins().iconst(types::I64, 0);
         self.push(null);
         Ok(())
     }
 
     fn lower_invokeinterface(&mut self) -> Result<(), JitError> {
+        let cp_index = ((self.method.code[self.pc_offset + 1] as usize) << 8)
+            | (self.method.code[self.pc_offset + 2] as usize);
         let argc = (self.method.code[self.pc_offset + 3] & 0xFF) as usize;
         for _ in 0..argc {
             self.pop();
         }
         let this_ref = self.pop();
+        self.stack_slots.push(StackSlot {
+            size: 8,
+            offset: cp_index as i32,
+        });
+        self.builder.ins().trapz(this_ref, TrapCode::UnreachableCodeReached);
         let null = self.builder.ins().iconst(types::I64, 0);
         self.push(null);
         Ok(())
     }
 
     fn lower_invokedynamic(&mut self) -> Result<(), JitError> {
+        let cp_index = ((self.method.code[self.pc_offset + 1] as usize) << 8)
+            | (self.method.code[self.pc_offset + 2] as usize);
+        self.stack_slots.push(StackSlot {
+            size: 8,
+            offset: cp_index as i32,
+        });
+        self.builder.ins().trap(TrapCode::UnreachableCodeReached);
         let null = self.builder.ins().iconst(types::I64, 0);
         self.push(null);
         Ok(())
     }
 
     fn lower_new(&mut self) -> Result<(), JitError> {
+        let cp_index = ((self.method.code[self.pc_offset + 1] as usize) << 8)
+            | (self.method.code[self.pc_offset + 2] as usize);
+        self.stack_slots.push(StackSlot {
+            size: 8,
+            offset: cp_index as i32,
+        });
+        self.builder.ins().trap(TrapCode::UnreachableCodeReached);
         let null = self.builder.ins().iconst(types::I64, 0);
         self.push(null);
         Ok(())
     }
 
     fn lower_newarray(&mut self) -> Result<(), JitError> {
+        let array_type = self.method.code[self.pc_offset + 1] as usize;
         let count = self.pop();
+        self.stack_slots.push(StackSlot {
+            size: 8,
+            offset: array_type as i32,
+        });
+        self.builder.ins().trapz(count, TrapCode::UnreachableCodeReached);
         let null = self.builder.ins().iconst(types::I64, 0);
         self.push(null);
         Ok(())
     }
 
     fn lower_anewarray(&mut self) -> Result<(), JitError> {
+        let cp_index = ((self.method.code[self.pc_offset + 1] as usize) << 8)
+            | (self.method.code[self.pc_offset + 2] as usize);
         let count = self.pop();
+        self.stack_slots.push(StackSlot {
+            size: 8,
+            offset: cp_index as i32,
+        });
+        self.builder.ins().trapz(count, TrapCode::UnreachableCodeReached);
         let null = self.builder.ins().iconst(types::I64, 0);
         self.push(null);
         Ok(())
@@ -982,19 +1049,34 @@ impl<'a> BytecodeCompiler<'a> {
     }
     fn lower_athrow(&mut self) -> Result<(), JitError> {
         let exception_ref = self.pop();
+        self.builder.ins().trapz(exception_ref, TrapCode::UnreachableCodeReached);
         let null = self.builder.ins().iconst(types::I64, 0);
         self.push(null);
         Ok(())
     }
 
     fn lower_checkcast(&mut self) -> Result<(), JitError> {
+        let cp_index = ((self.method.code[self.pc_offset + 1] as usize) << 8)
+            | (self.method.code[self.pc_offset + 2] as usize);
         let obj_ref = self.pop();
+        self.stack_slots.push(StackSlot {
+            size: 8,
+            offset: cp_index as i32,
+        });
+        self.builder.ins().trapz(obj_ref, TrapCode::UnreachableCodeReached);
         self.push(obj_ref);
         Ok(())
     }
 
     fn lower_instanceof(&mut self) -> Result<(), JitError> {
+        let cp_index = ((self.method.code[self.pc_offset + 1] as usize) << 8)
+            | (self.method.code[self.pc_offset + 2] as usize);
         let obj_ref = self.pop();
+        self.stack_slots.push(StackSlot {
+            size: 4,
+            offset: cp_index as i32,
+        });
+        self.builder.ins().trapz(obj_ref, TrapCode::UnreachableCodeReached);
         let zero = self.builder.ins().iconst(types::I32, 0);
         self.push(zero);
         Ok(())
@@ -1013,6 +1095,17 @@ impl<'a> BytecodeCompiler<'a> {
     }
 
     fn lower_invokenative(&mut self) -> Result<(), JitError> {
+        let cp_index = ((self.method.code[self.pc_offset + 1] as usize) << 8)
+            | (self.method.code[self.pc_offset + 2] as usize);
+        let argc = (self.method.code[self.pc_offset + 3] & 0xFF) as usize;
+        for _ in 0..argc {
+            self.pop();
+        }
+        self.stack_slots.push(StackSlot {
+            size: 8,
+            offset: cp_index as i32,
+        });
+        self.builder.ins().trap(TrapCode::UnreachableCodeReached);
         let null = self.builder.ins().iconst(types::I64, 0);
         self.push(null);
         Ok(())

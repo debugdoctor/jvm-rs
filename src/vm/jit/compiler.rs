@@ -794,7 +794,22 @@ impl<'a> BytecodeCompiler<'a> {
     }
 
     fn lower_goto(&mut self) -> Result<(), JitError> {
+        let target = self.read_branch_offset();
+        let target_pc = (self.pc_offset as i32 + target as i32) as usize;
+        let jump_block = self.create_block_for_pc(target_pc);
+        self.builder.ins().jump(jump_block, &[]);
+        self.builder.switch_to_block(jump_block);
         Ok(())
+    }
+
+    fn create_block_for_pc(&mut self, _pc: usize) -> Block {
+        self.builder.create_block()
+    }
+
+    fn read_branch_offset(&self) -> i32 {
+        let high = self.method.code[self.pc_offset + 1] as i16;
+        let low = self.method.code[self.pc_offset + 2] as u16;
+        i16::from_be_bytes([high as u8, low as u8]) as i32
     }
 
     fn lower_ireturn(&mut self) -> Result<(), JitError> {

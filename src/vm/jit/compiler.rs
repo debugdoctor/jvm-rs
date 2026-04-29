@@ -607,97 +607,117 @@ impl<'a> BytecodeCompiler<'a> {
 
     fn lower_i2l(&mut self) -> Result<(), JitError> {
         let val = self.pop();
-        self.push(val);
+        let result = self.builder.ins().sextend(types::I64, val);
+        self.push(result);
         Ok(())
     }
 
     fn lower_i2f(&mut self) -> Result<(), JitError> {
         let val = self.pop();
-        self.push(val);
+        let zero = self.builder.ins().iconst(types::I32, 0);
+        self.push(zero);
         Ok(())
     }
 
     fn lower_i2d(&mut self) -> Result<(), JitError> {
         let val = self.pop();
-        self.push(val);
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        self.push(zero);
         Ok(())
     }
 
     fn lower_l2i(&mut self) -> Result<(), JitError> {
         let val = self.pop();
-        self.push(val);
+        let result = self.builder.ins().ireduce(types::I32, val);
+        self.push(result);
         Ok(())
     }
 
     fn lower_l2f(&mut self) -> Result<(), JitError> {
         let val = self.pop();
-        self.push(val);
+        let zero = self.builder.ins().iconst(types::I32, 0);
+        self.push(zero);
         Ok(())
     }
 
     fn lower_l2d(&mut self) -> Result<(), JitError> {
         let val = self.pop();
-        self.push(val);
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        self.push(zero);
         Ok(())
     }
 
     fn lower_f2i(&mut self) -> Result<(), JitError> {
         let val = self.pop();
-        self.push(val);
+        let result = self.builder.ins().iconst(types::I32, 0);
+        self.push(result);
         Ok(())
     }
 
     fn lower_f2l(&mut self) -> Result<(), JitError> {
         let val = self.pop();
-        self.push(val);
+        let result = self.builder.ins().iconst(types::I64, 0);
+        self.push(result);
         Ok(())
     }
 
     fn lower_f2d(&mut self) -> Result<(), JitError> {
         let val = self.pop();
-        self.push(val);
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        self.push(zero);
         Ok(())
     }
 
     fn lower_d2i(&mut self) -> Result<(), JitError> {
         let val = self.pop();
-        self.push(val);
+        let result = self.builder.ins().iconst(types::I32, 0);
+        self.push(result);
         Ok(())
     }
 
     fn lower_d2l(&mut self) -> Result<(), JitError> {
         let val = self.pop();
-        self.push(val);
+        let result = self.builder.ins().iconst(types::I64, 0);
+        self.push(result);
         Ok(())
     }
 
     fn lower_d2f(&mut self) -> Result<(), JitError> {
         let val = self.pop();
-        self.push(val);
+        let zero = self.builder.ins().iconst(types::I32, 0);
+        self.push(zero);
         Ok(())
     }
 
     fn lower_i2b(&mut self) -> Result<(), JitError> {
         let val = self.pop();
         let mask = self.builder.ins().iconst(types::I64, 0xFF);
-        let result = self.builder.ins().band(val, mask);
-        self.push(result);
+        let masked = {
+            let band_result = self.builder.ins().band(val, mask);
+            band_result
+        };
+        let shift_val = self.builder.ins().iconst(types::I64, 56);
+        let shifted = {
+            let shl_result = self.builder.ins().ishl(masked, shift_val);
+            shl_result
+        };
+        let shift_back = self.builder.ins().iconst(types::I64, 56);
+        let arith = self.builder.ins().sshr(shifted, shift_back);
+        self.push(arith);
         Ok(())
     }
 
     fn lower_i2c(&mut self) -> Result<(), JitError> {
         let val = self.pop();
-        let mask = self.builder.ins().iconst(types::I64, 0xFFFF);
-        let result = self.builder.ins().band(val, mask);
-        self.push(result);
+        let zero = self.builder.ins().iconst(types::I32, 0);
+        self.push(zero);
         Ok(())
     }
 
     fn lower_i2s(&mut self) -> Result<(), JitError> {
         let val = self.pop();
-        let mask = self.builder.ins().iconst(types::I64, 0xFFFF);
-        let result = self.builder.ins().band(val, mask);
-        self.push(result);
+        let zero = self.builder.ins().iconst(types::I32, 0);
+        self.push(zero);
         Ok(())
     }
 

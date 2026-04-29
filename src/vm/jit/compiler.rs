@@ -614,15 +614,15 @@ impl<'a> BytecodeCompiler<'a> {
 
     fn lower_i2f(&mut self) -> Result<(), JitError> {
         let val = self.pop();
-        let zero = self.builder.ins().iconst(types::I32, 0);
-        self.push(zero);
+        let result = self.builder.ins().fcvt_from_sint(types::F32, val);
+        self.push(result);
         Ok(())
     }
 
     fn lower_i2d(&mut self) -> Result<(), JitError> {
         let val = self.pop();
-        let zero = self.builder.ins().iconst(types::I64, 0);
-        self.push(zero);
+        let result = self.builder.ins().fcvt_from_sint(types::F64, val);
+        self.push(result);
         Ok(())
     }
 
@@ -635,36 +635,36 @@ impl<'a> BytecodeCompiler<'a> {
 
     fn lower_l2f(&mut self) -> Result<(), JitError> {
         let val = self.pop();
-        let zero = self.builder.ins().iconst(types::I32, 0);
-        self.push(zero);
+        let result = self.builder.ins().fcvt_from_sint(types::F32, val);
+        self.push(result);
         Ok(())
     }
 
     fn lower_l2d(&mut self) -> Result<(), JitError> {
         let val = self.pop();
-        let zero = self.builder.ins().iconst(types::I64, 0);
-        self.push(zero);
+        let result = self.builder.ins().fcvt_from_sint(types::F64, val);
+        self.push(result);
         Ok(())
     }
 
     fn lower_f2i(&mut self) -> Result<(), JitError> {
         let val = self.pop();
-        let result = self.builder.ins().iconst(types::I32, 0);
+        let result = self.builder.ins().fcvt_to_sint(types::I32, val);
         self.push(result);
         Ok(())
     }
 
     fn lower_f2l(&mut self) -> Result<(), JitError> {
         let val = self.pop();
-        let result = self.builder.ins().iconst(types::I64, 0);
+        let result = self.builder.ins().fcvt_to_sint(types::I64, val);
         self.push(result);
         Ok(())
     }
 
     fn lower_f2d(&mut self) -> Result<(), JitError> {
         let val = self.pop();
-        let zero = self.builder.ins().iconst(types::I64, 0);
-        self.push(zero);
+        let result = self.builder.ins().fpromote(types::F64, val);
+        self.push(result);
         Ok(())
     }
 
@@ -709,15 +709,15 @@ impl<'a> BytecodeCompiler<'a> {
 
     fn lower_i2c(&mut self) -> Result<(), JitError> {
         let val = self.pop();
-        let zero = self.builder.ins().iconst(types::I32, 0);
-        self.push(zero);
+        let result = self.builder.ins().uextend(types::I32, val);
+        self.push(result);
         Ok(())
     }
 
     fn lower_i2s(&mut self) -> Result<(), JitError> {
         let val = self.pop();
-        let zero = self.builder.ins().iconst(types::I32, 0);
-        self.push(zero);
+        let result = self.builder.ins().sextend(types::I32, val);
+        self.push(result);
         Ok(())
     }
 

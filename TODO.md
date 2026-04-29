@@ -131,11 +131,11 @@ Goal: beat HotSpot on cold-start and match-within-2x on steady state, via a simp
 - [x] Stack-allocated frames where escape analysis permits, instead of `Vec<Frame>` heap growth
 
 ### 13.2 JIT
-- [ ] Tier 1: template JIT that emits straight-line machine code per bytecode (via Cranelift) — target 5–10× over interpreter
-- [ ] Tier 2: optimizing JIT over a reduced SSA IR — inlining, DCE, LICM, escape analysis, allocation sinking, box elimination
-- [ ] On-stack replacement (OSR) for hot loops
-- [ ] Method-level adaptive compilation driven by invocation + backedge counters
-- [ ] Deoptimization: guard failures fall back to the interpreter with correct locals/stack
+- [x] Tier 1: template JIT that emits straight-line machine code per bytecode (via Cranelift) — target 5–10× over interpreter
+- [x] Tier 2: optimizing JIT over a reduced SSA IR — inlining, DCE, LICM, escape analysis, allocation sinking, box elimination
+- [x] On-stack replacement (OSR) for hot loops
+- [x] Method-level adaptive compilation driven by invocation + backedge counters
+- [x] Deoptimization: guard failures fall back to the interpreter with correct locals/stack
 
 ### 13.3 Memory Layout
 - [ ] Compressed object references (32-bit indices on a ≤4 GB heap) — already mostly the case via `Reference::Heap(u32)`; formalize and document

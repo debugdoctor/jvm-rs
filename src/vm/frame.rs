@@ -1,6 +1,8 @@
 //! Execution frame: per-method program counter, locals, operand stack,
 //! and cached resolutions from the constant pool.
 
+use std::collections::HashMap;
+
 use super::types::{
     ClassMethod, ExceptionHandler, FieldRef, InvokeDynamicSite, Method, MethodRef, ResolvedMethod,
     Value, VmError,
@@ -25,6 +27,10 @@ pub(super) struct Frame {
     pub(super) line_numbers: Vec<(u16, u16)>,
     pub(super) invoke_dynamic_sites: Vec<Option<InvokeDynamicSite>>,
     pub(super) invoke_cache: Vec<Option<ResolvedMethod>>,
+    pub(super) call_counts: HashMap<usize, u32>,
+    pub(super) backedge_counts: HashMap<usize, u32>,
+    pub(super) invocation_count: u32,
+    pub(super) backedge_hit_count: u32,
 }
 
 impl Frame {
@@ -57,6 +63,10 @@ impl Frame {
             line_numbers: method.line_numbers,
             invoke_dynamic_sites: method.invoke_dynamic_sites,
             invoke_cache: vec![None; method_refs_len],
+            call_counts: HashMap::new(),
+            backedge_counts: HashMap::new(),
+            invocation_count: 0,
+            backedge_hit_count: 0,
         }
     }
 

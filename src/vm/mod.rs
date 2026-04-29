@@ -2,7 +2,8 @@ mod builtin;
 mod classloader;
 mod frame;
 mod heap;
-mod interpreter;
+pub mod interpreter;
+pub mod jit;
 mod thread;
 mod types;
 pub mod verify;
@@ -39,13 +40,13 @@ use std::sync::{Arc, Mutex};
 
 use crate::bytecode::Opcode;
 use classloader::{ClassLoader, LazyClassLoader, BootstrapClassLoader};
+use crate::vm::jit::JitCompiler;
 
 static NEXT_THREAD_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 pub struct Vm {
     heap: Arc<Mutex<Heap>>,
     runtime: Arc<Mutex<RuntimeState>>,
-    /// Object monitors keyed by heap index.
     monitors: Arc<SharedMonitors>,
     threads: Arc<SharedThreads>,
     class_path: Vec<PathBuf>,
@@ -53,6 +54,7 @@ pub struct Vm {
     trace: bool,
     thread_id: u64,
     output: Arc<Mutex<Vec<String>>>,
+    jit: Option<JitCompiler>,
 }
 
 impl fmt::Debug for Vm {
@@ -66,6 +68,7 @@ impl fmt::Debug for Vm {
             .field("trace", &self.trace)
             .field("thread_id", &self.thread_id)
             .field("output", &self.output)
+            .field("jit", &self.jit)
             .finish()
     }
 }
@@ -82,6 +85,7 @@ impl Clone for Vm {
             trace: self.trace,
             thread_id: NEXT_THREAD_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             output: self.output.clone(),
+            jit: None,
         }
     }
 }
@@ -98,6 +102,7 @@ impl Vm {
             trace: false,
             thread_id: NEXT_THREAD_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             output: Arc::new(Mutex::new(Vec::new())),
+            jit: Some(JitCompiler::new()),
         };
         vm.bootstrap();
         vm

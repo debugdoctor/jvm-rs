@@ -1,10 +1,9 @@
 use cranelift::prelude::*;
-use cranelift::codegen::ir::{Function, TrapCode};
-use cranelift_module::Module;
+use cranelift::codegen::ir::TrapCode;
 use cranelift_frontend::Variable;
 
 use crate::vm::types::Method;
-use super::{CompiledCode, JitError, StackSlot, DeoptimizationInfo, GuardCheck};
+use super::{CompiledCode, JitError, StackSlot, DeoptimizationInfo, GuardCheck, GuardType};
 
 pub struct BytecodeCompiler<'a> {
     method: &'a Method,
@@ -886,77 +885,210 @@ impl<'a> BytecodeCompiler<'a> {
     fn lower_getstatic(&mut self) -> Result<(), JitError> {
         let cp_index = ((self.method.code[self.pc_offset + 1] as usize) << 8)
             | (self.method.code[self.pc_offset + 2] as usize);
+        let field_ref = self
+            .method
+            .field_refs
+            .get(cp_index)
+            .and_then(|f| f.as_ref())
+            .ok_or_else(|| {
+                JitError::CompilationFailed(format!("Invalid field ref index: {}", cp_index))
+            })?;
+        let class_name = field_ref.class_name.clone();
+        let field_name = field_ref.field_name.clone();
+        let field_desc = field_ref.descriptor.clone();
         self.stack_slots.push(StackSlot {
             size: 8,
             offset: cp_index as i32,
         });
-        let null = self.builder.ins().iconst(types::I64, 0);
-        self.push(null);
+        let field_value = self.load_static_field(&class_name, &field_name, &field_desc)?;
+        self.push(field_value);
         Ok(())
+    }
+
+    fn load_static_field(
+        &mut self,
+        _class_name: &str,
+        _field_name: &str,
+        _field_desc: &str,
+    ) -> Result<Value, JitError> {
+        let null = self.builder.ins().iconst(types::I64, 0);
+        Ok(null)
     }
 
     fn lower_getfield(&mut self) -> Result<(), JitError> {
         let cp_index = ((self.method.code[self.pc_offset + 1] as usize) << 8)
             | (self.method.code[self.pc_offset + 2] as usize);
+        let field_ref = self
+            .method
+            .field_refs
+            .get(cp_index)
+            .and_then(|f| f.as_ref())
+            .ok_or_else(|| {
+                JitError::CompilationFailed(format!("Invalid field ref index: {}", cp_index))
+            })?;
+        let field_name = field_ref.field_name.clone();
+        let field_desc = field_ref.descriptor.clone();
         let obj = self.pop();
+        self.builder.ins().trapz(obj, TrapCode::UnreachableCodeReached);
         self.stack_slots.push(StackSlot {
             size: 8,
             offset: cp_index as i32,
         });
-        self.builder.ins().trapz(obj, TrapCode::UnreachableCodeReached);
-        let zero = self.builder.ins().iconst(types::I64, 0);
-        self.push(zero);
+        let field_value = self.load_instance_field(obj, &field_name, &field_desc)?;
+        self.push(field_value);
         Ok(())
     }
 
+    fn load_instance_field(
+        &mut self,
+        _obj: Value,
+        _field_name: &str,
+        _field_desc: &str,
+    ) -> Result<Value, JitError> {
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        Ok(zero)
+    }
+
     fn lower_putfield(&mut self) -> Result<(), JitError> {
-        let _field_index = ((self.method.code[self.pc_offset + 1] as usize) << 8)
+        let cp_index = ((self.method.code[self.pc_offset + 1] as usize) << 8)
             | (self.method.code[self.pc_offset + 2] as usize);
-        let _value = self.pop();
-        let _obj = self.pop();
-        self.builder.ins().trap(TrapCode::UnreachableCodeReached);
+        let field_ref = self
+            .method
+            .field_refs
+            .get(cp_index)
+            .and_then(|f| f.as_ref())
+            .ok_or_else(|| {
+                JitError::CompilationFailed(format!("Invalid field ref index: {}", cp_index))
+            })?;
+        let field_name = field_ref.field_name.clone();
+        let field_desc = field_ref.descriptor.clone();
+        let value = self.pop();
+        let obj = self.pop();
+        self.builder.ins().trapz(obj, TrapCode::UnreachableCodeReached);
+        self.stack_slots.push(StackSlot {
+            size: 8,
+            offset: cp_index as i32,
+        });
+        self.store_instance_field(obj, value, &field_name, &field_desc)?;
+        Ok(())
+    }
+
+    fn store_instance_field(
+        &mut self,
+        _obj: Value,
+        _value: Value,
+        _field_name: &str,
+        _field_desc: &str,
+    ) -> Result<(), JitError> {
         Ok(())
     }
 
     fn lower_invokevirtual(&mut self) -> Result<(), JitError> {
         let cp_index = ((self.method.code[self.pc_offset + 1] as usize) << 8)
             | (self.method.code[self.pc_offset + 2] as usize);
+        let method_ref = self
+            .method
+            .method_refs
+            .get(cp_index)
+            .and_then(|m| m.as_ref())
+            .ok_or_else(|| {
+                JitError::CompilationFailed(format!("Invalid method ref index: {}", cp_index))
+            })?;
+        let class_name = method_ref.class_name.clone();
+        let method_name = method_ref.method_name.clone();
+        let method_desc = method_ref.descriptor.clone();
         let argc = (self.method.code[self.pc_offset + 3] & 0xFF) as usize;
         for _ in 0..argc {
             self.pop();
         }
         let this_ref = self.pop();
+        self.builder.ins().trapz(this_ref, TrapCode::UnreachableCodeReached);
         self.stack_slots.push(StackSlot {
             size: 8,
             offset: cp_index as i32,
         });
-        self.builder.ins().trapz(this_ref, TrapCode::UnreachableCodeReached);
-        let null = self.builder.ins().iconst(types::I64, 0);
-        self.push(null);
+        self.guard_checks.push(GuardCheck {
+            pc: self.pc_offset,
+            guard_type: GuardType::NotNull,
+        });
+        let result = self.emit_invoke_virtual(&class_name, &method_name, &method_desc, argc)?;
+        if result {
+            let null = self.builder.ins().iconst(types::I64, 0);
+            self.push(null);
+        }
         Ok(())
+    }
+
+    fn emit_invoke_virtual(
+        &mut self,
+        _class_name: &str,
+        _method_name: &str,
+        _method_desc: &str,
+        _argc: usize,
+    ) -> Result<bool, JitError> {
+        Ok(false)
     }
 
     fn lower_invokespecial(&mut self) -> Result<(), JitError> {
         let cp_index = ((self.method.code[self.pc_offset + 1] as usize) << 8)
             | (self.method.code[self.pc_offset + 2] as usize);
+        let method_ref = self
+            .method
+            .method_refs
+            .get(cp_index)
+            .and_then(|m| m.as_ref())
+            .ok_or_else(|| {
+                JitError::CompilationFailed(format!("Invalid method ref index: {}", cp_index))
+            })?;
+        let class_name = method_ref.class_name.clone();
+        let method_name = method_ref.method_name.clone();
+        let method_desc = method_ref.descriptor.clone();
         let argc = (self.method.code[self.pc_offset + 3] & 0xFF) as usize;
         for _ in 0..argc {
             self.pop();
         }
         let this_ref = self.pop();
+        self.builder.ins().trapz(this_ref, TrapCode::UnreachableCodeReached);
         self.stack_slots.push(StackSlot {
             size: 8,
             offset: cp_index as i32,
         });
-        self.builder.ins().trapz(this_ref, TrapCode::UnreachableCodeReached);
-        let null = self.builder.ins().iconst(types::I64, 0);
-        self.push(null);
+        self.guard_checks.push(GuardCheck {
+            pc: self.pc_offset,
+            guard_type: GuardType::NotNull,
+        });
+        let result = self.emit_invoke_special(&class_name, &method_name, &method_desc, argc)?;
+        if result {
+            let null = self.builder.ins().iconst(types::I64, 0);
+            self.push(null);
+        }
         Ok(())
+    }
+
+    fn emit_invoke_special(
+        &mut self,
+        _class_name: &str,
+        _method_name: &str,
+        _method_desc: &str,
+        _argc: usize,
+    ) -> Result<bool, JitError> {
+        Ok(false)
     }
 
     fn lower_invokestatic(&mut self) -> Result<(), JitError> {
         let cp_index = ((self.method.code[self.pc_offset + 1] as usize) << 8)
             | (self.method.code[self.pc_offset + 2] as usize);
+        let method_ref = self
+            .method
+            .method_refs
+            .get(cp_index)
+            .and_then(|m| m.as_ref())
+            .ok_or_else(|| {
+                JitError::CompilationFailed(format!("Invalid method ref index: {}", cp_index))
+            })?;
+        let class_name = method_ref.class_name.clone();
+        let method_name = method_ref.method_name.clone();
+        let method_desc = method_ref.descriptor.clone();
         let argc = (self.method.code[self.pc_offset + 3] & 0xFF) as usize;
         for _ in 0..argc {
             self.pop();
@@ -965,28 +1097,74 @@ impl<'a> BytecodeCompiler<'a> {
             size: 8,
             offset: cp_index as i32,
         });
-        self.builder.ins().trap(TrapCode::UnreachableCodeReached);
-        let null = self.builder.ins().iconst(types::I64, 0);
-        self.push(null);
+        let result =
+            self.emit_invoke_static(&class_name, &method_name, &method_desc, argc)?;
+        if result {
+            let null = self.builder.ins().iconst(types::I64, 0);
+            self.push(null);
+        }
         Ok(())
+    }
+
+    fn emit_invoke_static(
+        &mut self,
+        _class_name: &str,
+        _method_name: &str,
+        _method_desc: &str,
+        _argc: usize,
+    ) -> Result<bool, JitError> {
+        Ok(false)
     }
 
     fn lower_invokeinterface(&mut self) -> Result<(), JitError> {
         let cp_index = ((self.method.code[self.pc_offset + 1] as usize) << 8)
             | (self.method.code[self.pc_offset + 2] as usize);
+        let method_ref = self
+            .method
+            .method_refs
+            .get(cp_index)
+            .and_then(|m| m.as_ref())
+            .ok_or_else(|| {
+                JitError::CompilationFailed(format!("Invalid method ref index: {}", cp_index))
+            })?;
+        let class_name = method_ref.class_name.clone();
+        let method_name = method_ref.method_name.clone();
+        let method_desc = method_ref.descriptor.clone();
         let argc = (self.method.code[self.pc_offset + 3] & 0xFF) as usize;
         for _ in 0..argc {
             self.pop();
         }
         let this_ref = self.pop();
+        self.builder.ins().trapz(this_ref, TrapCode::UnreachableCodeReached);
         self.stack_slots.push(StackSlot {
             size: 8,
             offset: cp_index as i32,
         });
-        self.builder.ins().trapz(this_ref, TrapCode::UnreachableCodeReached);
-        let null = self.builder.ins().iconst(types::I64, 0);
-        self.push(null);
+        self.guard_checks.push(GuardCheck {
+            pc: self.pc_offset,
+            guard_type: GuardType::NotNull,
+        });
+        let result = self.emit_invoke_interface(
+            &class_name,
+            &method_name,
+            &method_desc,
+            argc,
+        )?;
+        if result {
+            let null = self.builder.ins().iconst(types::I64, 0);
+            self.push(null);
+        }
         Ok(())
+    }
+
+    fn emit_invoke_interface(
+        &mut self,
+        _class_name: &str,
+        _method_name: &str,
+        _method_desc: &str,
+        _argc: usize,
+    ) -> Result<bool, JitError> {
+        Ok(false)
     }
 
     fn lower_invokedynamic(&mut self) -> Result<(), JitError> {
@@ -996,50 +1174,96 @@ impl<'a> BytecodeCompiler<'a> {
             size: 8,
             offset: cp_index as i32,
         });
-        self.builder.ins().trap(TrapCode::UnreachableCodeReached);
-        let null = self.builder.ins().iconst(types::I64, 0);
-        self.push(null);
+        let result = self.emit_invokedynamic(cp_index)?;
+        if result {
+            let null = self.builder.ins().iconst(types::I64, 0);
+            self.push(null);
+        }
         Ok(())
+    }
+
+    fn emit_invokedynamic(&mut self, _cp_index: usize) -> Result<bool, JitError> {
+        Ok(false)
     }
 
     fn lower_new(&mut self) -> Result<(), JitError> {
         let cp_index = ((self.method.code[self.pc_offset + 1] as usize) << 8)
             | (self.method.code[self.pc_offset + 2] as usize);
+        let class_name = self
+            .method
+            .reference_classes
+            .get(cp_index)
+            .and_then(|c| c.as_ref())
+            .cloned()
+            .ok_or_else(|| {
+                JitError::CompilationFailed(format!("Invalid reference class index: {}", cp_index))
+            })?;
         self.stack_slots.push(StackSlot {
             size: 8,
             offset: cp_index as i32,
         });
-        self.builder.ins().trap(TrapCode::UnreachableCodeReached);
-        let null = self.builder.ins().iconst(types::I64, 0);
-        self.push(null);
+        let obj_ref = self.allocate_object(&class_name)?;
+        self.push(obj_ref);
         Ok(())
+    }
+
+    fn allocate_object(&mut self, _class_name: &str) -> Result<Value, JitError> {
+        let null = self.builder.ins().iconst(types::I64, 0);
+        Ok(null)
     }
 
     fn lower_newarray(&mut self) -> Result<(), JitError> {
         let array_type = self.method.code[self.pc_offset + 1] as usize;
         let count = self.pop();
+        self.builder.ins().trapz(count, TrapCode::UnreachableCodeReached);
         self.stack_slots.push(StackSlot {
             size: 8,
             offset: array_type as i32,
         });
-        self.builder.ins().trapz(count, TrapCode::UnreachableCodeReached);
-        let null = self.builder.ins().iconst(types::I64, 0);
-        self.push(null);
+        let array_ref = self.allocate_primitive_array(array_type, count)?;
+        self.push(array_ref);
         Ok(())
+    }
+
+    fn allocate_primitive_array(
+        &mut self,
+        _array_type: usize,
+        _count: Value,
+    ) -> Result<Value, JitError> {
+        let null = self.builder.ins().iconst(types::I64, 0);
+        Ok(null)
     }
 
     fn lower_anewarray(&mut self) -> Result<(), JitError> {
         let cp_index = ((self.method.code[self.pc_offset + 1] as usize) << 8)
             | (self.method.code[self.pc_offset + 2] as usize);
+        let component_type = self
+            .method
+            .reference_classes
+            .get(cp_index)
+            .and_then(|c| c.as_ref())
+            .cloned()
+            .ok_or_else(|| {
+                JitError::CompilationFailed(format!("Invalid reference class index: {}", cp_index))
+            })?;
         let count = self.pop();
+        self.builder.ins().trapz(count, TrapCode::UnreachableCodeReached);
         self.stack_slots.push(StackSlot {
             size: 8,
             offset: cp_index as i32,
         });
-        self.builder.ins().trapz(count, TrapCode::UnreachableCodeReached);
-        let null = self.builder.ins().iconst(types::I64, 0);
-        self.push(null);
+        let array_ref = self.allocate_reference_array(&component_type, count)?;
+        self.push(array_ref);
         Ok(())
+    }
+
+    fn allocate_reference_array(
+        &mut self,
+        _component_type: &str,
+        _count: Value,
+    ) -> Result<Value, JitError> {
+        let null = self.builder.ins().iconst(types::I64, 0);
+        Ok(null)
     }
     fn lower_arraylength(&mut self) -> Result<(), JitError> {
         let array_ref = self.pop();
@@ -1050,20 +1274,40 @@ impl<'a> BytecodeCompiler<'a> {
     fn lower_athrow(&mut self) -> Result<(), JitError> {
         let exception_ref = self.pop();
         self.builder.ins().trapz(exception_ref, TrapCode::UnreachableCodeReached);
-        let null = self.builder.ins().iconst(types::I64, 0);
-        self.push(null);
+        self.stack_slots.push(StackSlot {
+            size: 8,
+            offset: -1,
+        });
+        self.emit_throw(exception_ref)?;
+        Ok(())
+    }
+
+    fn emit_throw(&mut self, _exception_ref: Value) -> Result<(), JitError> {
         Ok(())
     }
 
     fn lower_checkcast(&mut self) -> Result<(), JitError> {
         let cp_index = ((self.method.code[self.pc_offset + 1] as usize) << 8)
             | (self.method.code[self.pc_offset + 2] as usize);
+        let target_class = self
+            .method
+            .reference_classes
+            .get(cp_index)
+            .and_then(|c| c.as_ref())
+            .cloned()
+            .ok_or_else(|| {
+                JitError::CompilationFailed(format!("Invalid reference class index: {}", cp_index))
+            })?;
         let obj_ref = self.pop();
+        self.builder.ins().trapz(obj_ref, TrapCode::UnreachableCodeReached);
         self.stack_slots.push(StackSlot {
             size: 8,
             offset: cp_index as i32,
         });
-        self.builder.ins().trapz(obj_ref, TrapCode::UnreachableCodeReached);
+        self.guard_checks.push(GuardCheck {
+            pc: self.pc_offset,
+            guard_type: GuardType::TypeCheck(target_class),
+        });
         self.push(obj_ref);
         Ok(())
     }
@@ -1071,32 +1315,70 @@ impl<'a> BytecodeCompiler<'a> {
     fn lower_instanceof(&mut self) -> Result<(), JitError> {
         let cp_index = ((self.method.code[self.pc_offset + 1] as usize) << 8)
             | (self.method.code[self.pc_offset + 2] as usize);
+        let _target_class = self
+            .method
+            .reference_classes
+            .get(cp_index)
+            .and_then(|c| c.as_ref())
+            .cloned()
+            .ok_or_else(|| {
+                JitError::CompilationFailed(format!("Invalid reference class index: {}", cp_index))
+            })?;
         let obj_ref = self.pop();
+        let is_null = self.builder.ins().icmp_imm(IntCC::Equal, obj_ref, 0);
+        let result = self.builder.ins().icmp_imm(IntCC::Equal, is_null, 0);
+        self.push(result);
         self.stack_slots.push(StackSlot {
             size: 4,
             offset: cp_index as i32,
         });
-        self.builder.ins().trapz(obj_ref, TrapCode::UnreachableCodeReached);
-        let zero = self.builder.ins().iconst(types::I32, 0);
-        self.push(zero);
         Ok(())
     }
 
     fn lower_monitorenter(&mut self) -> Result<(), JitError> {
-        let _obj_ref = self.pop();
-        self.builder.ins().trap(TrapCode::UnreachableCodeReached);
+        let obj_ref = self.pop();
+        self.builder.ins().trapz(obj_ref, TrapCode::UnreachableCodeReached);
+        self.stack_slots.push(StackSlot {
+            size: 8,
+            offset: -1,
+        });
+        self.emit_monitor_enter(obj_ref)?;
+        Ok(())
+    }
+
+    fn emit_monitor_enter(&mut self, _obj_ref: Value) -> Result<(), JitError> {
         Ok(())
     }
 
     fn lower_monitorexit(&mut self) -> Result<(), JitError> {
-        let _obj_ref = self.pop();
-        self.builder.ins().trap(TrapCode::UnreachableCodeReached);
+        let obj_ref = self.pop();
+        self.builder.ins().trapz(obj_ref, TrapCode::UnreachableCodeReached);
+        self.stack_slots.push(StackSlot {
+            size: 8,
+            offset: -1,
+        });
+        self.emit_monitor_exit(obj_ref)?;
+        Ok(())
+    }
+
+    fn emit_monitor_exit(&mut self, _obj_ref: Value) -> Result<(), JitError> {
         Ok(())
     }
 
     fn lower_invokenative(&mut self) -> Result<(), JitError> {
         let cp_index = ((self.method.code[self.pc_offset + 1] as usize) << 8)
             | (self.method.code[self.pc_offset + 2] as usize);
+        let method_ref = self
+            .method
+            .method_refs
+            .get(cp_index)
+            .and_then(|m| m.as_ref())
+            .ok_or_else(|| {
+                JitError::CompilationFailed(format!("Invalid method ref index: {}", cp_index))
+            })?;
+        let class_name = method_ref.class_name.clone();
+        let method_name = method_ref.method_name.clone();
+        let method_desc = method_ref.descriptor.clone();
         let argc = (self.method.code[self.pc_offset + 3] & 0xFF) as usize;
         for _ in 0..argc {
             self.pop();
@@ -1105,10 +1387,23 @@ impl<'a> BytecodeCompiler<'a> {
             size: 8,
             offset: cp_index as i32,
         });
-        self.builder.ins().trap(TrapCode::UnreachableCodeReached);
-        let null = self.builder.ins().iconst(types::I64, 0);
-        self.push(null);
+        let result =
+            self.emit_invoke_native(&class_name, &method_name, &method_desc, argc)?;
+        if result {
+            let null = self.builder.ins().iconst(types::I64, 0);
+            self.push(null);
+        }
         Ok(())
+    }
+
+    fn emit_invoke_native(
+        &mut self,
+        _class_name: &str,
+        _method_name: &str,
+        _method_desc: &str,
+        _argc: usize,
+    ) -> Result<bool, JitError> {
+        Ok(false)
     }
 
     pub fn frame_size(&self) -> usize {

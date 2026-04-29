@@ -142,6 +142,14 @@ Goal: beat HotSpot on cold-start and match-within-2x on steady state, via a simp
 - All optimization passes in `Optimizer` must perform actual transformations — no empty implementations
 - All emitter/machine code generation must produce valid executable code
 
+**Global Implementation Constraint: NO STUBS ALLOWED**
+All code in this project must be fully implemented. Prohibited patterns:
+- Methods returning `Ok(())` without performing any action
+- Placeholder implementations that do nothing
+- TODO comments in implemented features
+- `...` or `unimplemented!()` in production code
+- Empty match arms or `match _ => ()` without proper handling
+
 ### 13.3 Memory Layout
 - [ ] Compressed object references (32-bit indices on a ≤4 GB heap) — already mostly the case via `Reference::Heap(u32)`; formalize and document
 - [ ] Pack `HeapValue::Object` fields by descriptor into a flat `Vec<u8>` with an offset table per class, instead of `BTreeMap<String, Value>` — kills per-object hashing + allocation overhead

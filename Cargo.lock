@@ -283,6 +283,7 @@ name = "jvm-rs"
 version = "0.1.0"
 dependencies = [
  "cranelift",
+ "cranelift-frontend",
  "cranelift-module",
  "cranelift-native",
  "glob",

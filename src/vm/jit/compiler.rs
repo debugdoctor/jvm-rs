@@ -1,6 +1,7 @@
 use cranelift::prelude::*;
 use cranelift::codegen::ir::Function;
 use cranelift_module::Module;
+use cranelift_frontend::Variable;
 
 use crate::vm::types::Method;
 use super::{CompiledCode, JitError, StackSlot, DeoptimizationInfo, GuardCheck};
@@ -13,6 +14,7 @@ pub struct BytecodeCompiler<'a> {
     stack_slots: Vec<StackSlot>,
     guard_checks: Vec<GuardCheck>,
     pc_offset: usize,
+    local_vars_initialized: bool,
 }
 
 impl<'a> BytecodeCompiler<'a> {
@@ -25,10 +27,12 @@ impl<'a> BytecodeCompiler<'a> {
             stack_slots: Vec::new(),
             guard_checks: Vec::new(),
             pc_offset: 0,
+            local_vars_initialized: false,
         }
     }
 
     pub fn lower(&mut self) -> Result<(), JitError> {
+        self.initialize_local_vars()?;
         let code = &self.method.code;
         let mut pc = 0;
 
@@ -299,9 +303,10 @@ impl<'a> BytecodeCompiler<'a> {
         self.load_local(index, types::I64)
     }
 
-    fn load_local(&mut self, index: usize, ty: Type) -> Result<(), JitError> {
-        let param_value = self.builder.block_params(self.builder.current_block().unwrap())[index];
-        self.push(param_value);
+    fn load_local(&mut self, index: usize, _ty: Type) -> Result<(), JitError> {
+        let var = Variable::new(index);
+        let value = self.builder.use_var(var);
+        self.push(value);
         Ok(())
     }
 
@@ -361,7 +366,10 @@ impl<'a> BytecodeCompiler<'a> {
         self.store_local(index, types::I64)
     }
 
-    fn store_local(&mut self, _index: usize, _ty: Type) -> Result<(), JitError> {
+    fn store_local(&mut self, index: usize, _ty: Type) -> Result<(), JitError> {
+        let value = self.pop();
+        let var = Variable::new(index);
+        self.builder.def_var(var, value);
         Ok(())
     }
 
@@ -601,13 +609,35 @@ impl<'a> BytecodeCompiler<'a> {
         Ok(())
     }
 
+    fn initialize_local_vars(&mut self) -> Result<(), JitError> {
+        let num_locals = self.method.max_locals;
+        let entry_block = self.builder.create_block();
+        self.builder.append_block_params_for_function_params(entry_block);
+        self.builder.switch_to_block(entry_block);
+
+        for i in 0..num_locals {
+            let var = Variable::new(i);
+            self.builder.declare_var(var, types::I64);
+        }
+
+        for i in 0..num_locals {
+            let var = Variable::new(i);
+            let param = self.builder.block_params(entry_block)[i];
+            self.builder.def_var(var, param);
+        }
+
+        self.local_vars_initialized = true;
+        Ok(())
+    }
+
     fn lower_iinc(&mut self) -> Result<(), JitError> {
         let index = self.method.code[self.pc_offset + 1] as usize;
         let increment = self.method.code[self.pc_offset + 2] as i8 as i32;
-        let block_params = self.builder.block_params(self.builder.current_block().unwrap());
-        let current = block_params[index];
+        let var = Variable::new(index);
+        let current = self.builder.use_var(var);
         let inc_val = self.builder.ins().iconst(types::I32, increment as i64);
-        self.builder.ins().iadd(current, inc_val);
+        let result = self.builder.ins().iadd(current, inc_val);
+        self.builder.def_var(var, result);
         Ok(())
     }
 

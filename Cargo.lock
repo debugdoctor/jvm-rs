@@ -18,6 +18,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "anyhow"
+version = "1.0.102"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
+
+[[package]]
 name = "arbitrary"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -133,6 +139,16 @@ name = "cranelift-isle"
 version = "0.89.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77aa537f020ea43483100153278e7215d41695bdcef9eea6642d122675f64249"
+
+[[package]]
+name = "cranelift-module"
+version = "0.89.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f75a11afb8baedabc913cc962871d8699fc2d532331c356add8d725a1730f1d"
+dependencies = [
+ "anyhow",
+ "cranelift-codegen",
+]
 
 [[package]]
 name = "cranelift-native"
@@ -267,6 +283,7 @@ name = "jvm-rs"
 version = "0.1.0"
 dependencies = [
  "cranelift",
+ "cranelift-module",
  "cranelift-native",
  "glob",
  "memmap2",

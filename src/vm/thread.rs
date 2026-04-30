@@ -25,6 +25,10 @@ pub(super) struct RuntimeState {
     /// name (e.g., `java/util/HashMap`, `I`, `[Ljava/lang/String;`). Populated
     /// on demand when `ldc` or native reflection produces a Class constant.
     pub(super) class_objects: HashMap<String, crate::vm::types::Reference>,
+    /// Counter incremented each time `Vm::execute` returns via the JIT entry
+    /// path. Used by tests to assert the JIT actually ran, not that it
+    /// silently fell back to the interpreter.
+    pub(super) jit_executions: u64,
 }
 
 #[derive(Debug, Default)]

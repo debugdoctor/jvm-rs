@@ -43,6 +43,8 @@ use classloader::{ClassLoader, LazyClassLoader, BootstrapClassLoader};
 use crate::vm::jit::JitCompiler;
 use crate::vm::jit::runtime::JitContext;
 
+use crate::vm::jit::runtime::{set_current_vm, clear_current_vm, get_current_vm_ptr};
+
 static NEXT_THREAD_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 pub struct Vm {
@@ -227,6 +229,27 @@ fn collect_garbage(&mut self, thread: &Thread) {
         self.heap.lock().unwrap().gc_threshold = allocations.max(1);
     }
 
+    /// Test hook: set how many invocations are required before a method is
+    /// JIT-compiled. Production threshold is 1000; tests can drop this to 1
+    /// so JIT fires on the very first call.
+    pub fn set_jit_thresholds(&mut self, invocation: u32, backedge: u32) {
+        if let Some(jit) = self.jit.as_mut() {
+            jit.set_thresholds(invocation, backedge);
+        }
+    }
+
+    /// Whether a real JIT compiler is available (false if `JitCompiler::new`
+    /// failed to build a host ISA).
+    pub fn has_jit(&self) -> bool {
+        self.jit.is_some() && self.jit_context.is_some()
+    }
+
+    /// Test hook: how many times the JIT-compiled entry path successfully
+    /// produced a return value for the current process. Reset on each Vm.
+    pub fn jit_executions(&self) -> u64 {
+        self.runtime.lock().unwrap().jit_executions
+    }
+
     /// Turn off automatic GC. Programs can still call [`Self::request_gc`]
     /// explicitly (for example after a workload that produces transient garbage).
     pub fn disable_gc(&mut self) {
@@ -267,6 +290,26 @@ fn collect_garbage(&mut self, thread: &Thread) {
     /// index the bytecode expects. Without this padding, methods like
     /// `ArraysSupport.vectorizedMismatch(Object,J,Object,J,I,I)` read local
     /// 7 (the second int) from an uninitialized slot.
+    pub(super) fn collect_jit_args_static(method: &Method, frame: &Frame) -> Vec<Value> {
+        // JIT signature is built from the descriptor; for non-static methods the
+        // JIT does not include `this`, so we skip locals[0] in that case.
+        let arg_count = parse_arg_types(&method.descriptor).map(|v| v.len()).unwrap_or(0);
+        let is_static = method.access_flags & 0x0008 != 0;
+        let mut out = Vec::with_capacity(arg_count);
+        let mut local_idx = if is_static { 0 } else { 1 };
+        for _ in 0..arg_count {
+            let v = frame
+                .locals
+                .get(local_idx)
+                .and_then(|o| o.clone())
+                .unwrap_or(Value::Int(0));
+            let wide = matches!(v, Value::Long(_) | Value::Double(_));
+            out.push(v);
+            local_idx += if wide { 2 } else { 1 };
+        }
+        out
+    }
+
     pub(super) fn args_to_locals(args: Vec<Value>) -> Vec<Option<Value>> {
         let mut locals = Vec::with_capacity(args.len());
         for value in args {
@@ -972,23 +1015,32 @@ fn collect_garbage(&mut self, thread: &Thread) {
         let mut thread = Thread::new(method);
         thread.current_frame_mut().increment_invocation_count();
 
-        if self.jit.is_some() && self.jit_context.is_some() {
-            let jit = self.jit.as_ref().unwrap();
-            let jit_context = self.jit_context.as_mut().unwrap();
-            let frame = thread.current_frame();
-            if jit.should_compile(&frame, None) {
-                if let Some(code) = jit.get_or_compile(&method_clone) {
-                    let installed = jit_context.add_method(method_key.clone(), code.clone());
-                    if installed {
-                        if let Some(result) = jit_context.execute(&method_key, &[]) {
-                            return Ok(ExecutionResult::Value(result));
+        set_current_vm(self as *mut Vm as u64);
+
+        let result = (|| -> Result<ExecutionResult, VmError> {
+            if self.jit.is_some() && self.jit_context.is_some() {
+                let jit = self.jit.as_ref().unwrap();
+                let jit_context = self.jit_context.as_mut().unwrap();
+                let frame = thread.current_frame();
+                if jit.should_compile(&frame, None) {
+                    if let Some(code) = jit.get_or_compile(&method_clone) {
+                        let installed = jit_context.add_method(method_key.clone(), code.clone());
+                        if installed {
+                            let jit_args = Vm::collect_jit_args_static(&method_clone, frame);
+                            let ret = crate::vm::jit::runtime::JitReturn::from_descriptor(&descriptor);
+                            if let Some(result) = jit_context.execute_typed(&method_key, &jit_args, ret) {
+                                self.runtime.lock().unwrap().jit_executions += 1;
+                                if matches!(ret, crate::vm::jit::runtime::JitReturn::Void) {
+                                    return Ok(ExecutionResult::Void);
+                                }
+                                return Ok(ExecutionResult::Value(result));
+                            }
                         }
                     }
                 }
             }
-        }
 
-        loop {
+            loop {
             let opcode_pc = thread.current_frame().pc;
             if opcode_pc >= thread.current_frame().code.len() {
                 return Err(VmError::MissingReturn);
@@ -1053,6 +1105,11 @@ fn collect_garbage(&mut self, thread: &Thread) {
                 Err(err) => return Err(err),
             }
         }
+        })();
+
+        clear_current_vm();
+
+        result
     }
 
     /// Execute a single opcode.

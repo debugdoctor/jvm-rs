@@ -1,5 +1,5 @@
 use cranelift::prelude::*;
-use cranelift::codegen::ir::{TrapCode, UserFuncName};
+use cranelift::codegen::ir::{ExternalName, TrapCode, UserFuncName};
 use cranelift::codegen::{Context, isa::TargetIsa};
 use cranelift_frontend::{Variable, FunctionBuilderContext};
 
@@ -18,6 +18,7 @@ pub struct BytecodeCompiler<'a> {
     pc_offset: usize,
     local_vars_initialized: bool,
     arg_types: Vec<u8>,
+    context_var: Variable,
 }
 
 impl<'a> BytecodeCompiler<'a> {
@@ -32,6 +33,7 @@ impl<'a> BytecodeCompiler<'a> {
             pc_offset: 0,
             local_vars_initialized: false,
             arg_types,
+            context_var: Variable::new(65534),
         }
     }
 
@@ -52,8 +54,9 @@ impl<'a> BytecodeCompiler<'a> {
 
     fn lower_opcode(&mut self, pc: usize, opcode: u8) -> Result<(), JitError> {
         match opcode {
-            0x00 => self.lower_aconst_null(),
-            0x01..=0x08 => self.lower_iconst(-1i32 - (opcode - 0x01) as i32),
+            0x00 => Ok(()), // nop
+            0x01 => self.lower_aconst_null(),
+            0x02..=0x08 => self.lower_iconst((opcode as i32) - 0x03),
             0x09..=0x0a => self.lower_lconst((opcode - 0x09) as i64),
             0x0b..=0x0d => self.lower_fconst((opcode - 0x0b) as f32),
             0x0e..=0x0f => self.lower_dconst((opcode - 0x0e) as f64),
@@ -92,7 +95,37 @@ impl<'a> BytecodeCompiler<'a> {
             0x62 => self.lower_fadd(),
             0x63 => self.lower_dadd(),
             0x64 => self.lower_isub(),
+            0x65 => self.lower_lsub(),
+            0x66 => self.lower_fsub(),
+            0x67 => self.lower_dsub(),
             0x68 => self.lower_imul(),
+            0x69 => self.lower_lmul(),
+            0x6a => self.lower_fmul(),
+            0x6b => self.lower_dmul(),
+            0x6c => self.lower_ldiv(),
+            0x6d => self.lower_fdiv(),
+            0x6e => self.lower_idiv(),
+            0x6f => self.lower_ddiv(),
+            0x70 => self.lower_lrem(),
+            0x71 => self.lower_irem(),
+            0x72 => self.lower_frem(),
+            0x73 => self.lower_drem(),
+            0x74 => self.lower_ineg(),
+            0x75 => self.lower_lneg(),
+            0x76 => self.lower_fneg(),
+            0x77 => self.lower_dneg(),
+            0x78 => self.lower_ishl(),
+            0x79 => self.lower_lshl(),
+            0x7a => self.lower_ishr(),
+            0x7b => self.lower_lshr(),
+            0x7c => self.lower_iushr(),
+            0x7d => self.lower_lushr(),
+            0x7e => self.lower_ixor(),
+            0x7f => self.lower_land(),
+            0x80 => self.lower_lor(),
+            0x81 => self.lower_lxor(),
+            0x82 => self.lower_ior(),
+            0x83 => self.lower_ixor(),
             0x6e => self.lower_idiv(),
             0x70 => self.lower_irem(),
             0x74 => self.lower_ineg(),
@@ -352,7 +385,14 @@ impl<'a> BytecodeCompiler<'a> {
     fn load_local(&mut self, index: usize, _ty: Type) -> Result<(), JitError> {
         let var = Variable::new(index);
         let value = self.builder.use_var(var);
-        self.push(value);
+        let declared_ty = self.local_var_type(index);
+        let requested_ty = _ty;
+        let coerced = match (declared_ty, requested_ty) {
+            (types::I64, types::I32) => self.builder.ins().ireduce(types::I32, value),
+            (types::I32, types::I64) => self.builder.ins().sextend(types::I64, value),
+            _ => value,
+        };
+        self.push(coerced);
         Ok(())
     }
 
@@ -492,7 +532,13 @@ impl<'a> BytecodeCompiler<'a> {
     fn store_local(&mut self, index: usize, _ty: Type) -> Result<(), JitError> {
         let value = self.pop();
         let var = Variable::new(index);
-        self.builder.def_var(var, value);
+        let declared_ty = self.local_var_type(index);
+        let stored = match (_ty, declared_ty) {
+            (types::I32, types::I64) => self.builder.ins().sextend(types::I64, value),
+            (types::I64, types::I32) => self.builder.ins().ireduce(types::I32, value),
+            _ => value,
+        };
+        self.builder.def_var(var, stored);
         Ok(())
     }
 
@@ -732,6 +778,186 @@ impl<'a> BytecodeCompiler<'a> {
         Ok(())
     }
 
+    fn lower_lsub(&mut self) -> Result<(), JitError> {
+        let rhs = self.pop();
+        let lhs = self.pop();
+        let result = self.builder.ins().isub(lhs, rhs);
+        self.push(result);
+        Ok(())
+    }
+
+    fn lower_fsub(&mut self) -> Result<(), JitError> {
+        let rhs = self.pop();
+        let lhs = self.pop();
+        let result = self.builder.ins().fsub(lhs, rhs);
+        self.push(result);
+        Ok(())
+    }
+
+    fn lower_dsub(&mut self) -> Result<(), JitError> {
+        let rhs = self.pop();
+        let lhs = self.pop();
+        let result = self.builder.ins().fsub(lhs, rhs);
+        self.push(result);
+        Ok(())
+    }
+
+    fn lower_lmul(&mut self) -> Result<(), JitError> {
+        let rhs = self.pop();
+        let lhs = self.pop();
+        let result = self.builder.ins().imul(lhs, rhs);
+        self.push(result);
+        Ok(())
+    }
+
+    fn lower_fmul(&mut self) -> Result<(), JitError> {
+        let rhs = self.pop();
+        let lhs = self.pop();
+        let result = self.builder.ins().fmul(lhs, rhs);
+        self.push(result);
+        Ok(())
+    }
+
+    fn lower_dmul(&mut self) -> Result<(), JitError> {
+        let rhs = self.pop();
+        let lhs = self.pop();
+        let result = self.builder.ins().fmul(lhs, rhs);
+        self.push(result);
+        Ok(())
+    }
+
+    fn lower_ldiv(&mut self) -> Result<(), JitError> {
+        let rhs = self.pop();
+        let lhs = self.pop();
+        let result = self.builder.ins().sdiv(lhs, rhs);
+        self.push(result);
+        Ok(())
+    }
+
+    fn lower_fdiv(&mut self) -> Result<(), JitError> {
+        let rhs = self.pop();
+        let lhs = self.pop();
+        let result = self.builder.ins().fdiv(lhs, rhs);
+        self.push(result);
+        Ok(())
+    }
+
+    fn lower_ddiv(&mut self) -> Result<(), JitError> {
+        let rhs = self.pop();
+        let lhs = self.pop();
+        let result = self.builder.ins().fdiv(lhs, rhs);
+        self.push(result);
+        Ok(())
+    }
+
+    fn lower_lrem(&mut self) -> Result<(), JitError> {
+        let rhs = self.pop();
+        let lhs = self.pop();
+        let quotient = self.builder.ins().sdiv(lhs, rhs);
+        let product = self.builder.ins().imul(quotient, rhs);
+        let remainder = self.builder.ins().isub(lhs, product);
+        self.push(remainder);
+        Ok(())
+    }
+
+    fn lower_frem(&mut self) -> Result<(), JitError> {
+        let rhs = self.pop();
+        let lhs = self.pop();
+        let quotient = self.builder.ins().fdiv(lhs, rhs);
+        let floor = self.builder.ins().floor(quotient);
+        let product = self.builder.ins().fmul(floor, rhs);
+        let remainder = self.builder.ins().fsub(lhs, product);
+        self.push(remainder);
+        Ok(())
+    }
+
+    fn lower_drem(&mut self) -> Result<(), JitError> {
+        let rhs = self.pop();
+        let lhs = self.pop();
+        let quotient = self.builder.ins().fdiv(lhs, rhs);
+        let floor = self.builder.ins().floor(quotient);
+        let product = self.builder.ins().fmul(floor, rhs);
+        let remainder = self.builder.ins().fsub(lhs, product);
+        self.push(remainder);
+        Ok(())
+    }
+
+    fn lower_lneg(&mut self) -> Result<(), JitError> {
+        let val = self.pop();
+        let zero = self.lconst(0);
+        let result = self.builder.ins().isub(zero, val);
+        self.push(result);
+        Ok(())
+    }
+
+    fn lower_fneg(&mut self) -> Result<(), JitError> {
+        let val = self.pop();
+        let neg = self.builder.ins().fneg(val);
+        self.push(neg);
+        Ok(())
+    }
+
+    fn lower_dneg(&mut self) -> Result<(), JitError> {
+        let val = self.pop();
+        let neg = self.builder.ins().fneg(val);
+        self.push(neg);
+        Ok(())
+    }
+
+    fn lower_lshl(&mut self) -> Result<(), JitError> {
+        let rhs = self.pop();
+        let lhs = self.pop();
+        let mask = self.builder.ins().iconst(types::I64, 0x3f);
+        let shifted = self.builder.ins().band(rhs, mask);
+        let result = self.builder.ins().ishl(lhs, shifted);
+        self.push(result);
+        Ok(())
+    }
+
+    fn lower_lshr(&mut self) -> Result<(), JitError> {
+        let rhs = self.pop();
+        let lhs = self.pop();
+        let mask = self.builder.ins().iconst(types::I64, 0x3f);
+        let shifted = self.builder.ins().band(rhs, mask);
+        let result = self.builder.ins().sshr(lhs, shifted);
+        self.push(result);
+        Ok(())
+    }
+
+    fn lower_lushr(&mut self) -> Result<(), JitError> {
+        let rhs = self.pop();
+        let lhs = self.pop();
+        let mask = self.builder.ins().iconst(types::I64, 0x3f);
+        let shifted = self.builder.ins().band(rhs, mask);
+        let result = self.builder.ins().ushr(lhs, shifted);
+        self.push(result);
+        Ok(())
+    }
+
+    fn lower_land(&mut self) -> Result<(), JitError> {
+        let rhs = self.pop();
+        let lhs = self.pop();
+        let result = self.builder.ins().band(lhs, rhs);
+        self.push(result);
+        Ok(())
+    }
+
+    fn lower_lor(&mut self) -> Result<(), JitError> {
+        let rhs = self.pop();
+        let lhs = self.pop();
+        let result = self.builder.ins().bor(lhs, rhs);
+        self.push(result);
+        Ok(())
+    }
+
+    fn lower_lxor(&mut self) -> Result<(), JitError> {
+        let rhs = self.pop();
+        let lhs = self.pop();
+        let result = self.builder.ins().bxor(lhs, rhs);
+        self.push(result);
+        Ok(())
+    }
+
     fn initialize_local_vars(&mut self) -> Result<(), JitError> {
         let num_locals = self.method.max_locals;
         let entry_block = self.builder.create_block();
@@ -741,20 +967,12 @@ impl<'a> BytecodeCompiler<'a> {
         let block_params: Vec<Value> = self.builder.block_params(entry_block).to_vec();
         let num_params = block_params.len();
 
+        self.builder.declare_var(self.context_var, types::I64);
+        self.builder.def_var(self.context_var, block_params[0]);
+
         for i in 0..num_locals {
             let var = Variable::new(i);
-            let var_type = if i < self.arg_types.len() {
-                match self.arg_types[i] {
-                    b'B' | b'C' | b'I' | b'S' | b'Z' => types::I32,
-                    b'J' => types::I64,
-                    b'F' => types::F32,
-                    b'D' => types::F64,
-                    b'L' | b'[' => types::I64,
-                    _ => types::I64,
-                }
-            } else {
-                types::I64
-            };
+            let var_type = self.local_var_type(i);
             self.builder.declare_var(var, var_type);
         }
 
@@ -764,13 +982,44 @@ impl<'a> BytecodeCompiler<'a> {
             if block_param_index < num_params {
                 self.builder.def_var(var, block_params[block_param_index]);
             } else {
-                let zero = self.builder.ins().iconst(types::I64, 0);
+                let zero = match self.local_var_type(i) {
+                    types::I32 => self.builder.ins().iconst(types::I32, 0),
+                    types::I64 => self.builder.ins().iconst(types::I64, 0),
+                    types::F32 => self.builder.ins().f32const(0.0),
+                    types::F64 => self.builder.ins().f64const(0.0),
+                    _ => self.builder.ins().iconst(types::I64, 0),
+                };
                 self.builder.def_var(var, zero);
             }
         }
 
         self.local_vars_initialized = true;
         Ok(())
+    }
+
+    fn local_var_type(&self, index: usize) -> Type {
+        if index < self.arg_types.len() {
+            match self.arg_types[index] {
+                b'B' | b'C' | b'I' | b'S' | b'Z' => types::I32,
+                b'J' => types::I64,
+                b'F' => types::F32,
+                b'D' => types::F64,
+                b'L' | b'[' => types::I64,
+                _ => types::I64,
+            }
+        } else {
+            types::I64
+        }
+    }
+
+    fn emit_deoptimization(&mut self, reason: &str) -> Result<Value, JitError> {
+        self.builder.ins().trap(TrapCode::UnreachableCodeReached);
+        Ok(self.builder.ins().iconst(types::I64, 0))
+    }
+
+    fn emit_helper_call(&mut self, _helper_index: usize, _args: &[Value], _return_type: Type) -> Result<Value, JitError> {
+        self.builder.ins().trap(TrapCode::UnreachableCodeReached);
+        Ok(self.builder.ins().iconst(types::I64, 0))
     }
 
     fn lower_iinc(&mut self) -> Result<(), JitError> {
@@ -1082,8 +1331,8 @@ impl<'a> BytecodeCompiler<'a> {
         _field_name: &str,
         _field_desc: &str,
     ) -> Result<Value, JitError> {
-        let null = self.builder.ins().iconst(types::I64, 0);
-        Ok(null)
+        self.builder.ins().trap(TrapCode::UnreachableCodeReached);
+        Ok(self.builder.ins().iconst(types::I64, 0))
     }
 
     fn lower_getfield(&mut self) -> Result<(), JitError> {
@@ -1116,8 +1365,8 @@ impl<'a> BytecodeCompiler<'a> {
         _field_name: &str,
         _field_desc: &str,
     ) -> Result<Value, JitError> {
-        let zero = self.builder.ins().iconst(types::I64, 0);
-        Ok(zero)
+        self.builder.ins().trap(TrapCode::UnreachableCodeReached);
+        Ok(self.builder.ins().iconst(types::I64, 0))
     }
 
     fn lower_putfield(&mut self) -> Result<(), JitError> {
@@ -1151,6 +1400,7 @@ impl<'a> BytecodeCompiler<'a> {
         _field_name: &str,
         _field_desc: &str,
     ) -> Result<(), JitError> {
+        self.builder.ins().trap(TrapCode::UnreachableCodeReached);
         Ok(())
     }
 
@@ -1198,7 +1448,8 @@ impl<'a> BytecodeCompiler<'a> {
         _method_desc: &str,
         _argc: usize,
     ) -> Result<bool, JitError> {
-        Ok(false)
+        self.builder.ins().trap(TrapCode::UnreachableCodeReached);
+        Ok(true)
     }
 
     fn lower_invokespecial(&mut self) -> Result<(), JitError> {
@@ -1243,8 +1494,21 @@ impl<'a> BytecodeCompiler<'a> {
         _class_name: &str,
         _method_name: &str,
         _method_desc: &str,
-        _argc: usize,
+        argc: usize,
     ) -> Result<bool, JitError> {
+        let cp_index = self.stack_slots.last().map(|s| s.offset as i64).unwrap_or(0);
+        let this_ref = self.pop();
+        let ctx = self.builder.ins().iconst(types::I64, 0);
+        let cp_idx_val = self.builder.ins().iconst(types::I64, cp_index);
+        let argc_val = self.builder.ins().iconst(types::I64, argc as i64);
+
+        let helper_ptr = self.builder.ins().iconst(types::I64, crate::vm::jit::runtime::get_invoke_special_ptr() as i64);
+        let call = self.builder.ins().call_indirect(
+            ExternalName::user(0, 1),
+            vec![ctx, this_ref, cp_idx_val, argc_val, types::I64.zero(), types::I64.zero()],
+        );
+        let result = call.inst;
+        self.push(self.builder.ins().iconst(types::I64, 0));
         Ok(false)
     }
 
@@ -1285,8 +1549,20 @@ impl<'a> BytecodeCompiler<'a> {
         _class_name: &str,
         _method_name: &str,
         _method_desc: &str,
-        _argc: usize,
+        argc: usize,
     ) -> Result<bool, JitError> {
+        let cp_index = self.stack_slots.last().map(|s| s.offset as i64).unwrap_or(0);
+        let ctx = self.builder.ins().iconst(types::I64, 0);
+        let cp_idx_val = self.builder.ins().iconst(types::I64, cp_index);
+        let argc_val = self.builder.ins().iconst(types::I64, argc as i64);
+
+        let helper_ptr = self.builder.ins().iconst(types::I64, crate::vm::jit::runtime::get_invoke_static_ptr() as i64);
+        let call = self.builder.ins().call_indirect(
+            ExternalName::user(0, 2),
+            vec![ctx, types::I64.zero(), cp_idx_val, argc_val, types::I64.zero(), types::I64.zero()],
+        );
+        let result = call.inst;
+        self.push(self.builder.ins().iconst(types::I64, 0));
         Ok(false)
     }
 
@@ -1336,8 +1612,21 @@ impl<'a> BytecodeCompiler<'a> {
         _class_name: &str,
         _method_name: &str,
         _method_desc: &str,
-        _argc: usize,
+        argc: usize,
     ) -> Result<bool, JitError> {
+        let cp_index = self.stack_slots.last().map(|s| s.offset as i64).unwrap_or(0);
+        let this_ref = self.pop();
+        let ctx = self.builder.ins().iconst(types::I64, 0);
+        let cp_idx_val = self.builder.ins().iconst(types::I64, cp_index);
+        let argc_val = self.builder.ins().iconst(types::I64, argc as i64);
+
+        let helper_ptr = self.builder.ins().iconst(types::I64, crate::vm::jit::runtime::get_invoke_interface_ptr() as i64);
+        let call = self.builder.ins().call_indirect(
+            ExternalName::user(0, 3),
+            vec![ctx, this_ref, cp_idx_val, argc_val, types::I64.zero(), types::I64.zero()],
+        );
+        let result = call.inst;
+        self.push(self.builder.ins().iconst(types::I64, 0));
         Ok(false)
     }
 
@@ -1357,7 +1646,8 @@ impl<'a> BytecodeCompiler<'a> {
     }
 
     fn emit_invokedynamic(&mut self, _cp_index: usize) -> Result<bool, JitError> {
-        Ok(false)
+        self.builder.ins().trap(TrapCode::UnreachableCodeReached);
+        Ok(true)
     }
 
     fn lower_new(&mut self) -> Result<(), JitError> {
@@ -1382,8 +1672,8 @@ impl<'a> BytecodeCompiler<'a> {
     }
 
     fn allocate_object(&mut self, _class_name: &str) -> Result<Value, JitError> {
-        let null = self.builder.ins().iconst(types::I64, 0);
-        Ok(null)
+        self.builder.ins().trap(TrapCode::UnreachableCodeReached);
+        Ok(self.builder.ins().iconst(types::I64, 0))
     }
 
     fn lower_newarray(&mut self) -> Result<(), JitError> {
@@ -1404,8 +1694,8 @@ impl<'a> BytecodeCompiler<'a> {
         _array_type: usize,
         _count: Value,
     ) -> Result<Value, JitError> {
-        let null = self.builder.ins().iconst(types::I64, 0);
-        Ok(null)
+        self.builder.ins().trap(TrapCode::UnreachableCodeReached);
+        Ok(self.builder.ins().iconst(types::I64, 0))
     }
 
     fn lower_anewarray(&mut self) -> Result<(), JitError> {
@@ -1436,8 +1726,8 @@ impl<'a> BytecodeCompiler<'a> {
         _component_type: &str,
         _count: Value,
     ) -> Result<Value, JitError> {
-        let null = self.builder.ins().iconst(types::I64, 0);
-        Ok(null)
+        self.builder.ins().trap(TrapCode::UnreachableCodeReached);
+        Ok(self.builder.ins().iconst(types::I64, 0))
     }
     fn lower_arraylength(&mut self) -> Result<(), JitError> {
         let array_ref = self.pop();
@@ -1457,6 +1747,7 @@ impl<'a> BytecodeCompiler<'a> {
     }
 
     fn emit_throw(&mut self, _exception_ref: Value) -> Result<(), JitError> {
+        self.builder.ins().trap(TrapCode::UnreachableCodeReached);
         Ok(())
     }
 
@@ -1521,6 +1812,7 @@ impl<'a> BytecodeCompiler<'a> {
     }
 
     fn emit_monitor_enter(&mut self, _obj_ref: Value) -> Result<(), JitError> {
+        self.builder.ins().trap(TrapCode::UnreachableCodeReached);
         Ok(())
     }
 
@@ -1536,6 +1828,7 @@ impl<'a> BytecodeCompiler<'a> {
     }
 
     fn emit_monitor_exit(&mut self, _obj_ref: Value) -> Result<(), JitError> {
+        self.builder.ins().trap(TrapCode::UnreachableCodeReached);
         Ok(())
     }
 
@@ -1577,7 +1870,8 @@ impl<'a> BytecodeCompiler<'a> {
         _method_desc: &str,
         _argc: usize,
     ) -> Result<bool, JitError> {
-        Ok(false)
+        self.builder.ins().trap(TrapCode::UnreachableCodeReached);
+        Ok(true)
     }
 
     pub fn frame_size(&self) -> usize {
@@ -1652,9 +1946,7 @@ pub fn compile_bytecode(
     let return_type = crate::vm::types::parse_return_type(&method.descriptor)
         .map_err(|e| JitError::CompilationFailed(format!("Invalid descriptor: {}", e)))?;
 
-    let mut signature = cranelift::codegen::ir::Signature::new(
-        cranelift::codegen::isa::CallConv::SystemV,
-    );
+    let mut signature = cranelift::codegen::ir::Signature::new(isa.default_call_conv());
 
     signature.params.insert(0, AbiParam::new(types::I64));
 

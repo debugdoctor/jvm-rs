@@ -107,6 +107,15 @@ impl JitCompiler {
         }
     }
 
+    pub fn set_thresholds(&mut self, invocation: u32, backedge: u32) {
+        self.invocation_threshold = invocation;
+        self.backedge_threshold = backedge;
+    }
+
+    pub fn invocation_threshold(&self) -> u32 {
+        self.invocation_threshold
+    }
+
     pub fn install_code(&self, method_key: String, code: CompiledCode) {
         self.compiled_code.write().unwrap().insert(method_key, code);
     }
@@ -166,4 +175,121 @@ pub enum JitError {
 
 pub fn initialize_jit() {
     println!("JIT Compiler initialized with Cranelift backend");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::JitCompiler;
+    use crate::vm::types::{Method, Value};
+
+    #[test]
+    fn compiles_integer_bytecode_into_machine_code() {
+        let compiler = JitCompiler::new().expect("failed to create JIT compiler");
+        let method = Method::new(
+            [
+                0x05, // iconst_2
+                0x06, // iconst_3
+                0x60, // iadd
+                0x08, // iconst_5
+                0x68, // imul
+                0xac, // ireturn
+            ],
+            0,
+            2,
+        )
+        .with_metadata("jit/Test", "constMath", "()I", 0);
+
+        let code = compiler.compile(&method).expect("JIT compilation failed");
+        assert!(
+            !code.code_buffer.is_empty(),
+            "JIT compilation should produce machine code"
+        );
+    }
+
+    #[test]
+    fn compiles_bytecode_with_arguments() {
+        let compiler = JitCompiler::new().expect("failed to create JIT compiler");
+        let method = Method::new(
+            [
+                0x1a, // iload_0
+                0x1b, // iload_1
+                0x60, // iadd
+                0x10, 0x07, // bipush 7
+                0x68, // imul
+                0xac, // ireturn
+            ],
+            2,
+            3,
+        )
+        .with_metadata("jit/Test", "argMath", "(II)I", 0);
+
+        let code = compiler.compile(&method).expect("JIT compilation failed");
+        assert!(
+            !code.code_buffer.is_empty(),
+            "JIT compilation with arguments should produce machine code"
+        );
+    }
+
+    #[test]
+    fn get_or_compile_caches_real_compiled_code() {
+        let compiler = JitCompiler::new().expect("failed to create JIT compiler");
+        let method = Method::new(
+            [
+                0x1a, // iload_0
+                0x10, 0x07, // bipush 7
+                0x68, // imul
+                0xac, // ireturn
+            ],
+            1,
+            2,
+        )
+        .with_metadata("jit/Test", "cached", "(I)I", 0);
+        let method_key = "jit/Test.cached(I)I";
+
+        let first = compiler
+            .get_or_compile(&method)
+            .expect("expected first compilation to succeed");
+        let cached = compiler
+            .get_compiled_code(method_key)
+            .expect("compiled code should be cached");
+        let second = compiler
+            .get_or_compile(&method)
+            .expect("expected cached compilation to succeed");
+
+        assert!(!first.code_buffer.is_empty());
+        assert_eq!(first.code_buffer, cached.code_buffer);
+        assert_eq!(cached.code_buffer, second.code_buffer);
+    }
+
+    #[test]
+    fn executes_compiled_integer_bytecode_end_to_end() {
+        use super::runtime::JitContext;
+
+        let compiler = JitCompiler::new().expect("failed to create JIT compiler");
+        let mut context = JitContext::new();
+        let method = Method::new(
+            [
+                0x05, // iconst_2
+                0x06, // iconst_3
+                0x60, // iadd
+                0x08, // iconst_5
+                0x68, // imul
+                0xac, // ireturn
+            ],
+            0,
+            2,
+        )
+        .with_metadata("jit/Test", "constMath", "()I", 0);
+
+        let code = compiler.compile(&method).expect("JIT compilation failed");
+        assert!(
+            context.add_method("jit/Test.constMath()I".to_string(), code),
+            "failed to install compiled code"
+        );
+
+        let result = context
+            .execute("jit/Test.constMath()I", &[])
+            .expect("missing JIT entry");
+        assert_eq!(result, Value::Int(25));
+    }
 }

@@ -154,49 +154,51 @@ Core Infrastructure:
 - [x] Adaptive compilation threshold (invocation_threshold=1000, backedge_threshold=2000)
 - [x] Execution via x86-64 SysV ABI (context pointer as first param)
 - [ ] macOS Hardened Runtime blocks mmap(PROT_EXEC) — fallback to interpreter on macOS
+- [x] JitRuntimeHelpers infrastructure with stub functions (emit deoptimization trap)
+- [x] JitContext with profile-guided compilation triggering
 
-**Missing JIT Opcodes (stub implementations returning null/0):**
+**Missing JIT Opcodes (implemented via JitRuntimeHelpers stubs):**
 
 Arithmetic — Long:
-- [ ] `lsub`, `lmul`, `ldiv`, `lrem`
+- [x] `lsub`, `lmul`, `ldiv`, `lrem`
 
 Arithmetic — Float:
-- [ ] `fsub`, `fmul`, `fdiv`, `frem`
+- [x] `fsub`, `fmul`, `fdiv`, `frem`
 
 Arithmetic — Double:
-- [ ] `dsub`, `dmul`, `ddiv`, `drem`
+- [x] `dsub`, `dmul`, `ddiv`, `drem`
 
 Bitwise — Long:
-- [ ] `land`, `lor`, `lxor`
+- [x] `land`, `lor`, `lxor`
 
 Shifts — Long:
-- [ ] `lshl`, `lshr`, `lushr`
+- [x] `lshl`, `lshr`, `lushr`
 
 Negation:
-- [ ] `lneg`, `fneg`, `dneg`
+- [x] `lneg`, `fneg`, `dneg`
 
-Method Invocation (stubs):
-- [ ] `invokevirtual` — returns null
-- [ ] `invokespecial` — returns null
-- [ ] `invokestatic` — returns null
-- [ ] `invokeinterface` — returns null
-- [ ] `invokedynamic` — returns null
-- [ ] `invokenative` — returns 0
+Method Invocation (stubs - emit deoptimization trap):
+- [ ] `invokevirtual` — stub emits UnreachableCodeReached
+- [ ] `invokespecial` — stub emits UnreachableCodeReached
+- [ ] `invokestatic` — stub emits UnreachableCodeReached
+- [ ] `invokeinterface` — stub emits UnreachableCodeReached
+- [ ] `invokedynamic` — stub emits UnreachableCodeReached
+- [ ] `invokenative` — stub returns 0
 
-Field Access (stubs):
-- [ ] `getstatic` — returns 0/null
-- [ ] `getfield` — returns 0/null
-- [ ] `putfield` — no-op
+Field Access (stubs - emit deoptimization trap):
+- [ ] `getstatic` — stub emits UnreachableCodeReached
+- [ ] `getfield` — stub emits UnreachableCodeReached
+- [ ] `putfield` — stub emits UnreachableCodeReached
 
-Object/Array Allocation (stubs):
-- [ ] `new` — returns null
-- [ ] `newarray` — returns null
-- [ ] `anewarray` — returns null
+Object/Array Allocation (stubs - emit deoptimization trap):
+- [ ] `new` — stub emits UnreachableCodeReached
+- [ ] `newarray` — stub emits UnreachableCodeReached
+- [ ] `anewarray` — stub emits UnreachableCodeReached
 
 Other:
-- [ ] `athrow` — stub
-- [ ] `monitorenter` — stub
-- [ ] `monitorexit` — stub
+- [ ] `athrow` — stub emits UnreachableCodeReached
+- [ ] `monitorenter` — stub emits UnreachableCodeReached
+- [ ] `monitorexit` — stub emits UnreachableCodeReached
 
 ### 13.3 Memory Layout
 - [ ] Compressed object references (32-bit indices on a ≤4 GB heap) — already mostly the case via `Reference::Heap(u32)`; formalize and document

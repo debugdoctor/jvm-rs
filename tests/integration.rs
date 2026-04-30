@@ -51,7 +51,7 @@ fn compile_and_run_with_javac_args(
         .replace('/', ".");
 
     let options = LaunchOptions::new(&root, &main_class, vec![]);
-    let mut vm = jvm_rs::vm::Vm::new();
+    let mut vm = jvm_rs::vm::Vm::new().expect("failed to create VM");
     vm.set_class_path(options.class_path.clone());
     let source = jvm_rs::launcher::resolve_class_path(&options.class_path, &main_class).unwrap();
     let method = jvm_rs::launcher::load_main_method(

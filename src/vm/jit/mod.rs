@@ -7,7 +7,11 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::RwLock;
 
+use crate::vm::types::Method;
 use crate::vm::Frame;
+use cranelift::codegen::isa::TargetIsa;
+use cranelift_native;
+use runtime::JitContext;
 
 #[derive(Clone)]
 pub struct CompiledCode {
@@ -62,6 +66,7 @@ pub struct JitCompiler {
     compiled_code: RwLock<HashMap<String, CompiledCode>>,
     invocation_threshold: u32,
     backedge_threshold: u32,
+    isa: Box<dyn TargetIsa>,
 }
 
 impl fmt::Debug for JitCompiler {
@@ -74,20 +79,31 @@ impl fmt::Debug for JitCompiler {
 }
 
 impl JitCompiler {
-    pub fn new() -> Self {
-        Self {
+    pub fn new() -> Result<Self, String> {
+        let isa = cranelift_native::builder()
+            .map_err(|e| e.to_string())?
+            .finish(cranelift::codegen::settings::Flags::new(
+                cranelift::codegen::settings::builder(),
+            ))
+            .map_err(|e| format!("failed to build ISA: {}", e))?;
+
+        Ok(Self {
             compiled_code: RwLock::new(HashMap::new()),
             invocation_threshold: 1000,
             backedge_threshold: 2000,
-        }
+            isa,
+        })
     }
 
     pub fn should_compile(&self, frame: &Frame, cp_index: Option<usize>) -> bool {
+        if frame.code.len() > 200 {
+            return false;
+        }
         if let Some(index) = cp_index {
             let call_count = frame.call_counts.get(&index).copied().unwrap_or(0);
             call_count >= self.invocation_threshold
         } else {
-            frame.backedge_hit_count >= self.backedge_threshold
+            frame.invocation_count >= self.invocation_threshold
         }
     }
 
@@ -98,11 +114,46 @@ impl JitCompiler {
     pub fn get_compiled_code(&self, method_key: &str) -> Option<CompiledCode> {
         self.compiled_code.read().unwrap().get(method_key).cloned()
     }
+
+    pub fn isa(&self) -> &dyn TargetIsa {
+        &*self.isa
+    }
+
+    pub fn compile(&self, method: &Method) -> Result<CompiledCode, String> {
+        compiler::compile_bytecode(method, self.isa())
+            .map_err(|e| format!("JIT compilation failed: {:?}", e))
+    }
+
+    pub fn get_or_compile(&self, method: &Method) -> Option<CompiledCode> {
+        let key = format!("{}.{}{}", method.class_name, method.name, method.descriptor);
+        if let Some(code) = self.get_compiled_code(&key) {
+            return Some(code);
+        }
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.compile(method)
+        }));
+
+        match result {
+            Ok(Ok(code)) => {
+                self.install_code(key, code.clone());
+                Some(code)
+            }
+            Ok(Err(e)) => {
+                println!("JIT compilation error: {}", e);
+                None
+            }
+            Err(_) => {
+                println!("JIT compilation panicked for {}", key);
+                None
+            }
+        }
+    }
 }
 
 impl Default for JitCompiler {
     fn default() -> Self {
-        Self::new()
+        Self::new().expect("failed to create JIT compiler")
     }
 }
 

@@ -75,6 +75,7 @@ pub enum LaunchError {
         path: PathBuf,
         source: std::io::Error,
     },
+    VmInitFailed(String),
     Vm(VmError),
 }
 
@@ -118,6 +119,7 @@ impl fmt::Display for LaunchError {
             Self::Io { path, source } => {
                 write!(f, "failed to read {}: {source}", path.display())
             }
+            Self::VmInitFailed(msg) => write!(f, "vm initialization failed: {}", msg),
             Self::Vm(error) => write!(f, "vm execution failed: {error}"),
         }
     }
@@ -177,7 +179,7 @@ pub fn launch(options: &LaunchOptions) -> Result<ExecutionResult, LaunchError> {
             main_class: options.main_class.clone(),
             path: class_relative_path(&options.main_class),
         })?;
-    let mut vm = Vm::new();
+    let mut vm = Vm::new().map_err(|e| LaunchError::VmInitFailed(e))?;
     vm.set_class_path(options.class_path.clone());
     vm.set_trace(options.trace);
     let method = load_main_method(&source, &options.main_class, &options.args, &mut vm)?;
@@ -976,7 +978,7 @@ public class Main {
         );
 
         let source = resolve_class_path(&[root.clone()], "demo.Main").unwrap();
-        let mut vm = Vm::new();
+        let mut vm = Vm::new().unwrap();
         let method = load_main_method(&source, "demo.Main", &[], &mut vm).unwrap();
         let result = vm.execute(method).unwrap();
 
@@ -1088,7 +1090,7 @@ public class Main {
         );
 
         let source = resolve_class_path(&[jar_path], "demo.Main").unwrap();
-        let mut vm = Vm::new();
+        let mut vm = Vm::new().unwrap();
         let method = load_main_method(&source, "demo.Main", &[], &mut vm).unwrap();
         let result = vm.execute(method).unwrap();
         assert_eq!(result, ExecutionResult::Void);

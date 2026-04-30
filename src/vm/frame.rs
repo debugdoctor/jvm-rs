@@ -34,6 +34,23 @@ pub(super) struct Frame {
 }
 
 impl Frame {
+    pub(super) fn method_key(&self) -> String {
+        format!("{}.{}{}", self.class_name, self.method_name, self.descriptor)
+    }
+
+    pub(super) fn increment_invocation_count(&mut self) {
+        self.invocation_count += 1;
+    }
+
+    pub(super) fn increment_backedge_count(&mut self, pc: usize) {
+        self.backedge_hit_count += 1;
+        *self.backedge_counts.entry(pc).or_insert(0) += 1;
+    }
+
+    pub(super) fn increment_call_count(&mut self, cp_index: usize) {
+        *self.call_counts.entry(cp_index).or_insert(0) += 1;
+    }
+
     /// Builds the initial execution frame for a method and seeds any preloaded locals
     /// such as launcher-provided `main` arguments.
     pub(super) fn new(method: Method) -> Self {

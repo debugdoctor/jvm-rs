@@ -1,9 +1,12 @@
 use cranelift::prelude::*;
-use cranelift::codegen::ir::TrapCode;
-use cranelift_frontend::Variable;
+use cranelift::codegen::ir::{TrapCode, UserFuncName};
+use cranelift::codegen::{Context, isa::TargetIsa};
+use cranelift_frontend::{Variable, FunctionBuilderContext};
 
 use crate::vm::types::Method;
 use super::{CompiledCode, JitError, StackSlot, DeoptimizationInfo, GuardCheck, GuardType};
+
+const X64_ALIGN: u16 = 16;
 
 pub struct BytecodeCompiler<'a> {
     method: &'a Method,
@@ -14,10 +17,11 @@ pub struct BytecodeCompiler<'a> {
     guard_checks: Vec<GuardCheck>,
     pc_offset: usize,
     local_vars_initialized: bool,
+    arg_types: Vec<u8>,
 }
 
 impl<'a> BytecodeCompiler<'a> {
-    pub fn new(method: &'a Method, builder: &'a mut FunctionBuilder<'a>) -> Self {
+    pub fn new(method: &'a Method, builder: &'a mut FunctionBuilder<'a>, arg_types: Vec<u8>) -> Self {
         Self {
             method,
             builder,
@@ -27,6 +31,7 @@ impl<'a> BytecodeCompiler<'a> {
             guard_checks: Vec::new(),
             pc_offset: 0,
             local_vars_initialized: false,
+            arg_types,
         }
     }
 
@@ -67,7 +72,14 @@ impl<'a> BytecodeCompiler<'a> {
             0x22..=0x25 => self.lower_fload_n((opcode - 0x22) as usize),
             0x26..=0x29 => self.lower_dload_n((opcode - 0x26) as usize),
             0x2a..=0x2d => self.lower_aload_n((opcode - 0x2a) as usize),
-            0x2e..=0x37 => self.lower_iaload(),
+            0x2e => self.lower_iaload(),
+            0x2f => self.lower_laload(),
+            0x30 => self.lower_faload(),
+            0x31 => self.lower_daload(),
+            0x32 => self.lower_aaload(),
+            0x33 => self.lower_baload(),
+            0x34 => self.lower_caload(),
+            0x35 => self.lower_saload(),
             0x3b => self.lower_istore(),
             0x3c => self.lower_lstore(),
             0x3d => self.lower_fstore(),
@@ -113,6 +125,9 @@ impl<'a> BytecodeCompiler<'a> {
             0x99..=0x9e => self.lower_if_icmp(opcode),
             0x9f..=0xa6 => self.lower_if_icmp(opcode),
             0xa7 => self.lower_goto(),
+            0xa8 => self.lower_goto(),
+            0xaa => self.lower_tableswitch(),
+            0xab => self.lower_lookupswitch(),
             0xac => self.lower_ireturn(),
             0xad => self.lower_lreturn(),
             0xae => self.lower_freturn(),
@@ -156,6 +171,38 @@ impl<'a> BytecodeCompiler<'a> {
             0x99..=0xa6 => {
                 let offset = ((self.method.code[pc + 1] as i16) << 8) | (self.method.code[pc + 2] as i16);
                 (pc as i32 + offset as i32) as usize
+            }
+            0xaa => {
+                let mut new_pc = (pc + 4) & !3;
+                let default_offset = ((self.method.code[pc + 1] as i32) << 24)
+                    | ((self.method.code[pc + 2] as i32) << 16)
+                    | ((self.method.code[pc + 3] as i32) << 8)
+                    | (self.method.code[pc + 4] as i32);
+                let low = ((self.method.code[new_pc] as i32) << 24)
+                    | ((self.method.code[new_pc + 1] as i32) << 16)
+                    | ((self.method.code[new_pc + 2] as i32) << 8)
+                    | (self.method.code[new_pc + 3] as i32);
+                new_pc += 4;
+                let high = ((self.method.code[new_pc] as i32) << 24)
+                    | ((self.method.code[new_pc + 1] as i32) << 16)
+                    | ((self.method.code[new_pc + 2] as i32) << 8)
+                    | (self.method.code[new_pc + 3] as i32);
+                new_pc += 4 + ((high - low + 1) * 4) as usize;
+                new_pc
+            }
+            0xab => {
+                let mut new_pc = (pc + 4) & !3;
+                let default_offset = ((self.method.code[pc + 1] as i32) << 24)
+                    | ((self.method.code[pc + 2] as i32) << 16)
+                    | ((self.method.code[pc + 3] as i32) << 8)
+                    | (self.method.code[pc + 4] as i32);
+                new_pc += 4;
+                let num_pairs = ((self.method.code[new_pc] as i32) << 24)
+                    | ((self.method.code[new_pc + 1] as i32) << 16)
+                    | ((self.method.code[new_pc + 2] as i32) << 8)
+                    | (self.method.code[new_pc + 3] as i32);
+                new_pc += 4 + (num_pairs * 8) as usize;
+                new_pc
             }
             _ => pc + 1,
         }
@@ -336,6 +383,83 @@ impl<'a> BytecodeCompiler<'a> {
         let offset = self.builder.ins().imul(index, elem_size);
         let addr = self.builder.ins().iadd(array_ref, offset);
         let val = self.builder.ins().load(types::I32, MemFlags::new(), addr, 0);
+        self.push(val);
+        Ok(())
+    }
+
+    fn lower_laload(&mut self) -> Result<(), JitError> {
+        let index = self.pop();
+        let array_ref = self.pop();
+        let elem_size = self.builder.ins().iconst(types::I64, 8);
+        let offset = self.builder.ins().imul(index, elem_size);
+        let addr = self.builder.ins().iadd(array_ref, offset);
+        let val = self.builder.ins().load(types::I64, MemFlags::new(), addr, 0);
+        self.push(val);
+        Ok(())
+    }
+
+    fn lower_faload(&mut self) -> Result<(), JitError> {
+        let index = self.pop();
+        let array_ref = self.pop();
+        let elem_size = self.builder.ins().iconst(types::I64, 4);
+        let offset = self.builder.ins().imul(index, elem_size);
+        let addr = self.builder.ins().iadd(array_ref, offset);
+        let val = self.builder.ins().load(types::F32, MemFlags::new(), addr, 0);
+        self.push(val);
+        Ok(())
+    }
+
+    fn lower_daload(&mut self) -> Result<(), JitError> {
+        let index = self.pop();
+        let array_ref = self.pop();
+        let elem_size = self.builder.ins().iconst(types::I64, 8);
+        let offset = self.builder.ins().imul(index, elem_size);
+        let addr = self.builder.ins().iadd(array_ref, offset);
+        let val = self.builder.ins().load(types::F64, MemFlags::new(), addr, 0);
+        self.push(val);
+        Ok(())
+    }
+
+    fn lower_aaload(&mut self) -> Result<(), JitError> {
+        let index = self.pop();
+        let array_ref = self.pop();
+        let elem_size = self.builder.ins().iconst(types::I64, 8);
+        let offset = self.builder.ins().imul(index, elem_size);
+        let addr = self.builder.ins().iadd(array_ref, offset);
+        let val = self.builder.ins().load(types::I64, MemFlags::new(), addr, 0);
+        self.push(val);
+        Ok(())
+    }
+
+    fn lower_baload(&mut self) -> Result<(), JitError> {
+        let index = self.pop();
+        let array_ref = self.pop();
+        let elem_size = self.builder.ins().iconst(types::I64, 1);
+        let offset = self.builder.ins().imul(index, elem_size);
+        let addr = self.builder.ins().iadd(array_ref, offset);
+        let val = self.builder.ins().load(types::I8, MemFlags::new(), addr, 0);
+        self.push(val);
+        Ok(())
+    }
+
+    fn lower_caload(&mut self) -> Result<(), JitError> {
+        let index = self.pop();
+        let array_ref = self.pop();
+        let elem_size = self.builder.ins().iconst(types::I64, 2);
+        let offset = self.builder.ins().imul(index, elem_size);
+        let addr = self.builder.ins().iadd(array_ref, offset);
+        let val = self.builder.ins().load(types::I16, MemFlags::new(), addr, 0);
+        self.push(val);
+        Ok(())
+    }
+
+    fn lower_saload(&mut self) -> Result<(), JitError> {
+        let index = self.pop();
+        let array_ref = self.pop();
+        let elem_size = self.builder.ins().iconst(types::I64, 2);
+        let offset = self.builder.ins().imul(index, elem_size);
+        let addr = self.builder.ins().iadd(array_ref, offset);
+        let val = self.builder.ins().load(types::I16, MemFlags::new(), addr, 0);
         self.push(val);
         Ok(())
     }
@@ -614,15 +738,35 @@ impl<'a> BytecodeCompiler<'a> {
         self.builder.append_block_params_for_function_params(entry_block);
         self.builder.switch_to_block(entry_block);
 
+        let block_params: Vec<Value> = self.builder.block_params(entry_block).to_vec();
+        let num_params = block_params.len();
+
         for i in 0..num_locals {
             let var = Variable::new(i);
-            self.builder.declare_var(var, types::I64);
+            let var_type = if i < self.arg_types.len() {
+                match self.arg_types[i] {
+                    b'B' | b'C' | b'I' | b'S' | b'Z' => types::I32,
+                    b'J' => types::I64,
+                    b'F' => types::F32,
+                    b'D' => types::F64,
+                    b'L' | b'[' => types::I64,
+                    _ => types::I64,
+                }
+            } else {
+                types::I64
+            };
+            self.builder.declare_var(var, var_type);
         }
 
         for i in 0..num_locals {
             let var = Variable::new(i);
-            let param = self.builder.block_params(entry_block)[i];
-            self.builder.def_var(var, param);
+            let block_param_index = i + 1;
+            if block_param_index < num_params {
+                self.builder.def_var(var, block_params[block_param_index]);
+            } else {
+                let zero = self.builder.ins().iconst(types::I64, 0);
+                self.builder.def_var(var, zero);
+            }
         }
 
         self.local_vars_initialized = true;
@@ -837,6 +981,33 @@ impl<'a> BytecodeCompiler<'a> {
         Ok(())
     }
 
+    fn lower_tableswitch(&mut self) -> Result<(), JitError> {
+        let default_offset = self.read_i32(1);
+        let low = self.read_i32(self.pc_offset + 4 + ((4 - self.pc_offset % 4) % 4) as usize);
+        let high = self.read_i32(self.pc_offset + 8 + ((4 - self.pc_offset % 4) % 4) as usize);
+        let index = self.pop();
+        let default_target = (self.pc_offset as i32 + default_offset) as usize;
+        let jump_block = self.create_block_for_pc(default_target);
+        self.builder.ins().jump(jump_block, &[]);
+        Ok(())
+    }
+
+    fn lower_lookupswitch(&mut self) -> Result<(), JitError> {
+        let default_offset = self.read_i32(1);
+        let default_target = (self.pc_offset as i32 + default_offset) as usize;
+        let jump_block = self.create_block_for_pc(default_target);
+        self.builder.ins().jump(jump_block, &[]);
+        Ok(())
+    }
+
+    fn read_i32(&self, offset: usize) -> i32 {
+        let bytes = &self.method.code[offset..offset + 4];
+        ((bytes[0] as i32) << 24)
+            | ((bytes[1] as i32) << 16)
+            | ((bytes[2] as i32) << 8)
+            | (bytes[3] as i32)
+    }
+
     fn create_block_for_pc(&mut self, _pc: usize) -> Block {
         self.builder.create_block()
     }
@@ -997,7 +1168,8 @@ impl<'a> BytecodeCompiler<'a> {
         let class_name = method_ref.class_name.clone();
         let method_name = method_ref.method_name.clone();
         let method_desc = method_ref.descriptor.clone();
-        let argc = (self.method.code[self.pc_offset + 3] & 0xFF) as usize;
+        let argc = crate::vm::types::parse_arg_count(&method_desc)
+            .map_err(|_| JitError::CompilationFailed(format!("Invalid method descriptor: {}", method_desc)))?;
         for _ in 0..argc {
             self.pop();
         }
@@ -1043,7 +1215,8 @@ impl<'a> BytecodeCompiler<'a> {
         let class_name = method_ref.class_name.clone();
         let method_name = method_ref.method_name.clone();
         let method_desc = method_ref.descriptor.clone();
-        let argc = (self.method.code[self.pc_offset + 3] & 0xFF) as usize;
+        let argc = crate::vm::types::parse_arg_count(&method_desc)
+            .map_err(|_| JitError::CompilationFailed(format!("Invalid method descriptor: {}", method_desc)))?;
         for _ in 0..argc {
             self.pop();
         }
@@ -1089,7 +1262,8 @@ impl<'a> BytecodeCompiler<'a> {
         let class_name = method_ref.class_name.clone();
         let method_name = method_ref.method_name.clone();
         let method_desc = method_ref.descriptor.clone();
-        let argc = (self.method.code[self.pc_offset + 3] & 0xFF) as usize;
+        let argc = crate::vm::types::parse_arg_count(&method_desc)
+            .map_err(|_| JitError::CompilationFailed(format!("Invalid method descriptor: {}", method_desc)))?;
         for _ in 0..argc {
             self.pop();
         }
@@ -1422,17 +1596,110 @@ impl<'a> BytecodeCompiler<'a> {
     }
 }
 
-pub fn compile_method<'a>(
-    method: &'a Method,
-    builder: &'a mut FunctionBuilder<'a>,
+pub fn compile_method(
+    method: &Method,
+    func: &mut cranelift::codegen::ir::Function,
+    isa: &dyn TargetIsa,
 ) -> Result<CompiledCode, JitError> {
-    let mut compiler = BytecodeCompiler::new(method, builder);
-    compiler.lower()?;
+    let mut ctx = Context::new();
+    ctx.func = func.clone();
+    ctx.compute_cfg();
+    ctx.compute_domtree();
+    ctx.compute_loop_analysis();
+
+    ctx.preopt(isa)
+        .map_err(|e| JitError::CompilationFailed(format!("preopt failed: {}", e)))?;
+
+    ctx.dce(isa)
+        .map_err(|e| JitError::CompilationFailed(format!("DCE failed: {}", e)))?;
+
+    ctx.canonicalize_nans(isa)
+        .map_err(|e| JitError::CompilationFailed(format!("NaN canonicalization failed: {}", e)))?;
+
+    ctx.legalize(isa)
+        .map_err(|e| JitError::CompilationFailed(format!("legalization failed: {}", e)))?;
+
+    ctx.compile(isa)
+        .map_err(|e| JitError::CompilationFailed(format!("compile failed: {:?}", e)))?;
+
+    let compiled = ctx.compiled_code().ok_or_else(|| {
+        JitError::CompilationFailed("No compiled code produced".to_string())
+    })?;
+
+    let code_buffer = compiled.buffer.data().to_vec();
+    let frame_size = compiled.frame_size as usize;
 
     Ok(CompiledCode {
-        code_buffer: Vec::new(),
-        frame_size: compiler.frame_size(),
-        stack_slots: compiler.stack_slots(),
-        deopt_info: compiler.deopt_info(),
+        code_buffer,
+        frame_size,
+        stack_slots: Vec::new(),
+        deopt_info: DeoptimizationInfo {
+            guard_checks: Vec::new(),
+            trap_info: Vec::new(),
+        },
     })
+}
+
+pub fn compile_bytecode(
+    method: &Method,
+    isa: &dyn TargetIsa,
+) -> Result<CompiledCode, JitError> {
+    let mut func = cranelift::codegen::ir::Function::new();
+    func.name = UserFuncName::user(0, 0);
+
+    let arg_types = crate::vm::types::parse_arg_types(&method.descriptor)
+        .ok_or_else(|| JitError::CompilationFailed("Invalid method descriptor".to_string()))?;
+    let return_type = crate::vm::types::parse_return_type(&method.descriptor)
+        .map_err(|e| JitError::CompilationFailed(format!("Invalid descriptor: {}", e)))?;
+
+    let mut signature = cranelift::codegen::ir::Signature::new(
+        cranelift::codegen::isa::CallConv::SystemV,
+    );
+
+    signature.params.insert(0, AbiParam::new(types::I64));
+
+    for arg_type in &arg_types {
+        let clif_type = match arg_type {
+            b'B' | b'C' | b'I' | b'S' | b'Z' => types::I32,
+            b'J' => types::I64,
+            b'F' => types::F32,
+            b'D' => types::F64,
+            b'L' | b'[' => types::I64,
+            _ => types::I64,
+        };
+        signature.params.push(AbiParam::new(clif_type));
+    }
+
+    if let Some(ret) = return_type {
+        let clif_type = match ret {
+            b'B' | b'C' | b'I' | b'S' | b'Z' => types::I32,
+            b'J' => types::I64,
+            b'F' => types::F32,
+            b'D' => types::F64,
+            b'L' | b'[' => types::I64,
+            b'V' => {
+                func.signature = signature;
+                let mut fn_ctx = FunctionBuilderContext::new();
+                {
+                    let mut builder = FunctionBuilder::new(&mut func, &mut fn_ctx);
+                    let mut compiler = BytecodeCompiler::new(method, &mut builder, arg_types.clone());
+                    compiler.lower()?;
+                }
+                return compile_method(method, &mut func, isa);
+            }
+            _ => types::I64,
+        };
+        signature.returns.push(AbiParam::new(clif_type));
+    }
+
+    func.signature = signature;
+
+    let mut fn_ctx = FunctionBuilderContext::new();
+    {
+        let mut builder = FunctionBuilder::new(&mut func, &mut fn_ctx);
+        let mut compiler = BytecodeCompiler::new(method, &mut builder, arg_types);
+        compiler.lower()?;
+    }
+
+    compile_method(method, &mut func, isa)
 }

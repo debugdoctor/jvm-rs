@@ -41,6 +41,7 @@ use std::sync::{Arc, Mutex};
 use crate::bytecode::Opcode;
 use classloader::{ClassLoader, LazyClassLoader, BootstrapClassLoader};
 use crate::vm::jit::JitCompiler;
+use crate::vm::jit::runtime::JitContext;
 
 static NEXT_THREAD_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
@@ -55,6 +56,7 @@ pub struct Vm {
     thread_id: u64,
     output: Arc<Mutex<Vec<String>>>,
     jit: Option<JitCompiler>,
+    jit_context: Option<JitContext>,
 }
 
 impl fmt::Debug for Vm {
@@ -86,12 +88,25 @@ impl Clone for Vm {
             thread_id: NEXT_THREAD_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             output: self.output.clone(),
             jit: None,
+            jit_context: None,
         }
     }
 }
 
 impl Vm {
-    pub fn new() -> Self {
+    pub fn new() -> Result<Self, String> {
+        let jit = match JitCompiler::new() {
+            Ok(j) => Some(j),
+            Err(e) => {
+                eprintln!("Warning: Failed to initialize JIT compiler: {}", e);
+                None
+            }
+        };
+        let jit_context = if jit.is_some() {
+            Some(JitContext::new())
+        } else {
+            None
+        };
         let mut vm = Self {
             heap: Arc::new(Mutex::new(Heap::default())),
             runtime: Arc::new(Mutex::new(RuntimeState::default())),
@@ -102,10 +117,11 @@ impl Vm {
             trace: false,
             thread_id: NEXT_THREAD_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             output: Arc::new(Mutex::new(Vec::new())),
-            jit: Some(JitCompiler::new()),
+            jit,
+            jit_context,
         };
         vm.bootstrap();
-        vm
+        Ok(vm)
     }
 
     /// Enable or disable execution tracing (prints pc, opcode, stack to stderr).
@@ -947,7 +963,30 @@ fn collect_garbage(&mut self, thread: &Thread) {
     }
 
     pub fn execute(&mut self, method: Method) -> Result<ExecutionResult, VmError> {
+        let class_name = method.class_name.clone();
+        let method_name = method.name.clone();
+        let descriptor = method.descriptor.clone();
+        let method_key = format!("{}.{}{}", class_name, method_name, descriptor);
+        let method_clone = method.clone();
+
         let mut thread = Thread::new(method);
+        thread.current_frame_mut().increment_invocation_count();
+
+        if self.jit.is_some() && self.jit_context.is_some() {
+            let jit = self.jit.as_ref().unwrap();
+            let jit_context = self.jit_context.as_mut().unwrap();
+            let frame = thread.current_frame();
+            if jit.should_compile(&frame, None) {
+                if let Some(code) = jit.get_or_compile(&method_clone) {
+                    let installed = jit_context.add_method(method_key.clone(), code.clone());
+                    if installed {
+                        if let Some(result) = jit_context.execute(&method_key, &[]) {
+                            return Ok(ExecutionResult::Value(result));
+                        }
+                    }
+                }
+            }
+        }
 
         loop {
             let opcode_pc = thread.current_frame().pc;
@@ -1830,6 +1869,7 @@ Opcode::Pop => execute_pop(thread)?,
 
                 Opcode::Invokevirtual => {
                     let index = thread.current_frame_mut().read_u16()? as usize;
+                    thread.current_frame_mut().increment_call_count(index);
                     let method_ref = thread.current_frame().load_method_ref(index)?.clone();
                     let arg_count = parse_arg_count(&method_ref.descriptor)?;
 
@@ -1911,6 +1951,7 @@ Opcode::Pop => execute_pop(thread)?,
                 }
                 Opcode::Invokespecial => {
                     let index = thread.current_frame_mut().read_u16()? as usize;
+                    thread.current_frame_mut().increment_call_count(index);
                     let method_ref = thread.current_frame().load_method_ref(index)?.clone();
                     let arg_count = parse_arg_count(&method_ref.descriptor)?;
 
@@ -1932,6 +1973,7 @@ Opcode::Pop => execute_pop(thread)?,
                 }
                 Opcode::Invokestatic => {
                     let index = thread.current_frame_mut().read_u16()? as usize;
+                    thread.current_frame_mut().increment_call_count(index);
                     let method_ref = thread.current_frame().load_method_ref(index)?.clone();
                     let arg_count = parse_arg_count(&method_ref.descriptor)?;
 
@@ -2001,6 +2043,7 @@ Opcode::Pop => execute_pop(thread)?,
 
                 Opcode::Invokeinterface => {
                     let index = thread.current_frame_mut().read_u16()? as usize;
+                    thread.current_frame_mut().increment_call_count(index);
                     let _count = thread.current_frame_mut().read_u8()?;
                     let _zero = thread.current_frame_mut().read_u8()?;
                     let method_ref = thread.current_frame().load_method_ref(index)?.clone();
@@ -2663,7 +2706,7 @@ use std::collections::HashMap;
             2,
         );
 
-        let result = Vm::new().execute(method).unwrap();
+        let result = Vm::new().expect("failed to create VM").execute(method).unwrap();
         assert_eq!(result, ExecutionResult::Value(Value::Int(25)));
     }
 
@@ -2682,7 +2725,7 @@ use std::collections::HashMap;
             3,
         );
 
-        let result = Vm::new().execute(method).unwrap();
+        let result = Vm::new().expect("failed to create VM").execute(method).unwrap();
         assert_eq!(result, ExecutionResult::Value(Value::Int(14)));
     }
 
@@ -2701,7 +2744,7 @@ use std::collections::HashMap;
             3,
         );
 
-        let result = Vm::new().execute(method).unwrap();
+        let result = Vm::new().expect("failed to create VM").execute(method).unwrap();
         assert_eq!(result, ExecutionResult::Value(Value::Int(5)));
     }
 
@@ -2721,7 +2764,7 @@ use std::collections::HashMap;
             4,
         );
 
-        let result = Vm::new().execute(method).unwrap();
+        let result = Vm::new().expect("failed to create VM").execute(method).unwrap();
         assert_eq!(result, ExecutionResult::Value(Value::Int(6)));
     }
 
@@ -2739,13 +2782,13 @@ use std::collections::HashMap;
             2,
         );
 
-        let result = Vm::new().execute(method).unwrap();
+        let result = Vm::new().expect("failed to create VM").execute(method).unwrap();
         assert_eq!(result, ExecutionResult::Value(Value::Int(-2)));
     }
 
     #[test]
     fn supports_reference_locals_and_arraylength() {
-        let mut vm = Vm::new();
+        let mut vm = Vm::new().expect("failed to create VM");
         let args = vm.new_string_array(&["a".to_string(), "b".to_string()]);
         let method = Method::new(
             [
@@ -2776,7 +2819,7 @@ use std::collections::HashMap;
             1,
         );
 
-        let result = Vm::new().execute(method).unwrap();
+        let result = Vm::new().expect("failed to create VM").execute(method).unwrap();
         assert_eq!(result, ExecutionResult::Void);
     }
 
@@ -2792,7 +2835,7 @@ use std::collections::HashMap;
             1,
         );
 
-        let error = Vm::new().execute(method).unwrap_err();
+        let error = Vm::new().expect("failed to create VM").execute(method).unwrap_err();
         assert_eq!(
             error,
             VmError::UnhandledException {
@@ -2803,7 +2846,7 @@ use std::collections::HashMap;
 
     #[test]
     fn supports_aaload_and_areturn() {
-        let mut vm = Vm::new();
+        let mut vm = Vm::new().expect("failed to create VM");
         let args = vm.new_string_array(&["x".to_string(), "y".to_string()]);
         let method = Method::new(
             [
@@ -2826,7 +2869,7 @@ use std::collections::HashMap;
 
     #[test]
     fn supports_aastore() {
-        let mut vm = Vm::new();
+        let mut vm = Vm::new().expect("failed to create VM");
         let array = vm.new_string_array(&["x".to_string(), "y".to_string()]);
         let value = vm.new_string("z");
         let method = Method::new(
@@ -2872,13 +2915,13 @@ use std::collections::HashMap;
             3,
         );
 
-        let result = Vm::new().execute(method).unwrap();
+        let result = Vm::new().expect("failed to create VM").execute(method).unwrap();
         assert_eq!(result, ExecutionResult::Value(Value::Int(126)));
     }
 
     #[test]
     fn supports_builtin_println_for_ints_and_strings() {
-        let mut vm = Vm::new();
+        let mut vm = Vm::new().expect("failed to create VM");
         let hello = vm.new_string("hello");
         let method = Method::with_constant_pool(
             [
@@ -2936,10 +2979,10 @@ use std::collections::HashMap;
             1,
         );
 
-        let result = Vm::new().execute(method).unwrap();
+        let result = Vm::new().expect("failed to create VM").execute(method).unwrap();
         assert_eq!(result, ExecutionResult::Value(Value::Int(42)));
 
-        let mut vm = Vm::new();
+        let mut vm = Vm::new().expect("failed to create VM");
         let arg = vm.new_string("hello");
         let method = Method::new(
             [
@@ -2961,7 +3004,7 @@ use std::collections::HashMap;
 
     #[test]
     fn supports_if_acmpeq_and_if_acmpne() {
-        let mut vm = Vm::new();
+        let mut vm = Vm::new().expect("failed to create VM");
         let same = vm.new_string("same");
         let other = vm.new_string("other");
 
@@ -3004,7 +3047,7 @@ use std::collections::HashMap;
 
     #[test]
     fn reports_array_index_out_of_bounds() {
-        let mut vm = Vm::new();
+        let mut vm = Vm::new().expect("failed to create VM");
         let args = vm.new_string_array(&["x".to_string()]);
         let method = Method::new(
             [
@@ -3041,7 +3084,7 @@ use std::collections::HashMap;
         )
         .with_reference_classes(vec![None, Some("java/lang/String".to_string())]);
 
-        let result = Vm::new().execute(method).unwrap();
+        let result = Vm::new().expect("failed to create VM").execute(method).unwrap();
         assert_eq!(result, ExecutionResult::Value(Value::Int(2)));
     }
 
@@ -3058,7 +3101,7 @@ use std::collections::HashMap;
         )
         .with_reference_classes(vec![None, Some("java/lang/String".to_string())]);
 
-        let error = Vm::new().execute(method).unwrap_err();
+        let error = Vm::new().expect("failed to create VM").execute(method).unwrap_err();
         assert_eq!(
             error,
             VmError::UnhandledException {
@@ -3080,7 +3123,7 @@ use std::collections::HashMap;
         )
         .with_reference_classes(vec![None, Some("java/lang/String".to_string())]);
 
-        let error = Vm::new().execute(method).unwrap_err();
+        let error = Vm::new().expect("failed to create VM").execute(method).unwrap_err();
         assert_eq!(
             error,
             VmError::InvalidClassConstantIndex {
@@ -3102,7 +3145,7 @@ use std::collections::HashMap;
             1,
         );
 
-        let error = Vm::new().execute(method).unwrap_err();
+        let error = Vm::new().expect("failed to create VM").execute(method).unwrap_err();
         assert_eq!(error, VmError::UnsupportedNewArrayType { atype: 3 });
     }
 
@@ -3119,7 +3162,7 @@ use std::collections::HashMap;
             2,
         );
 
-        let error = Vm::new().execute(method).unwrap_err();
+        let error = Vm::new().expect("failed to create VM").execute(method).unwrap_err();
         assert_eq!(
             error,
             VmError::UnhandledException {
@@ -3143,7 +3186,7 @@ use std::collections::HashMap;
             [Value::Int(7)],
         );
 
-        let result = Vm::new().execute(method).unwrap();
+        let result = Vm::new().expect("failed to create VM").execute(method).unwrap();
         assert_eq!(result, ExecutionResult::Value(Value::Int(-307)));
     }
 
@@ -3160,7 +3203,7 @@ use std::collections::HashMap;
             2,
         );
 
-        let result = Vm::new().execute(method).unwrap();
+        let result = Vm::new().expect("failed to create VM").execute(method).unwrap();
         assert_eq!(result, ExecutionResult::Value(Value::Int(2)));
     }
 
@@ -3179,7 +3222,7 @@ use std::collections::HashMap;
             2,
         );
 
-        let result = Vm::new().execute(method).unwrap();
+        let result = Vm::new().expect("failed to create VM").execute(method).unwrap();
         assert_eq!(result, ExecutionResult::Value(Value::Int(42)));
     }
 
@@ -3200,13 +3243,13 @@ use std::collections::HashMap;
             1,
         );
 
-        let result = Vm::new().execute(method).unwrap();
+        let result = Vm::new().expect("failed to create VM").execute(method).unwrap();
         assert_eq!(result, ExecutionResult::Value(Value::Int(6)));
     }
 
     #[test]
     fn shares_static_fields_across_spawned_threads() {
-        let mut vm = Vm::new();
+        let mut vm = Vm::new().expect("failed to create VM");
         vm.register_class(RuntimeClass {
             name: "demo/Counter".to_string(),
             super_class: Some("java/lang/Object".to_string()),
@@ -3259,7 +3302,7 @@ use std::collections::HashMap;
 
     #[test]
     fn blocks_monitorenter_until_owner_releases_monitor() {
-        let vm = Vm::new();
+        let vm = Vm::new().expect("failed to create VM");
         let monitor_ref = vm.heap.lock().unwrap().allocate(HeapValue::Object {
             class_name: "java/lang/Object".to_string(),
             fields: HashMap::new(),
@@ -3302,7 +3345,7 @@ use std::collections::HashMap;
             1,
         );
 
-        let result = Vm::new().execute(method).unwrap();
+        let result = Vm::new().expect("failed to create VM").execute(method).unwrap();
         assert_eq!(result, ExecutionResult::Value(Value::Int(12)));
     }
 
@@ -3326,7 +3369,7 @@ use std::collections::HashMap;
             2,
         );
 
-        let result = Vm::new().execute(method).unwrap();
+        let result = Vm::new().expect("failed to create VM").execute(method).unwrap();
         assert_eq!(result, ExecutionResult::Value(Value::Int(88)));
     }
 
@@ -3359,7 +3402,7 @@ use std::collections::HashMap;
             1,
         );
 
-        let result = Vm::new().execute(method).unwrap();
+        let result = Vm::new().expect("failed to create VM").execute(method).unwrap();
         assert_eq!(result, ExecutionResult::Value(Value::Int(44)));
     }
 
@@ -3379,7 +3422,7 @@ use std::collections::HashMap;
             2,
         );
 
-        let result = Vm::new().execute(method).unwrap();
+        let result = Vm::new().expect("failed to create VM").execute(method).unwrap();
         assert_eq!(result, ExecutionResult::Value(Value::Int(33)));
     }
 
@@ -3416,7 +3459,7 @@ use std::collections::HashMap;
             2,
         );
 
-        let result = Vm::new().execute(method).unwrap();
+        let result = Vm::new().expect("failed to create VM").execute(method).unwrap();
         assert_eq!(result, ExecutionResult::Value(Value::Int(77)));
     }
 
@@ -3432,7 +3475,7 @@ use std::collections::HashMap;
             [Value::Int(1)],
         );
 
-        let error = Vm::new().execute(method).unwrap_err();
+        let error = Vm::new().expect("failed to create VM").execute(method).unwrap_err();
         assert_eq!(
             error,
             VmError::InvalidConstantIndex {
@@ -3452,7 +3495,7 @@ use std::collections::HashMap;
             0,
         );
 
-        let error = Vm::new().execute(method).unwrap_err();
+        let error = Vm::new().expect("failed to create VM").execute(method).unwrap_err();
         assert_eq!(
             error,
             VmError::InvalidBranchTarget {
@@ -3464,7 +3507,7 @@ use std::collections::HashMap;
 
     #[test]
     fn gc_threshold_and_stats_tracked() {
-        let mut vm = Vm::new();
+        let mut vm = Vm::new().expect("failed to create VM");
         vm.set_gc_threshold(1);
 
         // Force a known number of string allocations. Each `new_string`
@@ -3485,7 +3528,7 @@ use std::collections::HashMap;
 
     #[test]
     fn disable_gc_stops_automatic_collections() {
-        let mut vm = Vm::new();
+        let mut vm = Vm::new().expect("failed to create VM");
         vm.disable_gc();
         for i in 0..64 {
             let _ = vm.new_string(format!("s{i}"));

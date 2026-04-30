@@ -645,6 +645,60 @@ pub(super) fn parse_arg_count(descriptor: &str) -> Result<usize, VmError> {
     Ok(count)
 }
 
+pub(super) fn parse_return_type(descriptor: &str) -> Result<Option<u8>, VmError> {
+    let bytes = descriptor.as_bytes();
+    if bytes.first() != Some(&b'(') {
+        return Err(VmError::InvalidDescriptor {
+            descriptor: descriptor.to_string(),
+        });
+    }
+    let mut i = 1;
+    while i < bytes.len() && bytes[i] != b')' {
+        match bytes[i] {
+            b'B' | b'C' | b'D' | b'F' | b'I' | b'J' | b'S' | b'Z' => {
+                i += 1;
+            }
+            b'L' => {
+                i += 1;
+                while i < bytes.len() && bytes[i] != b';' {
+                    i += 1;
+                }
+                i += 1;
+            }
+            b'[' => {
+                while i < bytes.len() && bytes[i] == b'[' {
+                    i += 1;
+                }
+                if i < bytes.len() && bytes[i] == b'L' {
+                    i += 1;
+                    while i < bytes.len() && bytes[i] != b';' {
+                        i += 1;
+                    }
+                    i += 1;
+                } else if i < bytes.len() {
+                    i += 1;
+                }
+            }
+            _ => {
+                return Err(VmError::InvalidDescriptor {
+                    descriptor: descriptor.to_string(),
+                });
+            }
+        }
+    }
+    if i >= bytes.len() || bytes[i] != b')' {
+        return Err(VmError::InvalidDescriptor {
+            descriptor: descriptor.to_string(),
+        });
+    }
+    i += 1;
+    if i >= bytes.len() {
+        Ok(None)
+    } else {
+        Ok(Some(bytes[i]))
+    }
+}
+
 pub(super) fn format_vm_float(v: f64) -> String {
     if v.is_nan() {
         "NaN".to_string()

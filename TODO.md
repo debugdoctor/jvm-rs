@@ -142,17 +142,61 @@ Goal: beat HotSpot on cold-start and match-within-2x on steady state, via a simp
 - All optimization passes in `Optimizer` must perform actual transformations — no empty implementations
 - All emitter/machine code generation must produce valid executable code
 
-**JIT Stubs Implementation Status:**
-- [x] All 17 `lower_*` methods implemented with proper Cranelift IR generation:
-  - getstatic, getfield, putfield (field access)
-  - invokevirtual, invokespecial, invokestatic, invokeinterface (method invocation)
-  - invokedynamic (dynamic method invocation)
-  - new, newarray, anewarray (object/array creation)
-  - athrow (exception throw)
-  - checkcast, instanceof (type checking)
-  - monitorenter, monitorexit (synchronization)
-  - invokenative (native method invocation)
-- [ ] Runtime helpers for actual field/method/object operations need full implementation
+**JIT Implementation Status (as of 2026-04-30):**
+
+Core Infrastructure:
+- [x] Cranelift integration with x86-64 ISA
+- [x] Function signature generation from method descriptors (int/long/float/double/reference params)
+- [x] Local variable type-aware declaration and initialization
+- [x] Machine code compilation via Context.compile()
+- [x] JIT entry creation via mmap(PROT_READ|PROT_WRITE|PROT_EXEC)
+- [x] Panic recovery (fallback to interpreter on compilation failure)
+- [x] Adaptive compilation threshold (invocation_threshold=1000, backedge_threshold=2000)
+- [x] Execution via x86-64 SysV ABI (context pointer as first param)
+- [ ] macOS Hardened Runtime blocks mmap(PROT_EXEC) — fallback to interpreter on macOS
+
+**Missing JIT Opcodes (stub implementations returning null/0):**
+
+Arithmetic — Long:
+- [ ] `lsub`, `lmul`, `ldiv`, `lrem`
+
+Arithmetic — Float:
+- [ ] `fsub`, `fmul`, `fdiv`, `frem`
+
+Arithmetic — Double:
+- [ ] `dsub`, `dmul`, `ddiv`, `drem`
+
+Bitwise — Long:
+- [ ] `land`, `lor`, `lxor`
+
+Shifts — Long:
+- [ ] `lshl`, `lshr`, `lushr`
+
+Negation:
+- [ ] `lneg`, `fneg`, `dneg`
+
+Method Invocation (stubs):
+- [ ] `invokevirtual` — returns null
+- [ ] `invokespecial` — returns null
+- [ ] `invokestatic` — returns null
+- [ ] `invokeinterface` — returns null
+- [ ] `invokedynamic` — returns null
+- [ ] `invokenative` — returns 0
+
+Field Access (stubs):
+- [ ] `getstatic` — returns 0/null
+- [ ] `getfield` — returns 0/null
+- [ ] `putfield` — no-op
+
+Object/Array Allocation (stubs):
+- [ ] `new` — returns null
+- [ ] `newarray` — returns null
+- [ ] `anewarray` — returns null
+
+Other:
+- [ ] `athrow` — stub
+- [ ] `monitorenter` — stub
+- [ ] `monitorexit` — stub
 
 ### 13.3 Memory Layout
 - [ ] Compressed object references (32-bit indices on a ≤4 GB heap) — already mostly the case via `Reference::Heap(u32)`; formalize and document

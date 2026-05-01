@@ -301,10 +301,7 @@ impl Method {
         self
     }
 
-    pub fn with_exception_handlers(
-        mut self,
-        handlers: impl Into<Vec<ExceptionHandler>>,
-    ) -> Self {
+    pub fn with_exception_handlers(mut self, handlers: impl Into<Vec<ExceptionHandler>>) -> Self {
         self.exception_handlers = handlers.into();
         self
     }
@@ -712,10 +709,6 @@ pub(super) fn format_vm_float(v: f64) -> String {
         "-0.0".to_string()
     } else {
         let s = format!("{v}");
-        if s.contains('.') {
-            s
-        } else {
-            format!("{v}.0")
-        }
+        if s.contains('.') { s } else { format!("{v}.0") }
     }
 }

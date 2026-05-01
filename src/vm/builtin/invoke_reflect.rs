@@ -8,7 +8,11 @@ pub(super) fn invoke_reflect(
     args: &[Value],
 ) -> Result<Option<Value>, VmError> {
     match (class_name, method_name, descriptor) {
-        ("java/lang/Class", "getDeclaredMethod", "(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;") => {
+        (
+            "java/lang/Class",
+            "getDeclaredMethod",
+            "(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;",
+        ) => {
             let name_ref = args[0].as_reference()?;
             let _param_types_ref = args[1].as_reference()?;
             let this_ref = args[2].as_reference()?;
@@ -17,9 +21,18 @@ pub(super) fn invoke_reflect(
             let mut fields = std::collections::HashMap::new();
             fields.insert("__declaring_class".to_string(), Value::Reference(this_ref));
             fields.insert("__name".to_string(), Value::Reference(name_ref));
-            fields.insert("__descriptor".to_string(), Value::Reference(Reference::Null));
-            fields.insert("__parameter_types".to_string(), Value::Reference(Reference::Null));
-            fields.insert("__return_type".to_string(), Value::Reference(Reference::Null));
+            fields.insert(
+                "__descriptor".to_string(),
+                Value::Reference(Reference::Null),
+            );
+            fields.insert(
+                "__parameter_types".to_string(),
+                Value::Reference(Reference::Null),
+            );
+            fields.insert(
+                "__return_type".to_string(),
+                Value::Reference(Reference::Null),
+            );
             fields.insert("__modifiers".to_string(), Value::Int(1));
             let heap = &mut vm.heap.lock().unwrap();
             let obj_ref = heap.allocate(HeapValue::Object {
@@ -28,14 +41,21 @@ pub(super) fn invoke_reflect(
             });
             Ok(Some(Value::Reference(obj_ref)))
         }
-        ("java/lang/Class", "getDeclaredField", "(Ljava/lang/String;)Ljava/lang/reflect/Field;") => {
+        (
+            "java/lang/Class",
+            "getDeclaredField",
+            "(Ljava/lang/String;)Ljava/lang/reflect/Field;",
+        ) => {
             let name_ref = args[0].as_reference()?;
             let this_ref = args[1].as_reference()?;
             let mut fields = std::collections::HashMap::new();
             fields.insert("__declaring_class".to_string(), Value::Reference(this_ref));
             fields.insert("__name".to_string(), Value::Reference(name_ref));
             fields.insert("__type".to_string(), Value::Reference(Reference::Null));
-            fields.insert("__descriptor".to_string(), Value::Reference(Reference::Null));
+            fields.insert(
+                "__descriptor".to_string(),
+                Value::Reference(Reference::Null),
+            );
             fields.insert("__modifiers".to_string(), Value::Int(1));
             fields.insert("__slot".to_string(), Value::Int(0));
             let heap = &mut vm.heap.lock().unwrap();
@@ -52,11 +72,18 @@ pub(super) fn invoke_reflect(
         ("java/lang/Class", "getDeclaredMethods", "()[Ljava/lang/reflect/Method;") => {
             Ok(Some(Value::Reference(Reference::Null)))
         }
-        ("java/lang/Class", "getDeclaredConstructor", "([Ljava/lang/Class;)Ljava/lang/reflect/Constructor;") => {
+        (
+            "java/lang/Class",
+            "getDeclaredConstructor",
+            "([Ljava/lang/Class;)Ljava/lang/reflect/Constructor;",
+        ) => {
             let this_ref = args.last().unwrap().as_reference()?;
             let mut fields = std::collections::HashMap::new();
             fields.insert("__declaring_class".to_string(), Value::Reference(this_ref));
-            fields.insert("__parameter_types".to_string(), Value::Reference(Reference::Null));
+            fields.insert(
+                "__parameter_types".to_string(),
+                Value::Reference(Reference::Null),
+            );
             fields.insert("__modifiers".to_string(), Value::Int(1));
             fields.insert("__slot".to_string(), Value::Int(0));
             let heap = &mut vm.heap.lock().unwrap();
@@ -88,15 +115,11 @@ pub(super) fn invoke_reflect(
         ("java/lang/Class", "getInterfaces", "()[Ljava/lang/Class;") => {
             Ok(Some(Value::Reference(Reference::Null)))
         }
-        ("java/lang/Class", "getModifiers", "()I") => {
-            Ok(Some(Value::Int(1)))
-        }
+        ("java/lang/Class", "getModifiers", "()I") => Ok(Some(Value::Int(1))),
         ("java/lang/Class", "getComponentType", "()Ljava/lang/Class;") => {
             Ok(Some(Value::Reference(Reference::Null)))
         }
-        ("java/lang/Class", "isHidden", "()Z") => {
-            Ok(Some(Value::Int(0)))
-        }
+        ("java/lang/Class", "isHidden", "()Z") => Ok(Some(Value::Int(0))),
         ("java/lang/reflect/Method", "getName", "()Ljava/lang/String;") => {
             let this_ref = args[0].as_reference()?;
             let heap = vm.heap.lock().unwrap();
@@ -133,7 +156,11 @@ pub(super) fn invoke_reflect(
             }
             Ok(Some(Value::Int(0)))
         }
-        ("java/lang/reflect/Method", "invoke", "(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;") => {
+        (
+            "java/lang/reflect/Method",
+            "invoke",
+            "(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;",
+        ) => {
             let _obj_ref = args[0].as_reference()?;
             let _param_ref = args[1].as_reference()?;
             Err(VmError::UnhandledException {
@@ -176,21 +203,11 @@ pub(super) fn invoke_reflect(
         ("java/lang/reflect/Field", "get", "(Ljava/lang/Object;)Ljava/lang/Object;") => {
             Ok(Some(Value::Reference(Reference::Null)))
         }
-        ("java/lang/reflect/Field", "set", "(Ljava/lang/Object;Ljava/lang/Object;)V") => {
-            Ok(None)
-        }
-        ("java/lang/reflect/Field", "getInt", "(Ljava/lang/Object;)I") => {
-            Ok(Some(Value::Int(0)))
-        }
-        ("java/lang/reflect/Field", "setInt", "(Ljava/lang/Object;I)V") => {
-            Ok(None)
-        }
-        ("java/lang/reflect/Field", "getLong", "(Ljava/lang/Object;)J") => {
-            Ok(Some(Value::Long(0)))
-        }
-        ("java/lang/reflect/Field", "setLong", "(Ljava/lang/Object;J)V") => {
-            Ok(None)
-        }
+        ("java/lang/reflect/Field", "set", "(Ljava/lang/Object;Ljava/lang/Object;)V") => Ok(None),
+        ("java/lang/reflect/Field", "getInt", "(Ljava/lang/Object;)I") => Ok(Some(Value::Int(0))),
+        ("java/lang/reflect/Field", "setInt", "(Ljava/lang/Object;I)V") => Ok(None),
+        ("java/lang/reflect/Field", "getLong", "(Ljava/lang/Object;)J") => Ok(Some(Value::Long(0))),
+        ("java/lang/reflect/Field", "setLong", "(Ljava/lang/Object;J)V") => Ok(None),
         ("java/lang/reflect/Field", "getObject", "(Ljava/lang/Object;)Ljava/lang/Object;") => {
             Ok(Some(Value::Reference(Reference::Null)))
         }
@@ -220,14 +237,14 @@ pub(super) fn invoke_reflect(
             }
             Ok(Some(Value::Int(0)))
         }
-        ("java/lang/reflect/Constructor", "newInstance", "([Ljava/lang/Object;)Ljava/lang/Object;") => {
-            Err(VmError::UnhandledException {
-                class_name: "java/lang/reflect/InvocationTargetException".to_string(),
-            })
-        }
-        ("java/lang/reflect/AccessibleObject", "setAccessible", "(Z)V") => {
-            Ok(None)
-        }
+        (
+            "java/lang/reflect/Constructor",
+            "newInstance",
+            "([Ljava/lang/Object;)Ljava/lang/Object;",
+        ) => Err(VmError::UnhandledException {
+            class_name: "java/lang/reflect/InvocationTargetException".to_string(),
+        }),
+        ("java/lang/reflect/AccessibleObject", "setAccessible", "(Z)V") => Ok(None),
         ("java/lang/reflect/AccessibleObject", "canAccess", "(Ljava/lang/Object;)Z") => {
             Ok(Some(Value::Int(1)))
         }
@@ -258,14 +275,30 @@ pub(super) fn invoke_reflect(
         ("java/lang/reflect/Modifier", "toString", "(I)Ljava/lang/String;") => {
             let m = args[0].as_int()?;
             let mut parts = Vec::new();
-            if m & 0x0001 != 0 { parts.push("public"); }
-            if m & 0x0002 != 0 { parts.push("private"); }
-            if m & 0x0004 != 0 { parts.push("protected"); }
-            if m & 0x0008 != 0 { parts.push("static"); }
-            if m & 0x0010 != 0 { parts.push("final"); }
-            if m & 0x0020 != 0 { parts.push("synchronized"); }
-            if m & 0x0400 != 0 { parts.push("volatile"); }
-            if m & 0x0800 != 0 { parts.push("transient"); }
+            if m & 0x0001 != 0 {
+                parts.push("public");
+            }
+            if m & 0x0002 != 0 {
+                parts.push("private");
+            }
+            if m & 0x0004 != 0 {
+                parts.push("protected");
+            }
+            if m & 0x0008 != 0 {
+                parts.push("static");
+            }
+            if m & 0x0010 != 0 {
+                parts.push("final");
+            }
+            if m & 0x0020 != 0 {
+                parts.push("synchronized");
+            }
+            if m & 0x0400 != 0 {
+                parts.push("volatile");
+            }
+            if m & 0x0800 != 0 {
+                parts.push("transient");
+            }
             Ok(Some(vm.new_string(parts.join(" "))))
         }
         _ => Err(VmError::UnhandledException {

@@ -36,11 +36,16 @@ pub(super) fn invoke_other(
             std::process::exit(code);
         }
         ("java/lang/System", "getProperty", "(Ljava/lang/String;)Ljava/lang/String;") => {
-            let key = crate::vm::builtin::helpers::stringify_reference(vm, args[0].as_reference()?)?;
+            let key =
+                crate::vm::builtin::helpers::stringify_reference(vm, args[0].as_reference()?)?;
             let value = match key.as_str() {
                 "line.separator" => Some("\n".to_string()),
                 "file.separator" => Some(std::path::MAIN_SEPARATOR.to_string()),
-                "path.separator" => Some(if cfg!(windows) { ";".to_string() } else { ":".to_string() }),
+                "path.separator" => Some(if cfg!(windows) {
+                    ";".to_string()
+                } else {
+                    ":".to_string()
+                }),
                 "java.version" => Some("21".to_string()),
                 "java.specification.version" => Some("21".to_string()),
                 "os.name" => Some(std::env::consts::OS.to_string()),
@@ -71,11 +76,9 @@ pub(super) fn invoke_other(
             Ok(None)
         }
         ("jdk/internal/misc/Unsafe", "registerNatives", "()V") => Ok(None),
-        ("jdk/internal/misc/Unsafe", "getUnsafe", "()Ljdk/internal/misc/Unsafe;") => {
-            Ok(Some(
-                vm.get_static_field("jdk/internal/misc/Unsafe", "theUnsafe")?,
-            ))
-        }
+        ("jdk/internal/misc/Unsafe", "getUnsafe", "()Ljdk/internal/misc/Unsafe;") => Ok(Some(
+            vm.get_static_field("jdk/internal/misc/Unsafe", "theUnsafe")?,
+        )),
         ("jdk/internal/misc/Unsafe", "arrayBaseOffset", "(Ljava/lang/Class;)I") => {
             Ok(Some(Value::Int(0)))
         }
@@ -83,9 +86,9 @@ pub(super) fn invoke_other(
             Ok(Some(Value::Int(1)))
         }
         ("jdk/internal/misc/Unsafe", "addressSize", "()I") => Ok(Some(Value::Int(8))),
-        ("jdk/internal/misc/Unsafe", "isBigEndian", "()Z") => Ok(Some(Value::Int(
-            i32::from(cfg!(target_endian = "big")),
-        ))),
+        ("jdk/internal/misc/Unsafe", "isBigEndian", "()Z") => {
+            Ok(Some(Value::Int(i32::from(cfg!(target_endian = "big")))))
+        }
         ("jdk/internal/misc/Unsafe", "pageSize", "()I") => Ok(Some(Value::Int(4096))),
         ("jdk/internal/misc/Unsafe", "objectFieldOffset", _)
         | ("jdk/internal/misc/Unsafe", "staticFieldOffset", _) => Ok(Some(Value::Long(0))),
@@ -95,9 +98,14 @@ pub(super) fn invoke_other(
         ("jdk/internal/misc/Unsafe", "storeFence", "()V")
         | ("jdk/internal/misc/Unsafe", "loadFence", "()V")
         | ("jdk/internal/misc/Unsafe", "fullFence", "()V") => Ok(None),
-        ("jdk/internal/misc/Unsafe", "compareAndSetInt" | "compareAndSetLong" | "compareAndSetReference" | "compareAndSetObject", _) => {
-            Ok(Some(Value::Int(1)))
-        }
+        (
+            "jdk/internal/misc/Unsafe",
+            "compareAndSetInt"
+            | "compareAndSetLong"
+            | "compareAndSetReference"
+            | "compareAndSetObject",
+            _,
+        ) => Ok(Some(Value::Int(1))),
         ("jdk/internal/misc/Unsafe", "getReferenceVolatile", _) => {
             Ok(Some(Value::Reference(Reference::Null)))
         }

@@ -4,8 +4,10 @@ use std::sync::LazyLock;
 
 use crate::vm::{HeapValue, Reference, Value, Vm, VmError};
 
-static COMPILED_PATTERNS: LazyLock<std::sync::RwLock<HashMap<usize, Regex>>, fn() -> std::sync::RwLock<HashMap<usize, Regex>>> =
-    LazyLock::new(|| std::sync::RwLock::new(HashMap::new()));
+static COMPILED_PATTERNS: LazyLock<
+    std::sync::RwLock<HashMap<usize, Regex>>,
+    fn() -> std::sync::RwLock<HashMap<usize, Regex>>,
+> = LazyLock::new(|| std::sync::RwLock::new(HashMap::new()));
 
 pub(super) fn invoke_regex(
     vm: &mut Vm,
@@ -42,7 +44,11 @@ pub(super) fn invoke_regex(
                 }),
             }
         }
-        ("java/util/regex/Pattern", "compile", "(Ljava/lang/String;I)Ljava/util/regex/Pattern;") => {
+        (
+            "java/util/regex/Pattern",
+            "compile",
+            "(Ljava/lang/String;I)Ljava/util/regex/Pattern;",
+        ) => {
             let pattern_ref = args[0].as_reference()?;
             let flags = args[1].as_int()?;
             let pattern_str = crate::vm::builtin::helpers::stringify_reference(vm, pattern_ref)?;
@@ -83,26 +89,31 @@ pub(super) fn invoke_regex(
         ("java/util/regex/Pattern", "pattern", "()Ljava/lang/String;") => {
             let this_ref = args[0].as_reference()?;
             let heap = vm.heap.lock().unwrap();
-            let result: Option<String> = if let Ok(HeapValue::Object { fields, .. }) = heap.get(this_ref) {
-                if let Some(Value::Reference(r)) = fields.get("__regex") {
-                    if let Ok(HeapValue::String(s)) = heap.get(*r) {
-                        Some(s.clone())
+            let result: Option<String> =
+                if let Ok(HeapValue::Object { fields, .. }) = heap.get(this_ref) {
+                    if let Some(Value::Reference(r)) = fields.get("__regex") {
+                        if let Ok(HeapValue::String(s)) = heap.get(*r) {
+                            Some(s.clone())
+                        } else {
+                            None
+                        }
                     } else {
                         None
                     }
                 } else {
                     None
-                }
-            } else {
-                None
-            };
+                };
             drop(heap);
             match result {
                 Some(s) => Ok(Some(vm.new_string(s))),
                 None => Ok(Some(Value::Reference(Reference::Null))),
             }
         }
-        ("java/util/regex/Pattern", "matcher", "(Ljava/lang/CharSequence;)Ljava/util/regex/Matcher;") => {
+        (
+            "java/util/regex/Pattern",
+            "matcher",
+            "(Ljava/lang/CharSequence;)Ljava/util/regex/Matcher;",
+        ) => {
             let this_ref = args[0].as_reference()?;
             let input_ref = args[1].as_reference()?;
             let mut fields = std::collections::HashMap::new();
@@ -150,7 +161,11 @@ pub(super) fn invoke_regex(
             let arr_ref = create_string_array(vm, &parts)?;
             Ok(Some(Value::Reference(arr_ref)))
         }
-        ("java/util/regex/Matcher", "<init>", "(Ljava/util/regex/Pattern;Ljava/lang/CharSequence;)V") => {
+        (
+            "java/util/regex/Matcher",
+            "<init>",
+            "(Ljava/util/regex/Pattern;Ljava/lang/CharSequence;)V",
+        ) => {
             let pattern_ref = args[0].as_reference()?;
             let input_ref = args[1].as_reference()?;
             let this_ref = args[2].as_reference()?;
@@ -173,7 +188,10 @@ pub(super) fn invoke_regex(
             if let Ok(HeapValue::Object { fields, .. }) = heap.get_mut(this_ref) {
                 if is_match {
                     fields.insert("__match_start".to_string(), Value::Int(0));
-                    fields.insert("__match_end".to_string(), Value::Int(input_str.len() as i32));
+                    fields.insert(
+                        "__match_end".to_string(),
+                        Value::Int(input_str.len() as i32),
+                    );
                 } else {
                     fields.insert("__match_start".to_string(), Value::Int(-1));
                     fields.insert("__match_end".to_string(), Value::Int(-1));
@@ -244,7 +262,10 @@ pub(super) fn invoke_regex(
                 let heap = &mut vm.heap.lock().unwrap();
                 if let Ok(HeapValue::Object { fields, .. }) = heap.get_mut(this_ref) {
                     fields.insert("__match_start".to_string(), Value::Int(0));
-                    fields.insert("__match_end".to_string(), Value::Int(re.find(&input_str).unwrap().end() as i32));
+                    fields.insert(
+                        "__match_end".to_string(),
+                        Value::Int(re.find(&input_str).unwrap().end() as i32),
+                    );
                 }
             }
             Ok(Some(Value::Int(if is_match { 1 } else { 0 })))
@@ -259,7 +280,11 @@ pub(super) fn invoke_regex(
             }
             Ok(Some(Value::Reference(this_ref)))
         }
-        ("java/util/regex/Matcher", "reset", "(Ljava/lang/CharSequence;)Ljava/util/regex/Matcher;") => {
+        (
+            "java/util/regex/Matcher",
+            "reset",
+            "(Ljava/lang/CharSequence;)Ljava/util/regex/Matcher;",
+        ) => {
             let input_ref = args[0].as_reference()?;
             let this_ref = args[1].as_reference()?;
             let heap = &mut vm.heap.lock().unwrap();
@@ -279,7 +304,9 @@ pub(super) fn invoke_regex(
                 let end = get_match_end(vm, this_ref)?;
                 let input_str = get_matcher_input(vm, this_ref)?;
                 if start >= 0 && end >= 0 && (end as usize) <= input_str.len() && start < end {
-                    return Ok(Some(vm.new_string(input_str[start as usize..end as usize].to_string())));
+                    return Ok(Some(
+                        vm.new_string(input_str[start as usize..end as usize].to_string()),
+                    ));
                 }
             }
             Ok(Some(Value::Reference(Reference::Null)))
@@ -290,7 +317,9 @@ pub(super) fn invoke_regex(
             let end = get_match_end(vm, this_ref)?;
             let input_str = get_matcher_input(vm, this_ref)?;
             if start >= 0 && end >= 0 && (end as usize) <= input_str.len() && start < end {
-                return Ok(Some(vm.new_string(input_str[start as usize..end as usize].to_string())));
+                return Ok(Some(
+                    vm.new_string(input_str[start as usize..end as usize].to_string()),
+                ));
             }
             Ok(Some(Value::Reference(Reference::Null)))
         }
@@ -326,7 +355,8 @@ pub(super) fn invoke_regex(
             let replacement_ref = args[0].as_reference()?;
             let this_ref = args[1].as_reference()?;
             let (pattern_str, input_str) = get_matcher_pattern_and_input(vm, this_ref)?;
-            let replacement_str = crate::vm::builtin::helpers::stringify_reference(vm, replacement_ref)?;
+            let replacement_str =
+                crate::vm::builtin::helpers::stringify_reference(vm, replacement_ref)?;
             let re = match Regex::new(&pattern_str) {
                 Ok(r) => r,
                 Err(_) => return Ok(Some(Value::Reference(Reference::Null))),
@@ -338,7 +368,8 @@ pub(super) fn invoke_regex(
             let replacement_ref = args[0].as_reference()?;
             let this_ref = args[1].as_reference()?;
             let (pattern_str, input_str) = get_matcher_pattern_and_input(vm, this_ref)?;
-            let replacement_str = crate::vm::builtin::helpers::stringify_reference(vm, replacement_ref)?;
+            let replacement_str =
+                crate::vm::builtin::helpers::stringify_reference(vm, replacement_ref)?;
             let re = match Regex::new(&pattern_str) {
                 Ok(r) => r,
                 Err(_) => return Ok(Some(Value::Reference(Reference::Null))),
@@ -373,15 +404,32 @@ fn get_pattern_regex(vm: &Vm, pattern_ref: Reference) -> Result<String, VmError>
     })
 }
 
-fn get_matcher_pattern_and_input(vm: &Vm, matcher_ref: Reference) -> Result<(String, String), VmError> {
+fn get_matcher_pattern_and_input(
+    vm: &Vm,
+    matcher_ref: Reference,
+) -> Result<(String, String), VmError> {
     let heap = vm.heap.lock().unwrap();
     if let Ok(HeapValue::Object { fields, .. }) = heap.get(matcher_ref) {
-        let pattern_ref = fields.get("__pattern").and_then(|v| {
-            if let Value::Reference(r) = v { Some(*r) } else { None }
-        }).unwrap_or(Reference::Null);
-        let input_ref = fields.get("__input").and_then(|v| {
-            if let Value::Reference(r) = v { Some(*r) } else { None }
-        }).unwrap_or(Reference::Null);
+        let pattern_ref = fields
+            .get("__pattern")
+            .and_then(|v| {
+                if let Value::Reference(r) = v {
+                    Some(*r)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(Reference::Null);
+        let input_ref = fields
+            .get("__input")
+            .and_then(|v| {
+                if let Value::Reference(r) = v {
+                    Some(*r)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(Reference::Null);
         drop(heap);
         let pattern_str = get_pattern_regex(vm, pattern_ref)?;
         let input_str = char_sequence_to_string(vm, input_ref)?;
@@ -397,7 +445,11 @@ fn get_matcher_input(vm: &Vm, matcher_ref: Reference) -> Result<String, VmError>
     let heap = vm.heap.lock().unwrap();
     let input_ref = if let Ok(HeapValue::Object { fields, .. }) = heap.get(matcher_ref) {
         fields.get("__input").and_then(|v| {
-            if let Value::Reference(r) = v { Some(*r) } else { None }
+            if let Value::Reference(r) = v {
+                Some(*r)
+            } else {
+                None
+            }
         })
     } else {
         None
@@ -456,7 +508,12 @@ fn create_string_array(vm: &mut Vm, parts: &[&str]) -> Result<Reference, VmError
     Ok(arr_ref)
 }
 
-fn set_array_element(vm: &Vm, arr_ref: Reference, index: i32, value: Reference) -> Result<(), VmError> {
+fn set_array_element(
+    vm: &Vm,
+    arr_ref: Reference,
+    index: i32,
+    value: Reference,
+) -> Result<(), VmError> {
     let mut heap = vm.heap.lock().unwrap();
     if let Ok(HeapValue::ReferenceArray { values, .. }) = heap.get_mut(arr_ref) {
         let idx = index as usize;
@@ -466,4 +523,3 @@ fn set_array_element(vm: &Vm, arr_ref: Reference, index: i32, value: Reference) 
     }
     Ok(())
 }
-

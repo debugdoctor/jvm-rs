@@ -1,7 +1,5 @@
-use crate::vm::{
-    HeapValue, Reference, Value, Vm, VmError,
-};
 use crate::vm::types::ExecutionResult;
+use crate::vm::{HeapValue, Reference, Value, Vm, VmError};
 
 pub(super) fn stringify_reference(vm: &Vm, reference: Reference) -> Result<String, VmError> {
     match reference {
@@ -27,17 +25,22 @@ pub(super) fn format_value_for_append(
         }
         "(I)Ljava/lang/StringBuilder;" => Ok(args[0].as_int()?.to_string()),
         "(J)Ljava/lang/StringBuilder;" => Ok(args[0].as_long()?.to_string()),
-        "(C)Ljava/lang/StringBuilder;" => {
-            Ok((args[0].as_int()? as u16 as u32)
-                .try_into()
-                .map(|c: char| c.to_string())
-                .unwrap_or_default())
+        "(C)Ljava/lang/StringBuilder;" => Ok((args[0].as_int()? as u16 as u32)
+            .try_into()
+            .map(|c: char| c.to_string())
+            .unwrap_or_default()),
+        "(Z)Ljava/lang/StringBuilder;" => Ok(if args[0].as_int()? != 0 {
+            "true"
+        } else {
+            "false"
         }
-        "(Z)Ljava/lang/StringBuilder;" => {
-            Ok(if args[0].as_int()? != 0 { "true" } else { "false" }.to_string())
-        }
-        "(F)Ljava/lang/StringBuilder;" => Ok(crate::vm::builtin::format::format_float(args[0].as_float()? as f64)),
-        "(D)Ljava/lang/StringBuilder;" => Ok(crate::vm::builtin::format::format_float(args[0].as_double()?)),
+        .to_string()),
+        "(F)Ljava/lang/StringBuilder;" => Ok(crate::vm::builtin::format::format_float(
+            args[0].as_float()? as f64,
+        )),
+        "(D)Ljava/lang/StringBuilder;" => Ok(crate::vm::builtin::format::format_float(
+            args[0].as_double()?,
+        )),
         "(Ljava/lang/Object;)Ljava/lang/StringBuilder;" => {
             let r = args[0].as_reference()?;
             vm.stringify_heap(r)
@@ -46,7 +49,10 @@ pub(super) fn format_value_for_append(
     }
 }
 
-pub(super) fn native_int_stream_array(vm: &Vm, stream_ref: Reference) -> Result<Reference, VmError> {
+pub(super) fn native_int_stream_array(
+    vm: &Vm,
+    stream_ref: Reference,
+) -> Result<Reference, VmError> {
     match vm.heap.lock().unwrap().get(stream_ref)? {
         HeapValue::Object { fields, .. } => match fields.get("__array") {
             Some(Value::Reference(r)) => Ok(*r),
@@ -59,7 +65,10 @@ pub(super) fn native_int_stream_array(vm: &Vm, stream_ref: Reference) -> Result<
     }
 }
 
-pub(super) fn native_long_stream_array(vm: &Vm, stream_ref: Reference) -> Result<Reference, VmError> {
+pub(super) fn native_long_stream_array(
+    vm: &Vm,
+    stream_ref: Reference,
+) -> Result<Reference, VmError> {
     match vm.heap.lock().unwrap().get(stream_ref)? {
         HeapValue::Object { fields, .. } => match fields.get("__array") {
             Some(Value::Reference(r)) => Ok(*r),
@@ -72,7 +81,10 @@ pub(super) fn native_long_stream_array(vm: &Vm, stream_ref: Reference) -> Result
     }
 }
 
-pub(super) fn native_double_stream_array(vm: &Vm, stream_ref: Reference) -> Result<Reference, VmError> {
+pub(super) fn native_double_stream_array(
+    vm: &Vm,
+    stream_ref: Reference,
+) -> Result<Reference, VmError> {
     match vm.heap.lock().unwrap().get(stream_ref)? {
         HeapValue::Object { fields, .. } => match fields.get("__array") {
             Some(Value::Reference(r)) => Ok(*r),
@@ -95,7 +107,10 @@ pub(super) fn native_collector_mode(vm: &Vm, collector_ref: Reference) -> Result
     }
 }
 
-pub(super) fn native_collector_array(vm: &Vm, collector_ref: Reference) -> Result<Reference, VmError> {
+pub(super) fn native_collector_array(
+    vm: &Vm,
+    collector_ref: Reference,
+) -> Result<Reference, VmError> {
     match vm.heap.lock().unwrap().get(collector_ref)? {
         HeapValue::Object { fields, .. } => match fields.get("__array") {
             Some(Value::Reference(r)) => Ok(*r),
@@ -108,7 +123,12 @@ pub(super) fn native_collector_array(vm: &Vm, collector_ref: Reference) -> Resul
     }
 }
 
-pub(super) fn collect_with_mode(vm: &mut Vm, elements: Vec<Reference>, mode: i32, collector_ref: Reference) -> Result<Option<Value>, VmError> {
+pub(super) fn collect_with_mode(
+    vm: &mut Vm,
+    elements: Vec<Reference>,
+    mode: i32,
+    collector_ref: Reference,
+) -> Result<Option<Value>, VmError> {
     match mode {
         1 => {
             let list_ref = vm.heap.lock().unwrap().allocate(HeapValue::Object {
@@ -116,7 +136,12 @@ pub(super) fn collect_with_mode(vm: &mut Vm, elements: Vec<Reference>, mode: i32
                 fields: std::collections::HashMap::new(),
             });
             for elem_ref in elements {
-                vm.call_virtual(list_ref, "add", "(Ljava/lang/Object;)Z", vec![Value::Reference(elem_ref)])?;
+                vm.call_virtual(
+                    list_ref,
+                    "add",
+                    "(Ljava/lang/Object;)Z",
+                    vec![Value::Reference(elem_ref)],
+                )?;
             }
             Ok(Some(Value::Reference(list_ref)))
         }
@@ -126,7 +151,12 @@ pub(super) fn collect_with_mode(vm: &mut Vm, elements: Vec<Reference>, mode: i32
                 fields: std::collections::HashMap::new(),
             });
             for elem_ref in elements {
-                vm.call_virtual(set_ref, "add", "(Ljava/lang/Object;)Z", vec![Value::Reference(elem_ref)])?;
+                vm.call_virtual(
+                    set_ref,
+                    "add",
+                    "(Ljava/lang/Object;)Z",
+                    vec![Value::Reference(elem_ref)],
+                )?;
             }
             Ok(Some(Value::Reference(set_ref)))
         }
@@ -178,32 +208,35 @@ pub(super) fn list_snapshot(vm: &mut Vm, list: Reference) -> Result<Vec<Referenc
     let size_res = vm.call_virtual(list, "size", "()I", vec![])?;
     let size = match size_res {
         ExecutionResult::Value(Value::Int(n)) => n,
-        _ => return Err(VmError::TypeMismatch {
-            expected: "int",
-            actual: "non-int from List.size()",
-        }),
+        _ => {
+            return Err(VmError::TypeMismatch {
+                expected: "int",
+                actual: "non-int from List.size()",
+            });
+        }
     };
     let mut out = Vec::with_capacity(size.max(0) as usize);
     for i in 0..size {
-        let res = vm.call_virtual(
-            list,
-            "get",
-            "(I)Ljava/lang/Object;",
-            vec![Value::Int(i)],
-        )?;
+        let res = vm.call_virtual(list, "get", "(I)Ljava/lang/Object;", vec![Value::Int(i)])?;
         let r = match res {
             ExecutionResult::Value(Value::Reference(r)) => r,
-            _ => return Err(VmError::TypeMismatch {
-                expected: "reference",
-                actual: "non-reference from List.get(I)",
-            }),
+            _ => {
+                return Err(VmError::TypeMismatch {
+                    expected: "reference",
+                    actual: "non-reference from List.get(I)",
+                });
+            }
         };
         out.push(r);
     }
     Ok(out)
 }
 
-pub(super) fn list_overwrite(vm: &mut Vm, list: Reference, values: &[Reference]) -> Result<(), VmError> {
+pub(super) fn list_overwrite(
+    vm: &mut Vm,
+    list: Reference,
+    values: &[Reference],
+) -> Result<(), VmError> {
     for (i, v) in values.iter().enumerate() {
         vm.call_virtual(
             list,
@@ -231,7 +264,12 @@ pub(super) fn compare_natural(vm: &mut Vm, a: Reference, b: Reference) -> Result
     }
 }
 
-pub(super) fn compare_with(vm: &mut Vm, cmp: Reference, a: Reference, b: Reference) -> Result<i32, VmError> {
+pub(super) fn compare_with(
+    vm: &mut Vm,
+    cmp: Reference,
+    a: Reference,
+    b: Reference,
+) -> Result<i32, VmError> {
     let res = vm.call_virtual(
         cmp,
         "compare",
@@ -272,7 +310,13 @@ pub(super) fn integer_value(vm: &Vm, reference: Reference) -> Result<i32, VmErro
     match vm.heap.lock().unwrap().get(reference)? {
         HeapValue::Object { fields, .. } => Ok(fields
             .get("value")
-            .and_then(|v| if let Value::Int(i) = v { Some(*i) } else { None })
+            .and_then(|v| {
+                if let Value::Int(i) = v {
+                    Some(*i)
+                } else {
+                    None
+                }
+            })
             .unwrap_or(0)),
         _ => Ok(0),
     }
@@ -364,8 +408,7 @@ pub(super) fn arraycopy(
             HeapValue::IntArray { values } => {
                 if src_pos + length > values.len() {
                     return Err(VmError::UnhandledException {
-                        class_name: "java/lang/ArrayIndexOutOfBoundsException"
-                            .to_string(),
+                        class_name: "java/lang/ArrayIndexOutOfBoundsException".to_string(),
                     });
                 }
                 src_kind = "I";
@@ -378,8 +421,7 @@ pub(super) fn arraycopy(
             HeapValue::LongArray { values } => {
                 if src_pos + length > values.len() {
                     return Err(VmError::UnhandledException {
-                        class_name: "java/lang/ArrayIndexOutOfBoundsException"
-                            .to_string(),
+                        class_name: "java/lang/ArrayIndexOutOfBoundsException".to_string(),
                     });
                 }
                 src_kind = "J";
@@ -392,8 +434,7 @@ pub(super) fn arraycopy(
             HeapValue::FloatArray { values } => {
                 if src_pos + length > values.len() {
                     return Err(VmError::UnhandledException {
-                        class_name: "java/lang/ArrayIndexOutOfBoundsException"
-                            .to_string(),
+                        class_name: "java/lang/ArrayIndexOutOfBoundsException".to_string(),
                     });
                 }
                 src_kind = "F";
@@ -406,8 +447,7 @@ pub(super) fn arraycopy(
             HeapValue::DoubleArray { values } => {
                 if src_pos + length > values.len() {
                     return Err(VmError::UnhandledException {
-                        class_name: "java/lang/ArrayIndexOutOfBoundsException"
-                            .to_string(),
+                        class_name: "java/lang/ArrayIndexOutOfBoundsException".to_string(),
                     });
                 }
                 src_kind = "D";
@@ -420,8 +460,7 @@ pub(super) fn arraycopy(
             HeapValue::ReferenceArray { values, .. } => {
                 if src_pos + length > values.len() {
                     return Err(VmError::UnhandledException {
-                        class_name: "java/lang/ArrayIndexOutOfBoundsException"
-                            .to_string(),
+                        class_name: "java/lang/ArrayIndexOutOfBoundsException".to_string(),
                     });
                 }
                 src_kind = "L";
@@ -491,7 +530,11 @@ pub(super) fn arraycopy(
     Ok(())
 }
 
-pub(super) fn native_arrays_equals_int(vm: &Vm, a: Reference, b: Reference) -> Result<bool, VmError> {
+pub(super) fn native_arrays_equals_int(
+    vm: &Vm,
+    a: Reference,
+    b: Reference,
+) -> Result<bool, VmError> {
     if a == b {
         return Ok(true);
     }
@@ -505,7 +548,11 @@ pub(super) fn native_arrays_equals_int(vm: &Vm, a: Reference, b: Reference) -> R
     }
 }
 
-pub(super) fn native_arrays_equals_long(vm: &Vm, a: Reference, b: Reference) -> Result<bool, VmError> {
+pub(super) fn native_arrays_equals_long(
+    vm: &Vm,
+    a: Reference,
+    b: Reference,
+) -> Result<bool, VmError> {
     if a == b {
         return Ok(true);
     }
@@ -514,14 +561,16 @@ pub(super) fn native_arrays_equals_long(vm: &Vm, a: Reference, b: Reference) -> 
     }
     let mut heap = vm.heap.lock().unwrap();
     match (heap.get(a)?, heap.get(b)?) {
-        (HeapValue::LongArray { values: x }, HeapValue::LongArray { values: y }) => {
-            Ok(x == y)
-        }
+        (HeapValue::LongArray { values: x }, HeapValue::LongArray { values: y }) => Ok(x == y),
         _ => Ok(false),
     }
 }
 
-pub(super) fn native_arrays_equals_float(vm: &Vm, a: Reference, b: Reference) -> Result<bool, VmError> {
+pub(super) fn native_arrays_equals_float(
+    vm: &Vm,
+    a: Reference,
+    b: Reference,
+) -> Result<bool, VmError> {
     if a == b {
         return Ok(true);
     }
@@ -530,15 +579,20 @@ pub(super) fn native_arrays_equals_float(vm: &Vm, a: Reference, b: Reference) ->
     }
     let mut heap = vm.heap.lock().unwrap();
     match (heap.get(a)?, heap.get(b)?) {
-        (HeapValue::FloatArray { values: x }, HeapValue::FloatArray { values: y }) => {
-            Ok(x.len() == y.len()
-                && x.iter().zip(y.iter()).all(|(a, b)| a.to_bits() == b.to_bits()))
-        }
+        (HeapValue::FloatArray { values: x }, HeapValue::FloatArray { values: y }) => Ok(x.len()
+            == y.len()
+            && x.iter()
+                .zip(y.iter())
+                .all(|(a, b)| a.to_bits() == b.to_bits())),
         _ => Ok(false),
     }
 }
 
-pub(super) fn native_arrays_equals_double(vm: &Vm, a: Reference, b: Reference) -> Result<bool, VmError> {
+pub(super) fn native_arrays_equals_double(
+    vm: &Vm,
+    a: Reference,
+    b: Reference,
+) -> Result<bool, VmError> {
     if a == b {
         return Ok(true);
     }
@@ -547,15 +601,20 @@ pub(super) fn native_arrays_equals_double(vm: &Vm, a: Reference, b: Reference) -
     }
     let mut heap = vm.heap.lock().unwrap();
     match (heap.get(a)?, heap.get(b)?) {
-        (HeapValue::DoubleArray { values: x }, HeapValue::DoubleArray { values: y }) => {
-            Ok(x.len() == y.len()
-                && x.iter().zip(y.iter()).all(|(a, b)| a.to_bits() == b.to_bits()))
-        }
+        (HeapValue::DoubleArray { values: x }, HeapValue::DoubleArray { values: y }) => Ok(x.len()
+            == y.len()
+            && x.iter()
+                .zip(y.iter())
+                .all(|(a, b)| a.to_bits() == b.to_bits())),
         _ => Ok(false),
     }
 }
 
-pub(super) fn native_arrays_equals_ref(vm: &mut Vm, a: Reference, b: Reference) -> Result<bool, VmError> {
+pub(super) fn native_arrays_equals_ref(
+    vm: &mut Vm,
+    a: Reference,
+    b: Reference,
+) -> Result<bool, VmError> {
     if a == b {
         return Ok(true);
     }

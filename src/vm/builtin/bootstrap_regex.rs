@@ -9,7 +9,10 @@ pub(super) fn bootstrap_java_util_regex(vm: &mut Vm) {
         ("compile", "(Ljava/lang/String;I)Ljava/util/regex/Pattern;"),
         ("matches", "(Ljava/lang/String;Ljava/lang/CharSequence;)Z"),
         ("pattern", "()Ljava/lang/String;"),
-        ("matcher", "(Ljava/lang/CharSequence;)Ljava/util/regex/Matcher;"),
+        (
+            "matcher",
+            "(Ljava/lang/CharSequence;)Ljava/util/regex/Matcher;",
+        ),
         ("split", "(Ljava/lang/CharSequence;)[Ljava/lang/String;"),
         ("split", "(Ljava/lang/CharSequence;I)[Ljava/lang/String;"),
     ] {
@@ -29,13 +32,19 @@ pub(super) fn bootstrap_java_util_regex(vm: &mut Vm) {
 
     let mut matcher_methods = HashMap::new();
     for (name, desc) in [
-        ("<init>", "(Ljava/util/regex/Pattern;Ljava/lang/CharSequence;)V"),
+        (
+            "<init>",
+            "(Ljava/util/regex/Pattern;Ljava/lang/CharSequence;)V",
+        ),
         ("matches", "()Z"),
         ("find", "()Z"),
         ("find", "(I)Z"),
         ("lookingAt", "()Z"),
         ("reset", "()Ljava/util/regex/Matcher;"),
-        ("reset", "(Ljava/lang/CharSequence;)Ljava/util/regex/Matcher;"),
+        (
+            "reset",
+            "(Ljava/lang/CharSequence;)Ljava/util/regex/Matcher;",
+        ),
         ("group", "(I)Ljava/lang/String;"),
         ("group", "()Ljava/lang/String;"),
         ("groupCount", "()I"),
@@ -54,8 +63,14 @@ pub(super) fn bootstrap_java_util_regex(vm: &mut Vm) {
         methods: matcher_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![
-            ("__pattern".to_string(), "Ljava/util/regex/Pattern;".to_string()),
-            ("__input".to_string(), "Ljava/lang/CharSequence;".to_string()),
+            (
+                "__pattern".to_string(),
+                "Ljava/util/regex/Pattern;".to_string(),
+            ),
+            (
+                "__input".to_string(),
+                "Ljava/lang/CharSequence;".to_string(),
+            ),
             ("__match_start".to_string(), "I".to_string()),
             ("__match_end".to_string(), "I".to_string()),
             ("__last_match_start".to_string(), "I".to_string()),

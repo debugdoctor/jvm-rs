@@ -1,11 +1,13 @@
 use std::collections::HashMap;
-use std::sync::RwLock;
+use std::sync::Mutex;
 use std::sync::OnceLock;
+use std::sync::RwLock;
 
 #[cfg(unix)]
 use libc;
 
 use super::CompiledCode;
+use crate::vm::{FieldRef, InvokeDynamicSite, MethodRef, Reference, Value, Vm};
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 unsafe extern "C" {
@@ -17,14 +19,14 @@ thread_local! {
 }
 
 pub fn set_current_vm(vm_ptr: u64) {
-    CURRENT_VM.with(|cell| {
-        unsafe { *cell.get() = vm_ptr; }
+    CURRENT_VM.with(|cell| unsafe {
+        *cell.get() = vm_ptr;
     });
 }
 
 pub fn clear_current_vm() {
-    CURRENT_VM.with(|cell| {
-        unsafe { *cell.get() = 0; }
+    CURRENT_VM.with(|cell| unsafe {
+        *cell.get() = 0;
     });
 }
 
@@ -53,6 +55,10 @@ pub struct JitRuntimeHelpers {
 }
 
 static JIT_HELPERS: OnceLock<JitRuntimeHelpers> = OnceLock::new();
+static JIT_FIELD_REFS: OnceLock<Mutex<Vec<FieldRef>>> = OnceLock::new();
+static JIT_METHOD_REFS: OnceLock<Mutex<Vec<MethodRef>>> = OnceLock::new();
+static JIT_INVOKE_DYNAMIC_SITES: OnceLock<Mutex<Vec<InvokeDynamicSite>>> = OnceLock::new();
+const INLINE_ARG_MARKER: u64 = 1u64 << 63;
 
 pub static mut INVOKE_VIRTUAL_fn: JitHelperFn = jit_helper_invoke_virtual;
 pub static mut INVOKE_SPECIAL_fn: JitHelperFn = jit_helper_invoke_special;
@@ -100,37 +106,258 @@ pub fn get_invoke_interface_ptr() -> u64 {
     jit_helper_invoke_interface as u64
 }
 
-extern "C" fn jit_helper_allocate_object(_ctx: u64, _class_ptr: u64, _size: u64, _: u64, _: u64, _: u64) -> u64 {
+pub fn get_invoke_dynamic_ptr() -> u64 {
+    jit_helper_invoke_dynamic as u64
+}
+
+pub fn get_invoke_native_ptr() -> u64 {
+    jit_helper_invoke_native as u64
+}
+
+pub fn get_get_static_field_ptr() -> u64 {
+    jit_helper_get_static_field as u64
+}
+
+pub fn get_put_static_field_ptr() -> u64 {
+    jit_helper_put_static_field as u64
+}
+
+pub fn get_get_instance_field_ptr() -> u64 {
+    jit_helper_get_instance_field as u64
+}
+
+pub fn get_put_instance_field_ptr() -> u64 {
+    jit_helper_put_instance_field as u64
+}
+
+pub fn register_field_ref(field_ref: FieldRef) -> u64 {
+    let refs = JIT_FIELD_REFS.get_or_init(|| Mutex::new(Vec::new()));
+    let mut refs = refs.lock().unwrap();
+    refs.push(field_ref);
+    (refs.len() - 1) as u64
+}
+
+fn get_registered_field_ref(index: usize) -> Option<FieldRef> {
+    JIT_FIELD_REFS
+        .get()
+        .and_then(|refs| refs.lock().ok()?.get(index).cloned())
+}
+
+pub fn register_method_ref(method_ref: MethodRef) -> u64 {
+    let refs = JIT_METHOD_REFS.get_or_init(|| Mutex::new(Vec::new()));
+    let mut refs = refs.lock().unwrap();
+    refs.push(method_ref);
+    (refs.len() - 1) as u64
+}
+
+fn get_registered_method_ref(index: usize) -> Option<MethodRef> {
+    JIT_METHOD_REFS
+        .get()
+        .and_then(|refs| refs.lock().ok()?.get(index).cloned())
+}
+
+pub fn register_invoke_dynamic_site(site: InvokeDynamicSite) -> u64 {
+    let sites = JIT_INVOKE_DYNAMIC_SITES.get_or_init(|| Mutex::new(Vec::new()));
+    let mut sites = sites.lock().unwrap();
+    sites.push(site);
+    (sites.len() - 1) as u64
+}
+
+fn get_registered_invoke_dynamic_site(index: usize) -> Option<InvokeDynamicSite> {
+    JIT_INVOKE_DYNAMIC_SITES
+        .get()
+        .and_then(|sites| sites.lock().ok()?.get(index).cloned())
+}
+
+fn value_to_u64(value: Option<Value>) -> u64 {
+    match value {
+        Some(Value::Int(v)) => v as u32 as u64,
+        Some(Value::Long(v)) => v as u64,
+        Some(Value::Float(v)) => v.to_bits() as u64,
+        Some(Value::Double(v)) => v.to_bits(),
+        Some(Value::Reference(Reference::Null)) | None => 0,
+        Some(Value::Reference(Reference::Heap(addr))) => addr as u64,
+        Some(Value::ReturnAddress(pc)) => pc as u64,
+    }
+}
+
+fn decode_helper_args(argc: u64, arg0: u64, arg1: u64, arg2: u64) -> (usize, [u64; 3], bool) {
+    if argc & INLINE_ARG_MARKER != 0 {
+        let real_argc = (argc & !INLINE_ARG_MARKER) as usize;
+        (real_argc, [arg0, arg1, arg2], true)
+    } else {
+        (argc as usize, [arg0, 0, 0], false)
+    }
+}
+
+extern "C" fn jit_helper_allocate_object(
+    _ctx: u64,
+    _class_ptr: u64,
+    _size: u64,
+    _: u64,
+    _: u64,
+    _: u64,
+) -> u64 {
     println!("JIT helper: allocate_object (stub - deoptimizing)");
     0
 }
 
-extern "C" fn jit_helper_allocate_array(_ctx: u64, _class_ptr: u64, _length: u64, _: u64, _: u64, _: u64) -> u64 {
+extern "C" fn jit_helper_allocate_array(
+    _ctx: u64,
+    _class_ptr: u64,
+    _length: u64,
+    _: u64,
+    _: u64,
+    _: u64,
+) -> u64 {
     println!("JIT helper: allocate_array (stub - deoptimizing)");
     0
 }
 
-extern "C" fn jit_helper_get_static_field(_ctx: u64, _class_ptr: u64, _field_ptr: u64, _: u64, _: u64, _: u64) -> u64 {
-    println!("JIT helper: get_static_field (stub - deoptimizing)");
+extern "C" fn jit_helper_get_static_field(
+    _ctx: u64,
+    field_ref_id: u64,
+    _: u64,
+    _: u64,
+    _: u64,
+    _: u64,
+) -> u64 {
+    let vm_ptr = get_current_vm_ptr();
+    if vm_ptr == 0 {
+        println!("JIT helper: get_static_field - no VM context, deoptimizing");
+        return 0;
+    }
+
+    let Some(field_ref) = get_registered_field_ref(field_ref_id as usize) else {
+        println!(
+            "JIT helper: get_static_field - missing field ref {}",
+            field_ref_id
+        );
+        return 0;
+    };
+
+    let result = unsafe {
+        let vm = &mut *(vm_ptr as *mut Vm);
+        let result = vm.invoke_jit_get_static_field_ref(&field_ref);
+        set_current_vm(vm_ptr);
+        result
+    };
+
+    value_to_u64(result)
+}
+
+extern "C" fn jit_helper_put_static_field(
+    _ctx: u64,
+    field_ref_id: u64,
+    value: u64,
+    _: u64,
+    _: u64,
+    _: u64,
+) -> u64 {
+    let vm_ptr = get_current_vm_ptr();
+    if vm_ptr == 0 {
+        println!("JIT helper: put_static_field - no VM context, deoptimizing");
+        return 0;
+    }
+
+    let Some(field_ref) = get_registered_field_ref(field_ref_id as usize) else {
+        println!(
+            "JIT helper: put_static_field - missing field ref {}",
+            field_ref_id
+        );
+        return 0;
+    };
+
+    unsafe {
+        let vm = &mut *(vm_ptr as *mut Vm);
+        vm.invoke_jit_put_static_field_ref(&field_ref, value);
+        set_current_vm(vm_ptr);
+    }
+
     0
 }
 
-extern "C" fn jit_helper_put_static_field(_ctx: u64, _class_ptr: u64, _field_ptr: u64, _value: u64, _: u64, _: u64) -> u64 {
-    println!("JIT helper: put_static_field (stub - deoptimizing)");
+extern "C" fn jit_helper_get_instance_field(
+    _ctx: u64,
+    obj: u64,
+    field_ref_id: u64,
+    _: u64,
+    _: u64,
+    _: u64,
+) -> u64 {
+    if obj == 0 {
+        println!("JIT helper: get_instance_field - null receiver, deoptimizing");
+        return 0;
+    }
+
+    let vm_ptr = get_current_vm_ptr();
+    if vm_ptr == 0 {
+        println!("JIT helper: get_instance_field - no VM context, deoptimizing");
+        return 0;
+    }
+
+    let Some(field_ref) = get_registered_field_ref(field_ref_id as usize) else {
+        println!(
+            "JIT helper: get_instance_field - missing field ref {}",
+            field_ref_id
+        );
+        return 0;
+    };
+
+    let result = unsafe {
+        let vm = &mut *(vm_ptr as *mut Vm);
+        let result = vm.invoke_jit_get_instance_field_ref(&field_ref, obj);
+        set_current_vm(vm_ptr);
+        result
+    };
+
+    value_to_u64(result)
+}
+
+extern "C" fn jit_helper_put_instance_field(
+    _ctx: u64,
+    obj: u64,
+    field_ref_id: u64,
+    value: u64,
+    _: u64,
+    _: u64,
+) -> u64 {
+    if obj == 0 {
+        println!("JIT helper: put_instance_field - null receiver, deoptimizing");
+        return 0;
+    }
+
+    let vm_ptr = get_current_vm_ptr();
+    if vm_ptr == 0 {
+        println!("JIT helper: put_instance_field - no VM context, deoptimizing");
+        return 0;
+    }
+
+    let Some(field_ref) = get_registered_field_ref(field_ref_id as usize) else {
+        println!(
+            "JIT helper: put_instance_field - missing field ref {}",
+            field_ref_id
+        );
+        return 0;
+    };
+
+    unsafe {
+        let vm = &mut *(vm_ptr as *mut Vm);
+        vm.invoke_jit_put_instance_field_ref(&field_ref, obj, value);
+        set_current_vm(vm_ptr);
+    }
+
     0
 }
 
-extern "C" fn jit_helper_get_instance_field(_ctx: u64, _obj: u64, _field_ptr: u64, _: u64, _: u64, _: u64) -> u64 {
-    println!("JIT helper: get_instance_field (stub - deoptimizing)");
-    0
-}
-
-extern "C" fn jit_helper_put_instance_field(_ctx: u64, _obj: u64, _field_ptr: u64, _value: u64, _: u64, _: u64) -> u64 {
-    println!("JIT helper: put_instance_field (stub - deoptimizing)");
-    0
-}
-
-extern "C" fn jit_helper_invoke_virtual(_ctx: u64, obj: u64, method_ptr: u64, argc: u64, _: u64, _: u64) -> u64 {
+extern "C" fn jit_helper_invoke_virtual(
+    _ctx: u64,
+    obj: u64,
+    method_ref_id: u64,
+    argc: u64,
+    arg0: u64,
+    arg1: u64,
+) -> u64 {
     if obj == 0 {
         println!("JIT helper: invoke_virtual - null receiver, deoptimizing");
         return 0;
@@ -142,12 +369,38 @@ extern "C" fn jit_helper_invoke_virtual(_ctx: u64, obj: u64, method_ptr: u64, ar
         return 0;
     }
 
-    let cp_index = method_ptr as usize;
-    println!("JIT helper: invoke_virtual called (obj={}, cp_index={}, argc={}) - deoptimizing for now", obj, cp_index, argc);
-    0
+    let Some(method_ref) = get_registered_method_ref(method_ref_id as usize) else {
+        println!(
+            "JIT helper: invoke_virtual - missing method ref {}",
+            method_ref_id
+        );
+        return 0;
+    };
+
+    let result = unsafe {
+        let vm = &mut *(vm_ptr as *mut Vm);
+        let (argc, inline_args, inline) = decode_helper_args(argc, arg0, arg1, 0);
+        let args_ptr = if inline {
+            inline_args.as_ptr() as u64
+        } else {
+            inline_args[0]
+        };
+        let result = vm.invoke_jit_virtual_method_ref(&method_ref, obj, args_ptr, argc);
+        set_current_vm(vm_ptr);
+        result
+    };
+
+    value_to_u64(result)
 }
 
-extern "C" fn jit_helper_invoke_special(_ctx: u64, obj: u64, method_ptr: u64, argc: u64, _: u64, _: u64) -> u64 {
+extern "C" fn jit_helper_invoke_special(
+    _ctx: u64,
+    obj: u64,
+    method_ref_id: u64,
+    argc: u64,
+    arg0: u64,
+    arg1: u64,
+) -> u64 {
     if obj == 0 {
         println!("JIT helper: invoke_special - null receiver, deoptimizing");
         return 0;
@@ -159,24 +412,76 @@ extern "C" fn jit_helper_invoke_special(_ctx: u64, obj: u64, method_ptr: u64, ar
         return 0;
     }
 
-    let cp_index = method_ptr as usize;
-    println!("JIT helper: invoke_special called (obj={}, cp_index={}, argc={}) - deoptimizing for now", obj, cp_index, argc);
-    0
+    let Some(method_ref) = get_registered_method_ref(method_ref_id as usize) else {
+        println!(
+            "JIT helper: invoke_special - missing method ref {}",
+            method_ref_id
+        );
+        return 0;
+    };
+
+    let result = unsafe {
+        let vm = &mut *(vm_ptr as *mut Vm);
+        let (argc, inline_args, inline) = decode_helper_args(argc, arg0, arg1, 0);
+        let args_ptr = if inline {
+            inline_args.as_ptr() as u64
+        } else {
+            inline_args[0]
+        };
+        let result = vm.invoke_jit_special_method_ref(&method_ref, obj, args_ptr, argc);
+        set_current_vm(vm_ptr);
+        result
+    };
+
+    value_to_u64(result)
 }
 
-extern "C" fn jit_helper_invoke_static(_ctx: u64, class_ptr: u64, method_ptr: u64, argc: u64, _: u64, _: u64) -> u64 {
+extern "C" fn jit_helper_invoke_static(
+    _ctx: u64,
+    method_ref_id: u64,
+    argc: u64,
+    arg0: u64,
+    arg1: u64,
+    arg2: u64,
+) -> u64 {
     let vm_ptr = get_current_vm_ptr();
     if vm_ptr == 0 {
         println!("JIT helper: invoke_static - no VM context, deoptimizing");
         return 0;
     }
 
-    let cp_index = method_ptr as usize;
-    println!("JIT helper: invoke_static called (class={}, cp_index={}, argc={}) - deoptimizing for now", class_ptr, cp_index, argc);
-    0
+    let Some(method_ref) = get_registered_method_ref(method_ref_id as usize) else {
+        println!(
+            "JIT helper: invoke_static - missing method ref {}",
+            method_ref_id
+        );
+        return 0;
+    };
+
+    let result = unsafe {
+        let vm = &mut *(vm_ptr as *mut Vm);
+        let (argc, inline_args, inline) = decode_helper_args(argc, arg0, arg1, arg2);
+        let args_ptr = if inline {
+            inline_args.as_ptr() as u64
+        } else {
+            inline_args[0]
+        };
+        let result = vm.invoke_jit_static_method_ref(&method_ref, args_ptr, argc);
+        set_current_vm(vm_ptr);
+        result
+    };
+
+    value_to_u64(result)
 }
 
-extern "C" fn jit_helper_invoke_interface(_ctx: u64, obj: u64, method_ptr: u64, argc: u64, _: u64, _: u64) -> u64 {
+extern "C" fn jit_helper_invoke_interface(
+    _ctx: u64,
+    obj: u64,
+    method_ref_id: u64,
+    argc: u64,
+    arg0: u64,
+    arg1: u64,
+) -> u64 {
     if obj == 0 {
         println!("JIT helper: invoke_interface - null receiver, deoptimizing");
         return 0;
@@ -188,17 +493,123 @@ extern "C" fn jit_helper_invoke_interface(_ctx: u64, obj: u64, method_ptr: u64, 
         return 0;
     }
 
-    let cp_index = method_ptr as usize;
-    println!("JIT helper: invoke_interface called (obj={}, cp_index={}, argc={}) - deoptimizing for now", obj, cp_index, argc);
-    0
+    let Some(method_ref) = get_registered_method_ref(method_ref_id as usize) else {
+        println!(
+            "JIT helper: invoke_interface - missing method ref {}",
+            method_ref_id
+        );
+        return 0;
+    };
+
+    let result = unsafe {
+        let vm = &mut *(vm_ptr as *mut Vm);
+        let (argc, inline_args, inline) = decode_helper_args(argc, arg0, arg1, 0);
+        let args_ptr = if inline {
+            inline_args.as_ptr() as u64
+        } else {
+            inline_args[0]
+        };
+        let result = vm.invoke_jit_interface_method_ref(&method_ref, obj, args_ptr, argc);
+        set_current_vm(vm_ptr);
+        result
+    };
+
+    value_to_u64(result)
 }
 
-extern "C" fn jit_helper_checkcast(_ctx: u64, _obj: u64, _class_ptr: u64, _: u64, _: u64, _: u64) -> u64 {
+extern "C" fn jit_helper_invoke_dynamic(
+    _ctx: u64,
+    site_id: u64,
+    argc: u64,
+    arg0: u64,
+    arg1: u64,
+    arg2: u64,
+) -> u64 {
+    let vm_ptr = get_current_vm_ptr();
+    if vm_ptr == 0 {
+        println!("JIT helper: invoke_dynamic - no VM context, deoptimizing");
+        return 0;
+    }
+
+    let Some(site) = get_registered_invoke_dynamic_site(site_id as usize) else {
+        println!("JIT helper: invoke_dynamic - missing site {}", site_id);
+        return 0;
+    };
+
+    let result = unsafe {
+        let vm = &mut *(vm_ptr as *mut Vm);
+        let (argc, inline_args, inline) = decode_helper_args(argc, arg0, arg1, arg2);
+        let args_ptr = if inline {
+            inline_args.as_ptr() as u64
+        } else {
+            inline_args[0]
+        };
+        let result = vm.invoke_jit_dynamic_site(&site, args_ptr, argc);
+        set_current_vm(vm_ptr);
+        result
+    };
+
+    value_to_u64(result)
+}
+
+extern "C" fn jit_helper_invoke_native(
+    _ctx: u64,
+    method_ref_id: u64,
+    argc: u64,
+    arg0: u64,
+    arg1: u64,
+    arg2: u64,
+) -> u64 {
+    let vm_ptr = get_current_vm_ptr();
+    if vm_ptr == 0 {
+        println!("JIT helper: invoke_native - no VM context, deoptimizing");
+        return 0;
+    }
+
+    let Some(method_ref) = get_registered_method_ref(method_ref_id as usize) else {
+        println!(
+            "JIT helper: invoke_native - missing method ref {}",
+            method_ref_id
+        );
+        return 0;
+    };
+
+    let result = unsafe {
+        let vm = &mut *(vm_ptr as *mut Vm);
+        let (argc, inline_args, inline) = decode_helper_args(argc, arg0, arg1, arg2);
+        let args_ptr = if inline {
+            inline_args.as_ptr() as u64
+        } else {
+            inline_args[0]
+        };
+        let result = vm.invoke_jit_native_method_ref(&method_ref, args_ptr, argc);
+        set_current_vm(vm_ptr);
+        result
+    };
+
+    value_to_u64(result)
+}
+
+extern "C" fn jit_helper_checkcast(
+    _ctx: u64,
+    _obj: u64,
+    _class_ptr: u64,
+    _: u64,
+    _: u64,
+    _: u64,
+) -> u64 {
     println!("JIT helper: checkcast (stub - deoptimizing)");
     0
 }
 
-extern "C" fn jit_helper_instanceof(_ctx: u64, _obj: u64, _class_ptr: u64, _: u64, _: u64, _: u64) -> u64 {
+extern "C" fn jit_helper_instanceof(
+    _ctx: u64,
+    _obj: u64,
+    _class_ptr: u64,
+    _: u64,
+    _: u64,
+    _: u64,
+) -> u64 {
     println!("JIT helper: instanceof (stub - deoptimizing)");
     0
 }
@@ -208,7 +619,14 @@ extern "C" fn jit_helper_athrow(_ctx: u64, _exception: u64, _: u64, _: u64, _: u
     0
 }
 
-extern "C" fn jit_helper_monitor_enter(_ctx: u64, _obj: u64, _: u64, _: u64, _: u64, _: u64) -> u64 {
+extern "C" fn jit_helper_monitor_enter(
+    _ctx: u64,
+    _obj: u64,
+    _: u64,
+    _: u64,
+    _: u64,
+    _: u64,
+) -> u64 {
     println!("JIT helper: monitor_enter (stub - deoptimizing)");
     0
 }
@@ -488,9 +906,7 @@ impl JitContext {
         let _ = entry.frame_size();
 
         let mut int_args: [u64; 6] = [0; 6];
-        let mut float_args: [f64; 8] = [0.0; 8];
         let mut int_count = 1;
-        let mut float_count = 0;
 
         // First int slot is the JIT context pointer (currently 0 — runtime helpers
         // read the live VM through the thread-local in `set_current_vm`).
@@ -511,16 +927,16 @@ impl JitContext {
                     int_count += 1;
                 }
                 crate::vm::types::Value::Float(v) => {
-                    if float_count < 8 {
-                        float_args[float_count] = *v as f64;
+                    if int_count < 6 {
+                        int_args[int_count] = v.to_bits() as u64;
                     }
-                    float_count += 1;
+                    int_count += 1;
                 }
                 crate::vm::types::Value::Double(v) => {
-                    if float_count < 8 {
-                        float_args[float_count] = *v;
+                    if int_count < 6 {
+                        int_args[int_count] = v.to_bits();
                     }
-                    float_count += 1;
+                    int_count += 1;
                 }
                 crate::vm::types::Value::Reference(r) => {
                     let ptr = match r {
@@ -541,37 +957,79 @@ impl JitContext {
                 JitReturn::Void => {
                     let f: extern "C" fn(u64, u64, u64, u64, u64, u64) =
                         std::mem::transmute(fn_ptr);
-                    f(int_args[0], int_args[1], int_args[2], int_args[3], int_args[4], int_args[5]);
+                    f(
+                        int_args[0],
+                        int_args[1],
+                        int_args[2],
+                        int_args[3],
+                        int_args[4],
+                        int_args[5],
+                    );
                     Some(crate::vm::types::Value::Int(0))
                 }
                 JitReturn::Int => {
                     let f: extern "C" fn(u64, u64, u64, u64, u64, u64) -> u64 =
                         std::mem::transmute(fn_ptr);
-                    let r = f(int_args[0], int_args[1], int_args[2], int_args[3], int_args[4], int_args[5]);
+                    let r = f(
+                        int_args[0],
+                        int_args[1],
+                        int_args[2],
+                        int_args[3],
+                        int_args[4],
+                        int_args[5],
+                    );
                     Some(crate::vm::types::Value::Int(r as i32))
                 }
                 JitReturn::Long => {
                     let f: extern "C" fn(u64, u64, u64, u64, u64, u64) -> u64 =
                         std::mem::transmute(fn_ptr);
-                    let r = f(int_args[0], int_args[1], int_args[2], int_args[3], int_args[4], int_args[5]);
+                    let r = f(
+                        int_args[0],
+                        int_args[1],
+                        int_args[2],
+                        int_args[3],
+                        int_args[4],
+                        int_args[5],
+                    );
                     Some(crate::vm::types::Value::Long(r as i64))
                 }
                 JitReturn::Float => {
                     let f: extern "C" fn(u64, u64, u64, u64, u64, u64) -> f32 =
                         std::mem::transmute(fn_ptr);
-                    let r = f(int_args[0], int_args[1], int_args[2], int_args[3], int_args[4], int_args[5]);
+                    let r = f(
+                        int_args[0],
+                        int_args[1],
+                        int_args[2],
+                        int_args[3],
+                        int_args[4],
+                        int_args[5],
+                    );
                     Some(crate::vm::types::Value::Float(r))
                 }
                 JitReturn::Double => {
                     let f: extern "C" fn(u64, u64, u64, u64, u64, u64) -> f64 =
                         std::mem::transmute(fn_ptr);
-                    let r = f(int_args[0], int_args[1], int_args[2], int_args[3], int_args[4], int_args[5]);
+                    let r = f(
+                        int_args[0],
+                        int_args[1],
+                        int_args[2],
+                        int_args[3],
+                        int_args[4],
+                        int_args[5],
+                    );
                     Some(crate::vm::types::Value::Double(r))
                 }
                 JitReturn::Reference => {
                     let f: extern "C" fn(u64, u64, u64, u64, u64, u64) -> u64 =
                         std::mem::transmute(fn_ptr);
-                    let r = f(int_args[0], int_args[1], int_args[2], int_args[3], int_args[4], int_args[5]);
+                    let r = f(
+                        int_args[0],
+                        int_args[1],
+                        int_args[2],
+                        int_args[3],
+                        int_args[4],
+                        int_args[5],
+                    );
                     let r_ref = if r == 0 {
                         crate::vm::types::Reference::Null
                     } else {

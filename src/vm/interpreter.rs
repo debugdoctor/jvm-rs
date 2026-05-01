@@ -1,8 +1,10 @@
-use crate::vm::{Vm, VmError, Thread, Opcode, Value, Reference, ExecutionResult};
+use crate::vm::{ExecutionResult, Opcode, Reference, Thread, Value, Vm, VmError};
 
 #[inline(always)]
 pub fn execute_aconst_null(thread: &mut Thread) -> Result<(), VmError> {
-    thread.current_frame_mut().push(Value::Reference(Reference::Null))
+    thread
+        .current_frame_mut()
+        .push(Value::Reference(Reference::Null))
 }
 
 #[inline(always)]
@@ -101,21 +103,27 @@ pub fn execute_astore(thread: &mut Thread, index: usize) -> Result<(), VmError> 
 pub fn execute_iadd(thread: &mut Thread) -> Result<(), VmError> {
     let b = thread.current_frame_mut().pop()?.as_int()?;
     let a = thread.current_frame_mut().pop()?.as_int()?;
-    thread.current_frame_mut().push(Value::Int(a.wrapping_add(b)))
+    thread
+        .current_frame_mut()
+        .push(Value::Int(a.wrapping_add(b)))
 }
 
 #[inline(always)]
 pub fn execute_isub(thread: &mut Thread) -> Result<(), VmError> {
     let b = thread.current_frame_mut().pop()?.as_int()?;
     let a = thread.current_frame_mut().pop()?.as_int()?;
-    thread.current_frame_mut().push(Value::Int(a.wrapping_sub(b)))
+    thread
+        .current_frame_mut()
+        .push(Value::Int(a.wrapping_sub(b)))
 }
 
 #[inline(always)]
 pub fn execute_imul(thread: &mut Thread) -> Result<(), VmError> {
     let b = thread.current_frame_mut().pop()?.as_int()?;
     let a = thread.current_frame_mut().pop()?.as_int()?;
-    thread.current_frame_mut().push(Value::Int(a.wrapping_mul(b)))
+    thread
+        .current_frame_mut()
+        .push(Value::Int(a.wrapping_mul(b)))
 }
 
 #[inline(always)]

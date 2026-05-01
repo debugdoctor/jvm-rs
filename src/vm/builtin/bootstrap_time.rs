@@ -180,23 +180,29 @@ pub(super) fn bootstrap_java_time(vm: &mut Vm) {
     });
 
     let mut dayofweek_methods = HashMap::new();
-    for (name, desc) in [
-        ("getValue", "()I"),
-        ("toString", "()Ljava/lang/String;"),
-    ] {
+    for (name, desc) in [("getValue", "()I"), ("toString", "()Ljava/lang/String;")] {
         dayofweek_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
     let mut dayofweek_static = HashMap::new();
     for (name, val) in [
-        ("MONDAY", 1), ("TUESDAY", 2), ("WEDNESDAY", 3), ("THURSDAY", 4),
-        ("FRIDAY", 5), ("SATURDAY", 6), ("SUNDAY", 7),
+        ("MONDAY", 1),
+        ("TUESDAY", 2),
+        ("WEDNESDAY", 3),
+        ("THURSDAY", 4),
+        ("FRIDAY", 5),
+        ("SATURDAY", 6),
+        ("SUNDAY", 7),
     ] {
         let mut fields = std::collections::HashMap::new();
         fields.insert("__value".to_string(), Value::Int(val));
-        let r = vm.heap.lock().unwrap().allocate(crate::vm::HeapValue::Object {
-            class_name: "java/time/DayOfWeek".to_string(),
-            fields,
-        });
+        let r = vm
+            .heap
+            .lock()
+            .unwrap()
+            .allocate(crate::vm::HeapValue::Object {
+                class_name: "java/time/DayOfWeek".to_string(),
+                fields,
+            });
         dayofweek_static.insert(name.to_string(), Value::Reference(r));
     }
     vm.register_class(RuntimeClass {
@@ -204,9 +210,7 @@ pub(super) fn bootstrap_java_time(vm: &mut Vm) {
         super_class: Some("java/lang/Object".to_string()),
         methods: dayofweek_methods,
         static_fields: dayofweek_static,
-        instance_fields: vec![
-            ("__value".to_string(), "I".to_string()),
-        ],
+        instance_fields: vec![("__value".to_string(), "I".to_string())],
         interfaces: vec![],
     });
 
@@ -214,7 +218,10 @@ pub(super) fn bootstrap_java_time(vm: &mut Vm) {
     for (name, desc) in [
         ("now", "()Ljava/time/ZonedDateTime;"),
         ("now", "(Ljava/time/ZoneId;)Ljava/time/ZonedDateTime;"),
-        ("of", "(Ljava/time/LocalDateTime;Ljava/time/ZoneId;)Ljava/time/ZonedDateTime;"),
+        (
+            "of",
+            "(Ljava/time/LocalDateTime;Ljava/time/ZoneId;)Ljava/time/ZonedDateTime;",
+        ),
         ("getYear", "()I"),
         ("getMonthValue", "()I"),
         ("getDayOfMonth", "()I"),
@@ -260,10 +267,14 @@ pub(super) fn bootstrap_java_time(vm: &mut Vm) {
     let utc_zone = {
         let mut fields = std::collections::HashMap::new();
         fields.insert("__id".to_string(), vm.new_string("UTC".to_string()));
-        let r = vm.heap.lock().unwrap().allocate(crate::vm::HeapValue::Object {
-            class_name: "java/time/ZoneId".to_string(),
-            fields,
-        });
+        let r = vm
+            .heap
+            .lock()
+            .unwrap()
+            .allocate(crate::vm::HeapValue::Object {
+                class_name: "java/time/ZoneId".to_string(),
+                fields,
+            });
         r
     };
     zoneid_static.insert("UTC".to_string(), Value::Reference(utc_zone));
@@ -272,9 +283,7 @@ pub(super) fn bootstrap_java_time(vm: &mut Vm) {
         super_class: Some("java/lang/Object".to_string()),
         methods: zoneid_methods,
         static_fields: zoneid_static,
-        instance_fields: vec![
-            ("__id".to_string(), "Ljava/lang/String;".to_string()),
-        ],
+        instance_fields: vec![("__id".to_string(), "Ljava/lang/String;".to_string())],
         interfaces: vec![],
     });
 
@@ -301,9 +310,7 @@ pub(super) fn bootstrap_java_time(vm: &mut Vm) {
     });
 
     let mut zoneddatetime_methods = HashMap::new();
-    for (name, desc) in [
-        ("now", "()Ljava/time/ZonedDateTime;"),
-    ] {
+    for (name, desc) in [("now", "()Ljava/time/ZonedDateTime;")] {
         zoneddatetime_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
 }

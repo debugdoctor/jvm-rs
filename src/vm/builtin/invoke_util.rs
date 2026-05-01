@@ -19,7 +19,11 @@ pub(super) fn invoke_util(
             }
             Ok(Some(Value::Reference(r)))
         }
-        ("java/util/Objects", "requireNonNull", "(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Object;") => {
+        (
+            "java/util/Objects",
+            "requireNonNull",
+            "(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Object;",
+        ) => {
             let r = args[0].as_reference()?;
             if r == Reference::Null {
                 return Err(VmError::UnhandledException {
@@ -64,7 +68,9 @@ pub(super) fn invoke_util(
             if r == Reference::Null {
                 Ok(Some(Value::Int(0)))
             } else {
-                Ok(Some(Value::Int(crate::vm::builtin::helpers::hash_object(vm, r))))
+                Ok(Some(Value::Int(crate::vm::builtin::helpers::hash_object(
+                    vm, r,
+                ))))
             }
         }
         ("java/util/Objects", "checkIndex", "(II)I") => {
@@ -131,37 +137,51 @@ pub(super) fn invoke_util(
             }
             Ok(Some(Value::Long(from)))
         }
-        ("java/util/Arrays", "equals", "([I[I)Z") => {
-            Ok(Some(Value::Int(i32::from(
-                crate::vm::builtin::helpers::native_arrays_equals_int(vm, args[0].as_reference()?, args[1].as_reference()?)?,
-            ))))
-        }
-        ("java/util/Arrays", "equals", "([J[J)Z") => {
-            Ok(Some(Value::Int(i32::from(
-                crate::vm::builtin::helpers::native_arrays_equals_long(vm, args[0].as_reference()?, args[1].as_reference()?)?,
-            ))))
-        }
+        ("java/util/Arrays", "equals", "([I[I)Z") => Ok(Some(Value::Int(i32::from(
+            crate::vm::builtin::helpers::native_arrays_equals_int(
+                vm,
+                args[0].as_reference()?,
+                args[1].as_reference()?,
+            )?,
+        )))),
+        ("java/util/Arrays", "equals", "([J[J)Z") => Ok(Some(Value::Int(i32::from(
+            crate::vm::builtin::helpers::native_arrays_equals_long(
+                vm,
+                args[0].as_reference()?,
+                args[1].as_reference()?,
+            )?,
+        )))),
         ("java/util/Arrays", "equals", "([B[B)Z")
         | ("java/util/Arrays", "equals", "([S[S)Z")
         | ("java/util/Arrays", "equals", "([C[C)Z")
-        | ("java/util/Arrays", "equals", "([Z[Z)Z") => {
-            Ok(Some(Value::Int(i32::from(
-                crate::vm::builtin::helpers::native_arrays_equals_int(vm, args[0].as_reference()?, args[1].as_reference()?)?,
-            ))))
-        }
-        ("java/util/Arrays", "equals", "([F[F)Z") => {
-            Ok(Some(Value::Int(i32::from(
-                crate::vm::builtin::helpers::native_arrays_equals_float(vm, args[0].as_reference()?, args[1].as_reference()?)?,
-            ))))
-        }
-        ("java/util/Arrays", "equals", "([D[D)Z") => {
-            Ok(Some(Value::Int(i32::from(
-                crate::vm::builtin::helpers::native_arrays_equals_double(vm, args[0].as_reference()?, args[1].as_reference()?)?,
-            ))))
-        }
+        | ("java/util/Arrays", "equals", "([Z[Z)Z") => Ok(Some(Value::Int(i32::from(
+            crate::vm::builtin::helpers::native_arrays_equals_int(
+                vm,
+                args[0].as_reference()?,
+                args[1].as_reference()?,
+            )?,
+        )))),
+        ("java/util/Arrays", "equals", "([F[F)Z") => Ok(Some(Value::Int(i32::from(
+            crate::vm::builtin::helpers::native_arrays_equals_float(
+                vm,
+                args[0].as_reference()?,
+                args[1].as_reference()?,
+            )?,
+        )))),
+        ("java/util/Arrays", "equals", "([D[D)Z") => Ok(Some(Value::Int(i32::from(
+            crate::vm::builtin::helpers::native_arrays_equals_double(
+                vm,
+                args[0].as_reference()?,
+                args[1].as_reference()?,
+            )?,
+        )))),
         ("java/util/Arrays", "equals", "([Ljava/lang/Object;[Ljava/lang/Object;)Z") => {
             Ok(Some(Value::Int(i32::from(
-                crate::vm::builtin::helpers::native_arrays_equals_ref(vm, args[0].as_reference()?, args[1].as_reference()?)?,
+                crate::vm::builtin::helpers::native_arrays_equals_ref(
+                    vm,
+                    args[0].as_reference()?,
+                    args[1].as_reference()?,
+                )?,
             ))))
         }
         ("java/util/Arrays", "stream", "([I)Ljava/util/stream/IntStream;") => {
@@ -195,7 +215,8 @@ pub(super) fn invoke_util(
             Ok(Some(Value::Reference(r)))
         }
         ("__jvm_rs/NativeLongStream", "sum", "()J") => {
-            let array = crate::vm::builtin::helpers::native_long_stream_array(vm, args[0].as_reference()?)?;
+            let array =
+                crate::vm::builtin::helpers::native_long_stream_array(vm, args[0].as_reference()?)?;
             let mut heap = vm.heap.lock().unwrap();
             if let HeapValue::LongArray { values } = heap.get(array)? {
                 Ok(Some(Value::Long(values.iter().sum())))
@@ -204,7 +225,8 @@ pub(super) fn invoke_util(
             }
         }
         ("__jvm_rs/NativeLongStream", "count", "()J") => {
-            let array = crate::vm::builtin::helpers::native_long_stream_array(vm, args[0].as_reference()?)?;
+            let array =
+                crate::vm::builtin::helpers::native_long_stream_array(vm, args[0].as_reference()?)?;
             let mut heap = vm.heap.lock().unwrap();
             if let HeapValue::LongArray { values } = heap.get(array)? {
                 Ok(Some(Value::Long(values.len() as i64)))
@@ -213,11 +235,15 @@ pub(super) fn invoke_util(
             }
         }
         ("__jvm_rs/NativeLongStream", "toArray", "()[J") => {
-            let array = crate::vm::builtin::helpers::native_long_stream_array(vm, args[0].as_reference()?)?;
+            let array =
+                crate::vm::builtin::helpers::native_long_stream_array(vm, args[0].as_reference()?)?;
             Ok(Some(Value::Reference(array)))
         }
         ("__jvm_rs/NativeDoubleStream", "sum", "()D") => {
-            let array = crate::vm::builtin::helpers::native_double_stream_array(vm, args[0].as_reference()?)?;
+            let array = crate::vm::builtin::helpers::native_double_stream_array(
+                vm,
+                args[0].as_reference()?,
+            )?;
             let mut heap = vm.heap.lock().unwrap();
             if let HeapValue::DoubleArray { values } = heap.get(array)? {
                 Ok(Some(Value::Double(values.iter().sum::<f64>())))
@@ -226,7 +252,10 @@ pub(super) fn invoke_util(
             }
         }
         ("__jvm_rs/NativeDoubleStream", "count", "()J") => {
-            let array = crate::vm::builtin::helpers::native_double_stream_array(vm, args[0].as_reference()?)?;
+            let array = crate::vm::builtin::helpers::native_double_stream_array(
+                vm,
+                args[0].as_reference()?,
+            )?;
             let mut heap = vm.heap.lock().unwrap();
             if let HeapValue::DoubleArray { values } = heap.get(array)? {
                 Ok(Some(Value::Long(values.len() as i64)))
@@ -235,7 +264,10 @@ pub(super) fn invoke_util(
             }
         }
         ("__jvm_rs/NativeDoubleStream", "average", "()D") => {
-            let array = crate::vm::builtin::helpers::native_double_stream_array(vm, args[0].as_reference()?)?;
+            let array = crate::vm::builtin::helpers::native_double_stream_array(
+                vm,
+                args[0].as_reference()?,
+            )?;
             let mut heap = vm.heap.lock().unwrap();
             if let HeapValue::DoubleArray { values } = heap.get(array)? {
                 if values.is_empty() {
@@ -250,18 +282,27 @@ pub(super) fn invoke_util(
             }
         }
         ("__jvm_rs/NativeDoubleStream", "toArray", "()[D") => {
-            let array = crate::vm::builtin::helpers::native_double_stream_array(vm, args[0].as_reference()?)?;
+            let array = crate::vm::builtin::helpers::native_double_stream_array(
+                vm,
+                args[0].as_reference()?,
+            )?;
             Ok(Some(Value::Reference(array)))
         }
-        ("__jvm_rs/NativeIntStream", "collect", "(Ljava/util/stream/Collector;)Ljava/lang/Object;") => {
-            vm.native_int_stream_collect(args[0].as_reference()?, args[1].as_reference()?)
-        }
-        ("__jvm_rs/NativeLongStream", "collect", "(Ljava/util/stream/Collector;)Ljava/lang/Object;") => {
-            vm.native_long_stream_collect(args[0].as_reference()?, args[1].as_reference()?)
-        }
-        ("__jvm_rs/NativeDoubleStream", "collect", "(Ljava/util/stream/Collector;)Ljava/lang/Object;") => {
-            vm.native_double_stream_collect(args[0].as_reference()?, args[1].as_reference()?)
-        }
+        (
+            "__jvm_rs/NativeIntStream",
+            "collect",
+            "(Ljava/util/stream/Collector;)Ljava/lang/Object;",
+        ) => vm.native_int_stream_collect(args[0].as_reference()?, args[1].as_reference()?),
+        (
+            "__jvm_rs/NativeLongStream",
+            "collect",
+            "(Ljava/util/stream/Collector;)Ljava/lang/Object;",
+        ) => vm.native_long_stream_collect(args[0].as_reference()?, args[1].as_reference()?),
+        (
+            "__jvm_rs/NativeDoubleStream",
+            "collect",
+            "(Ljava/util/stream/Collector;)Ljava/lang/Object;",
+        ) => vm.native_double_stream_collect(args[0].as_reference()?, args[1].as_reference()?),
         ("java/util/stream/Collectors", "toList", "()Ljava/util/stream/Collector;") => {
             vm.native_collectors_to_list()
         }
@@ -274,26 +315,36 @@ pub(super) fn invoke_util(
         ("java/util/stream/Collectors", "joining", "()Ljava/util/stream/Collector;") => {
             vm.native_collectors_joining(None)
         }
-        ("java/util/stream/Collectors", "joining", "(Ljava/lang/CharSequence;)Ljava/util/stream/Collector;") => {
-            vm.native_collectors_joining(Some(args[0].as_reference()?))
-        }
-        ("java/util/stream/Collectors", "reducing", "(Ljava/lang/Object;Ljava/util/function/BinaryOperator;)Ljava/util/stream/Collector;") => {
-            vm.native_collectors_reducing(args[0].as_reference()?, args[1].as_reference()?)
-        }
-        ("java/util/stream/Collectors", "toMap", "(Ljava/util/function/Function;Ljava/util/function/Function;)Ljava/util/stream/Collector;") => {
-            vm.native_collectors_to_map(args[0].as_reference()?, args[1].as_reference()?)
-        }
+        (
+            "java/util/stream/Collectors",
+            "joining",
+            "(Ljava/lang/CharSequence;)Ljava/util/stream/Collector;",
+        ) => vm.native_collectors_joining(Some(args[0].as_reference()?)),
+        (
+            "java/util/stream/Collectors",
+            "reducing",
+            "(Ljava/lang/Object;Ljava/util/function/BinaryOperator;)Ljava/util/stream/Collector;",
+        ) => vm.native_collectors_reducing(args[0].as_reference()?, args[1].as_reference()?),
+        (
+            "java/util/stream/Collectors",
+            "toMap",
+            "(Ljava/util/function/Function;Ljava/util/function/Function;)Ljava/util/stream/Collector;",
+        ) => vm.native_collectors_to_map(args[0].as_reference()?, args[1].as_reference()?),
         ("__jvm_rs/NativeIntStream", "sum", "()I") => {
-            let array = crate::vm::builtin::helpers::native_int_stream_array(vm, args[0].as_reference()?)?;
+            let array =
+                crate::vm::builtin::helpers::native_int_stream_array(vm, args[0].as_reference()?)?;
             let mut heap = vm.heap.lock().unwrap();
             if let HeapValue::IntArray { values } = heap.get(array)? {
-                Ok(Some(Value::Int(values.iter().map(|v| *v as i64).sum::<i64>() as i32)))
+                Ok(Some(Value::Int(
+                    values.iter().map(|v| *v as i64).sum::<i64>() as i32,
+                )))
             } else {
                 Ok(Some(Value::Int(0)))
             }
         }
         ("__jvm_rs/NativeIntStream", "count", "()J") => {
-            let array = crate::vm::builtin::helpers::native_int_stream_array(vm, args[0].as_reference()?)?;
+            let array =
+                crate::vm::builtin::helpers::native_int_stream_array(vm, args[0].as_reference()?)?;
             let mut heap = vm.heap.lock().unwrap();
             if let HeapValue::IntArray { values } = heap.get(array)? {
                 Ok(Some(Value::Long(values.len() as i64)))
@@ -302,7 +353,8 @@ pub(super) fn invoke_util(
             }
         }
         ("__jvm_rs/NativeIntStream", "min", "()Ljava/util/OptionalInt;") => {
-            let array = crate::vm::builtin::helpers::native_int_stream_array(vm, args[0].as_reference()?)?;
+            let array =
+                crate::vm::builtin::helpers::native_int_stream_array(vm, args[0].as_reference()?)?;
             let mut heap = vm.heap.lock().unwrap();
             if let HeapValue::IntArray { values } = heap.get(array)? {
                 let min_val = values.iter().min().copied();
@@ -323,7 +375,8 @@ pub(super) fn invoke_util(
             }
         }
         ("__jvm_rs/NativeIntStream", "max", "()Ljava/util/OptionalInt;") => {
-            let array = crate::vm::builtin::helpers::native_int_stream_array(vm, args[0].as_reference()?)?;
+            let array =
+                crate::vm::builtin::helpers::native_int_stream_array(vm, args[0].as_reference()?)?;
             let mut heap = vm.heap.lock().unwrap();
             if let HeapValue::IntArray { values } = heap.get(array)? {
                 let max_val = values.iter().max().copied();
@@ -344,7 +397,8 @@ pub(super) fn invoke_util(
             }
         }
         ("__jvm_rs/NativeIntStream", "average", "()Ljava/util/OptionalDouble;") => {
-            let array = crate::vm::builtin::helpers::native_int_stream_array(vm, args[0].as_reference()?)?;
+            let array =
+                crate::vm::builtin::helpers::native_int_stream_array(vm, args[0].as_reference()?)?;
             let mut heap = vm.heap.lock().unwrap();
             if let HeapValue::IntArray { values } = heap.get(array)? {
                 if values.is_empty() {
@@ -364,11 +418,13 @@ pub(super) fn invoke_util(
             }
         }
         ("__jvm_rs/NativeIntStream", "toArray", "()[I") => {
-            let array = crate::vm::builtin::helpers::native_int_stream_array(vm, args[0].as_reference()?)?;
+            let array =
+                crate::vm::builtin::helpers::native_int_stream_array(vm, args[0].as_reference()?)?;
             Ok(Some(Value::Reference(array)))
         }
         ("__jvm_rs/NativeLongStream", "min", "()Ljava/util/OptionalLong;") => {
-            let array = crate::vm::builtin::helpers::native_long_stream_array(vm, args[0].as_reference()?)?;
+            let array =
+                crate::vm::builtin::helpers::native_long_stream_array(vm, args[0].as_reference()?)?;
             let mut heap = vm.heap.lock().unwrap();
             if let HeapValue::LongArray { values } = heap.get(array)? {
                 let min_val = values.iter().min().copied();
@@ -389,7 +445,8 @@ pub(super) fn invoke_util(
             }
         }
         ("__jvm_rs/NativeLongStream", "max", "()Ljava/util/OptionalLong;") => {
-            let array = crate::vm::builtin::helpers::native_long_stream_array(vm, args[0].as_reference()?)?;
+            let array =
+                crate::vm::builtin::helpers::native_long_stream_array(vm, args[0].as_reference()?)?;
             let mut heap = vm.heap.lock().unwrap();
             if let HeapValue::LongArray { values } = heap.get(array)? {
                 let max_val = values.iter().max().copied();
@@ -410,7 +467,8 @@ pub(super) fn invoke_util(
             }
         }
         ("__jvm_rs/NativeLongStream", "average", "()Ljava/util/OptionalDouble;") => {
-            let array = crate::vm::builtin::helpers::native_long_stream_array(vm, args[0].as_reference()?)?;
+            let array =
+                crate::vm::builtin::helpers::native_long_stream_array(vm, args[0].as_reference()?)?;
             let mut heap = vm.heap.lock().unwrap();
             if let HeapValue::LongArray { values } = heap.get(array)? {
                 if values.is_empty() {
@@ -430,10 +488,17 @@ pub(super) fn invoke_util(
             }
         }
         ("__jvm_rs/NativeDoubleStream", "min", "()Ljava/util/OptionalDouble;") => {
-            let array = crate::vm::builtin::helpers::native_double_stream_array(vm, args[0].as_reference()?)?;
+            let array = crate::vm::builtin::helpers::native_double_stream_array(
+                vm,
+                args[0].as_reference()?,
+            )?;
             let mut heap = vm.heap.lock().unwrap();
             if let HeapValue::DoubleArray { values } = heap.get(array)? {
-                let min_val = values.iter().cloned().filter(|v| !v.is_nan()).min_by(|a, b| a.partial_cmp(b).unwrap());
+                let min_val = values
+                    .iter()
+                    .cloned()
+                    .filter(|v| !v.is_nan())
+                    .min_by(|a, b| a.partial_cmp(b).unwrap());
                 match min_val {
                     Some(v) => {
                         let mut fields = HashMap::new();
@@ -451,10 +516,17 @@ pub(super) fn invoke_util(
             }
         }
         ("__jvm_rs/NativeDoubleStream", "max", "()Ljava/util/OptionalDouble;") => {
-            let array = crate::vm::builtin::helpers::native_double_stream_array(vm, args[0].as_reference()?)?;
+            let array = crate::vm::builtin::helpers::native_double_stream_array(
+                vm,
+                args[0].as_reference()?,
+            )?;
             let mut heap = vm.heap.lock().unwrap();
             if let HeapValue::DoubleArray { values } = heap.get(array)? {
-                let max_val = values.iter().cloned().filter(|v| !v.is_nan()).max_by(|a, b| a.partial_cmp(b).unwrap());
+                let max_val = values
+                    .iter()
+                    .cloned()
+                    .filter(|v| !v.is_nan())
+                    .max_by(|a, b| a.partial_cmp(b).unwrap());
                 match max_val {
                     Some(v) => {
                         let mut fields = HashMap::new();
@@ -472,13 +544,21 @@ pub(super) fn invoke_util(
             }
         }
         ("java/util/Collections", "sort", "(Ljava/util/List;)V") => {
-            crate::vm::builtin::helpers::native_collections_sort(vm, args[0].as_reference()?, None)?;
+            crate::vm::builtin::helpers::native_collections_sort(
+                vm,
+                args[0].as_reference()?,
+                None,
+            )?;
             Ok(None)
         }
         ("java/util/Collections", "sort", "(Ljava/util/List;Ljava/util/Comparator;)V") => {
             let list = args[0].as_reference()?;
             let cmp = args[1].as_reference()?;
-            let cmp_opt = if cmp == Reference::Null { None } else { Some(cmp) };
+            let cmp_opt = if cmp == Reference::Null {
+                None
+            } else {
+                Some(cmp)
+            };
             crate::vm::builtin::helpers::native_collections_sort(vm, list, cmp_opt)?;
             Ok(None)
         }
@@ -496,17 +576,14 @@ pub(super) fn invoke_util(
             });
             Ok(Some(Value::Reference(r)))
         }
-        ("java/util/Optional", "isPresent", "()Z")
-        | ("java/util/Optional", "isEmpty", "()Z") => {
+        ("java/util/Optional", "isPresent", "()Z") | ("java/util/Optional", "isEmpty", "()Z") => {
             let opt_ref = args[0].as_reference()?;
             let is_empty = match vm.heap.lock().unwrap().get(opt_ref)? {
-                HeapValue::Object { fields, .. } => {
-                    match fields.get("value") {
-                        Some(Value::Reference(Reference::Null)) => true,
-                        None => true,
-                        _ => false,
-                    }
-                }
+                HeapValue::Object { fields, .. } => match fields.get("value") {
+                    Some(Value::Reference(Reference::Null)) => true,
+                    None => true,
+                    _ => false,
+                },
                 _ => true,
             };
             let result = match descriptor {
@@ -519,16 +596,14 @@ pub(super) fn invoke_util(
         ("java/util/Optional", "get", "()Ljava/lang/Object;") => {
             let opt_ref = args[0].as_reference()?;
             match vm.heap.lock().unwrap().get(opt_ref)? {
-                HeapValue::Object { fields, .. } => {
-                    match fields.get("value") {
-                        Some(Value::Reference(r)) if *r != Reference::Null => {
-                            Ok(Some(Value::Reference(*r)))
-                        }
-                        _ => Err(VmError::UnhandledException {
-                            class_name: "java/util/NoSuchElementException".to_string(),
-                        }),
+                HeapValue::Object { fields, .. } => match fields.get("value") {
+                    Some(Value::Reference(r)) if *r != Reference::Null => {
+                        Ok(Some(Value::Reference(*r)))
                     }
-                }
+                    _ => Err(VmError::UnhandledException {
+                        class_name: "java/util/NoSuchElementException".to_string(),
+                    }),
+                },
                 _ => Err(VmError::UnhandledException {
                     class_name: "java/util/NoSuchElementException".to_string(),
                 }),
@@ -538,12 +613,10 @@ pub(super) fn invoke_util(
             let opt_ref = args[0].as_reference()?;
             let fallback = args[1].as_reference()?;
             let value = match vm.heap.lock().unwrap().get(opt_ref)? {
-                HeapValue::Object { fields, .. } => {
-                    match fields.get("value") {
-                        Some(Value::Reference(r)) if *r != Reference::Null => *r,
-                        _ => fallback,
-                    }
-                }
+                HeapValue::Object { fields, .. } => match fields.get("value") {
+                    Some(Value::Reference(r)) if *r != Reference::Null => *r,
+                    _ => fallback,
+                },
                 _ => fallback,
             };
             Ok(Some(Value::Reference(value)))
@@ -554,12 +627,10 @@ pub(super) fn invoke_util(
                 return Ok(Some(Value::Int(0)));
             }
             match vm.heap.lock().unwrap().get(opt_ref)? {
-                HeapValue::Object { fields, .. } => {
-                    match fields.get("value") {
-                        Some(Value::Int(_)) => Ok(Some(Value::Int(1))),
-                        _ => Ok(Some(Value::Int(0))),
-                    }
-                }
+                HeapValue::Object { fields, .. } => match fields.get("value") {
+                    Some(Value::Int(_)) => Ok(Some(Value::Int(1))),
+                    _ => Ok(Some(Value::Int(0))),
+                },
                 _ => Ok(Some(Value::Int(0))),
             }
         }
@@ -571,14 +642,12 @@ pub(super) fn invoke_util(
                 });
             }
             match vm.heap.lock().unwrap().get(opt_ref)? {
-                HeapValue::Object { fields, .. } => {
-                    match fields.get("value") {
-                        Some(Value::Int(v)) => Ok(Some(Value::Int(*v))),
-                        _ => Err(VmError::UnhandledException {
-                            class_name: "java/util/NoSuchElementException".to_string(),
-                        }),
-                    }
-                }
+                HeapValue::Object { fields, .. } => match fields.get("value") {
+                    Some(Value::Int(v)) => Ok(Some(Value::Int(*v))),
+                    _ => Err(VmError::UnhandledException {
+                        class_name: "java/util/NoSuchElementException".to_string(),
+                    }),
+                },
                 _ => Err(VmError::UnhandledException {
                     class_name: "java/util/NoSuchElementException".to_string(),
                 }),
@@ -591,12 +660,10 @@ pub(super) fn invoke_util(
                 return Ok(Some(Value::Int(fallback)));
             }
             match vm.heap.lock().unwrap().get(opt_ref)? {
-                HeapValue::Object { fields, .. } => {
-                    match fields.get("value") {
-                        Some(Value::Int(v)) => Ok(Some(Value::Int(*v))),
-                        _ => Ok(Some(Value::Int(fallback))),
-                    }
-                }
+                HeapValue::Object { fields, .. } => match fields.get("value") {
+                    Some(Value::Int(v)) => Ok(Some(Value::Int(*v))),
+                    _ => Ok(Some(Value::Int(fallback))),
+                },
                 _ => Ok(Some(Value::Int(fallback))),
             }
         }
@@ -606,12 +673,10 @@ pub(super) fn invoke_util(
                 return Ok(Some(Value::Int(0)));
             }
             match vm.heap.lock().unwrap().get(opt_ref)? {
-                HeapValue::Object { fields, .. } => {
-                    match fields.get("value") {
-                        Some(Value::Long(_)) => Ok(Some(Value::Int(1))),
-                        _ => Ok(Some(Value::Int(0))),
-                    }
-                }
+                HeapValue::Object { fields, .. } => match fields.get("value") {
+                    Some(Value::Long(_)) => Ok(Some(Value::Int(1))),
+                    _ => Ok(Some(Value::Int(0))),
+                },
                 _ => Ok(Some(Value::Int(0))),
             }
         }
@@ -623,14 +688,12 @@ pub(super) fn invoke_util(
                 });
             }
             match vm.heap.lock().unwrap().get(opt_ref)? {
-                HeapValue::Object { fields, .. } => {
-                    match fields.get("value") {
-                        Some(Value::Long(v)) => Ok(Some(Value::Long(*v))),
-                        _ => Err(VmError::UnhandledException {
-                            class_name: "java/util/NoSuchElementException".to_string(),
-                        }),
-                    }
-                }
+                HeapValue::Object { fields, .. } => match fields.get("value") {
+                    Some(Value::Long(v)) => Ok(Some(Value::Long(*v))),
+                    _ => Err(VmError::UnhandledException {
+                        class_name: "java/util/NoSuchElementException".to_string(),
+                    }),
+                },
                 _ => Err(VmError::UnhandledException {
                     class_name: "java/util/NoSuchElementException".to_string(),
                 }),
@@ -643,12 +706,10 @@ pub(super) fn invoke_util(
                 return Ok(Some(Value::Long(fallback)));
             }
             match vm.heap.lock().unwrap().get(opt_ref)? {
-                HeapValue::Object { fields, .. } => {
-                    match fields.get("value") {
-                        Some(Value::Long(v)) => Ok(Some(Value::Long(*v))),
-                        _ => Ok(Some(Value::Long(fallback))),
-                    }
-                }
+                HeapValue::Object { fields, .. } => match fields.get("value") {
+                    Some(Value::Long(v)) => Ok(Some(Value::Long(*v))),
+                    _ => Ok(Some(Value::Long(fallback))),
+                },
                 _ => Ok(Some(Value::Long(fallback))),
             }
         }
@@ -658,12 +719,10 @@ pub(super) fn invoke_util(
                 return Ok(Some(Value::Int(0)));
             }
             match vm.heap.lock().unwrap().get(opt_ref)? {
-                HeapValue::Object { fields, .. } => {
-                    match fields.get("value") {
-                        Some(Value::Double(_)) => Ok(Some(Value::Int(1))),
-                        _ => Ok(Some(Value::Int(0))),
-                    }
-                }
+                HeapValue::Object { fields, .. } => match fields.get("value") {
+                    Some(Value::Double(_)) => Ok(Some(Value::Int(1))),
+                    _ => Ok(Some(Value::Int(0))),
+                },
                 _ => Ok(Some(Value::Int(0))),
             }
         }
@@ -675,14 +734,12 @@ pub(super) fn invoke_util(
                 });
             }
             match vm.heap.lock().unwrap().get(opt_ref)? {
-                HeapValue::Object { fields, .. } => {
-                    match fields.get("value") {
-                        Some(Value::Double(v)) => Ok(Some(Value::Double(*v))),
-                        _ => Err(VmError::UnhandledException {
-                            class_name: "java/util/NoSuchElementException".to_string(),
-                        }),
-                    }
-                }
+                HeapValue::Object { fields, .. } => match fields.get("value") {
+                    Some(Value::Double(v)) => Ok(Some(Value::Double(*v))),
+                    _ => Err(VmError::UnhandledException {
+                        class_name: "java/util/NoSuchElementException".to_string(),
+                    }),
+                },
                 _ => Err(VmError::UnhandledException {
                     class_name: "java/util/NoSuchElementException".to_string(),
                 }),
@@ -695,12 +752,10 @@ pub(super) fn invoke_util(
                 return Ok(Some(Value::Double(fallback)));
             }
             match vm.heap.lock().unwrap().get(opt_ref)? {
-                HeapValue::Object { fields, .. } => {
-                    match fields.get("value") {
-                        Some(Value::Double(v)) => Ok(Some(Value::Double(*v))),
-                        _ => Ok(Some(Value::Double(fallback))),
-                    }
-                }
+                HeapValue::Object { fields, .. } => match fields.get("value") {
+                    Some(Value::Double(v)) => Ok(Some(Value::Double(*v))),
+                    _ => Ok(Some(Value::Double(fallback))),
+                },
                 _ => Ok(Some(Value::Double(fallback))),
             }
         }
@@ -708,8 +763,12 @@ pub(super) fn invoke_util(
         ("java/util/Scanner", "<init>", "(Ljava/io/InputStream;)V") => Ok(None),
         ("java/util/Scanner", "<init>", "(Ljava/lang/String;)V") => Ok(None),
         ("java/util/Scanner", "hasNext", "()Z") => Ok(Some(Value::Int(0))),
-        ("java/util/Scanner", "next", "()Ljava/lang/String;") => Ok(Some(Value::Reference(Reference::Null))),
-        ("java/util/Scanner", "nextLine", "()Ljava/lang/String;") => Ok(Some(Value::Reference(Reference::Null))),
+        ("java/util/Scanner", "next", "()Ljava/lang/String;") => {
+            Ok(Some(Value::Reference(Reference::Null)))
+        }
+        ("java/util/Scanner", "nextLine", "()Ljava/lang/String;") => {
+            Ok(Some(Value::Reference(Reference::Null)))
+        }
         ("java/util/Scanner", "hasNextInt", "()Z") => Ok(Some(Value::Int(0))),
         ("java/util/Scanner", "nextInt", "()I") => Ok(Some(Value::Int(0))),
         ("java/util/Scanner", "hasNextLong", "()Z") => Ok(Some(Value::Int(0))),

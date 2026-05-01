@@ -13,7 +13,10 @@ pub(super) fn invoke_time(
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap();
             let mut fields = std::collections::HashMap::new();
-            fields.insert("__epoch_second".to_string(), Value::Long(now.as_secs() as i64));
+            fields.insert(
+                "__epoch_second".to_string(),
+                Value::Long(now.as_secs() as i64),
+            );
             fields.insert("__nano".to_string(), Value::Int(now.subsec_nanos() as i32));
             let heap = &mut vm.heap.lock().unwrap();
             let obj_ref = heap.allocate(HeapValue::Object {
@@ -38,8 +41,14 @@ pub(super) fn invoke_time(
             let epoch_second = args[0].as_long()?;
             let nano_adj = args[1].as_long()?;
             let mut fields = std::collections::HashMap::new();
-            fields.insert("__epoch_second".to_string(), Value::Long(epoch_second + nano_adj / 1_000_000_000));
-            fields.insert("__nano".to_string(), Value::Int((nano_adj % 1_000_000_000) as i32));
+            fields.insert(
+                "__epoch_second".to_string(),
+                Value::Long(epoch_second + nano_adj / 1_000_000_000),
+            );
+            fields.insert(
+                "__nano".to_string(),
+                Value::Int((nano_adj % 1_000_000_000) as i32),
+            );
             let heap = &mut vm.heap.lock().unwrap();
             let obj_ref = heap.allocate(HeapValue::Object {
                 class_name: "java/time/Instant".to_string(),
@@ -50,8 +59,14 @@ pub(super) fn invoke_time(
         ("java/time/Instant", "ofEpochMilli", "(J)Ljava/time/Instant;") => {
             let epoch_milli = args[0].as_long()?;
             let mut fields = std::collections::HashMap::new();
-            fields.insert("__epoch_second".to_string(), Value::Long(epoch_milli / 1000));
-            fields.insert("__nano".to_string(), Value::Int(((epoch_milli % 1000) * 1_000_000) as i32));
+            fields.insert(
+                "__epoch_second".to_string(),
+                Value::Long(epoch_milli / 1000),
+            );
+            fields.insert(
+                "__nano".to_string(),
+                Value::Int(((epoch_milli % 1000) * 1_000_000) as i32),
+            );
             let heap = &mut vm.heap.lock().unwrap();
             let obj_ref = heap.allocate(HeapValue::Object {
                 class_name: "java/time/Instant".to_string(),
@@ -68,31 +83,64 @@ pub(super) fn invoke_time(
             get_instant_nano(vm, this_ref)
         }
         ("java/time/Instant", "toEpochMilli", "()J") => {
-            let epoch_second = args[0].as_reference().and_then(|r| get_instant_epoch_second(vm, r))?.unwrap_or(Value::Long(0)).as_long()?;
-            let nano = args[0].as_reference().and_then(|r| get_instant_nano(vm, r))?.unwrap_or(Value::Int(0)).as_int()?;
-            Ok(Some(Value::Long(epoch_second * 1000 + (nano / 1_000_000) as i64)))
+            let epoch_second = args[0]
+                .as_reference()
+                .and_then(|r| get_instant_epoch_second(vm, r))?
+                .unwrap_or(Value::Long(0))
+                .as_long()?;
+            let nano = args[0]
+                .as_reference()
+                .and_then(|r| get_instant_nano(vm, r))?
+                .unwrap_or(Value::Int(0))
+                .as_int()?;
+            Ok(Some(Value::Long(
+                epoch_second * 1000 + (nano / 1_000_000) as i64,
+            )))
         }
         ("java/time/Instant", "isAfter", "(Ljava/time/Instant;)Z") => {
             let other_ref = args[0].as_reference()?;
             let this_ref = args[1].as_reference()?;
-            let this_epoch = get_instant_epoch_second(vm, this_ref)?.unwrap_or(Value::Long(0)).as_long()?;
-            let other_epoch = get_instant_epoch_second(vm, other_ref)?.unwrap_or(Value::Long(0)).as_long()?;
-            Ok(Some(Value::Int(if this_epoch > other_epoch { 1 } else { 0 })))
+            let this_epoch = get_instant_epoch_second(vm, this_ref)?
+                .unwrap_or(Value::Long(0))
+                .as_long()?;
+            let other_epoch = get_instant_epoch_second(vm, other_ref)?
+                .unwrap_or(Value::Long(0))
+                .as_long()?;
+            Ok(Some(Value::Int(if this_epoch > other_epoch {
+                1
+            } else {
+                0
+            })))
         }
         ("java/time/Instant", "isBefore", "(Ljava/time/Instant;)Z") => {
             let other_ref = args[0].as_reference()?;
             let this_ref = args[1].as_reference()?;
-            let this_epoch = get_instant_epoch_second(vm, this_ref)?.unwrap_or(Value::Long(0)).as_long()?;
-            let other_epoch = get_instant_epoch_second(vm, other_ref)?.unwrap_or(Value::Long(0)).as_long()?;
-            Ok(Some(Value::Int(if this_epoch < other_epoch { 1 } else { 0 })))
+            let this_epoch = get_instant_epoch_second(vm, this_ref)?
+                .unwrap_or(Value::Long(0))
+                .as_long()?;
+            let other_epoch = get_instant_epoch_second(vm, other_ref)?
+                .unwrap_or(Value::Long(0))
+                .as_long()?;
+            Ok(Some(Value::Int(if this_epoch < other_epoch {
+                1
+            } else {
+                0
+            })))
         }
         ("java/time/Instant", "plusSeconds", "(J)Ljava/time/Instant;") => {
             let seconds = args[0].as_long()?;
             let this_ref = args[1].as_reference()?;
-            let epoch_second = get_instant_epoch_second(vm, this_ref)?.unwrap_or(Value::Long(0)).as_long()?;
-            let nano = get_instant_nano(vm, this_ref)?.unwrap_or(Value::Int(0)).as_int()?;
+            let epoch_second = get_instant_epoch_second(vm, this_ref)?
+                .unwrap_or(Value::Long(0))
+                .as_long()?;
+            let nano = get_instant_nano(vm, this_ref)?
+                .unwrap_or(Value::Int(0))
+                .as_int()?;
             let mut fields = std::collections::HashMap::new();
-            fields.insert("__epoch_second".to_string(), Value::Long(epoch_second + seconds));
+            fields.insert(
+                "__epoch_second".to_string(),
+                Value::Long(epoch_second + seconds),
+            );
             fields.insert("__nano".to_string(), Value::Int(nano));
             let heap = &mut vm.heap.lock().unwrap();
             let obj_ref = heap.allocate(HeapValue::Object {
@@ -104,12 +152,22 @@ pub(super) fn invoke_time(
         ("java/time/Instant", "plusMillis", "(J)Ljava/time/Instant;") => {
             let millis = args[0].as_long()?;
             let this_ref = args[1].as_reference()?;
-            let epoch_second = get_instant_epoch_second(vm, this_ref)?.unwrap_or(Value::Long(0)).as_long()?;
-            let nano = get_instant_nano(vm, this_ref)?.unwrap_or(Value::Int(0)).as_int()?;
+            let epoch_second = get_instant_epoch_second(vm, this_ref)?
+                .unwrap_or(Value::Long(0))
+                .as_long()?;
+            let nano = get_instant_nano(vm, this_ref)?
+                .unwrap_or(Value::Int(0))
+                .as_int()?;
             let total_millis = epoch_second * 1000 + millis + (nano / 1_000_000) as i64;
             let mut fields = std::collections::HashMap::new();
-            fields.insert("__epoch_second".to_string(), Value::Long(total_millis / 1000));
-            fields.insert("__nano".to_string(), Value::Int(((total_millis % 1000) * 1_000_000) as i32));
+            fields.insert(
+                "__epoch_second".to_string(),
+                Value::Long(total_millis / 1000),
+            );
+            fields.insert(
+                "__nano".to_string(),
+                Value::Int(((total_millis % 1000) * 1_000_000) as i32),
+            );
             let heap = &mut vm.heap.lock().unwrap();
             let obj_ref = heap.allocate(HeapValue::Object {
                 class_name: "java/time/Instant".to_string(),
@@ -120,12 +178,22 @@ pub(super) fn invoke_time(
         ("java/time/Instant", "plusNanos", "(J)Ljava/time/Instant;") => {
             let nanos = args[0].as_long()?;
             let this_ref = args[1].as_reference()?;
-            let epoch_second = get_instant_epoch_second(vm, this_ref)?.unwrap_or(Value::Long(0)).as_long()?;
-            let nano = get_instant_nano(vm, this_ref)?.unwrap_or(Value::Int(0)).as_int()?;
+            let epoch_second = get_instant_epoch_second(vm, this_ref)?
+                .unwrap_or(Value::Long(0))
+                .as_long()?;
+            let nano = get_instant_nano(vm, this_ref)?
+                .unwrap_or(Value::Int(0))
+                .as_int()?;
             let total_nanos = (epoch_second * 1_000_000_000 + nanos as i64) + nano as i64;
             let mut fields = std::collections::HashMap::new();
-            fields.insert("__epoch_second".to_string(), Value::Long(total_nanos / 1_000_000_000));
-            fields.insert("__nano".to_string(), Value::Int((total_nanos % 1_000_000_000) as i32));
+            fields.insert(
+                "__epoch_second".to_string(),
+                Value::Long(total_nanos / 1_000_000_000),
+            );
+            fields.insert(
+                "__nano".to_string(),
+                Value::Int((total_nanos % 1_000_000_000) as i32),
+            );
             let heap = &mut vm.heap.lock().unwrap();
             let obj_ref = heap.allocate(HeapValue::Object {
                 class_name: "java/time/Instant".to_string(),
@@ -136,10 +204,17 @@ pub(super) fn invoke_time(
         ("java/time/Instant", "minusSeconds", "(J)Ljava/time/Instant;") => {
             let seconds = args[0].as_long()?;
             let this_ref = args[1].as_reference()?;
-            let epoch_second = get_instant_epoch_second(vm, this_ref)?.unwrap_or(Value::Long(0)).as_long()?;
-            let nano = get_instant_nano(vm, this_ref)?.unwrap_or(Value::Int(0)).as_int()?;
+            let epoch_second = get_instant_epoch_second(vm, this_ref)?
+                .unwrap_or(Value::Long(0))
+                .as_long()?;
+            let nano = get_instant_nano(vm, this_ref)?
+                .unwrap_or(Value::Int(0))
+                .as_int()?;
             let mut fields = std::collections::HashMap::new();
-            fields.insert("__epoch_second".to_string(), Value::Long(epoch_second - seconds));
+            fields.insert(
+                "__epoch_second".to_string(),
+                Value::Long(epoch_second - seconds),
+            );
             fields.insert("__nano".to_string(), Value::Int(nano));
             let heap = &mut vm.heap.lock().unwrap();
             let obj_ref = heap.allocate(HeapValue::Object {
@@ -151,12 +226,22 @@ pub(super) fn invoke_time(
         ("java/time/Instant", "minusMillis", "(J)Ljava/time/Instant;") => {
             let millis = args[0].as_long()?;
             let this_ref = args[1].as_reference()?;
-            let epoch_second = get_instant_epoch_second(vm, this_ref)?.unwrap_or(Value::Long(0)).as_long()?;
-            let nano = get_instant_nano(vm, this_ref)?.unwrap_or(Value::Int(0)).as_int()?;
+            let epoch_second = get_instant_epoch_second(vm, this_ref)?
+                .unwrap_or(Value::Long(0))
+                .as_long()?;
+            let nano = get_instant_nano(vm, this_ref)?
+                .unwrap_or(Value::Int(0))
+                .as_int()?;
             let total_millis = epoch_second * 1000 - millis + (nano / 1_000_000) as i64;
             let mut fields = std::collections::HashMap::new();
-            fields.insert("__epoch_second".to_string(), Value::Long(total_millis / 1000));
-            fields.insert("__nano".to_string(), Value::Int(((total_millis % 1000) * 1_000_000) as i32));
+            fields.insert(
+                "__epoch_second".to_string(),
+                Value::Long(total_millis / 1000),
+            );
+            fields.insert(
+                "__nano".to_string(),
+                Value::Int(((total_millis % 1000) * 1_000_000) as i32),
+            );
             let heap = &mut vm.heap.lock().unwrap();
             let obj_ref = heap.allocate(HeapValue::Object {
                 class_name: "java/time/Instant".to_string(),
@@ -167,10 +252,18 @@ pub(super) fn invoke_time(
         ("java/time/Instant", "compareTo", "(Ljava/time/Instant;)I") => {
             let other_ref = args[0].as_reference()?;
             let this_ref = args[1].as_reference()?;
-            let this_epoch = get_instant_epoch_second(vm, this_ref)?.unwrap_or(Value::Long(0)).as_long()?;
-            let this_nano = get_instant_nano(vm, this_ref)?.unwrap_or(Value::Int(0)).as_int()?;
-            let other_epoch = get_instant_epoch_second(vm, other_ref)?.unwrap_or(Value::Long(0)).as_long()?;
-            let other_nano = get_instant_nano(vm, other_ref)?.unwrap_or(Value::Int(0)).as_int()?;
+            let this_epoch = get_instant_epoch_second(vm, this_ref)?
+                .unwrap_or(Value::Long(0))
+                .as_long()?;
+            let this_nano = get_instant_nano(vm, this_ref)?
+                .unwrap_or(Value::Int(0))
+                .as_int()?;
+            let other_epoch = get_instant_epoch_second(vm, other_ref)?
+                .unwrap_or(Value::Long(0))
+                .as_long()?;
+            let other_nano = get_instant_nano(vm, other_ref)?
+                .unwrap_or(Value::Int(0))
+                .as_int()?;
             let cmp = if this_epoch != other_epoch {
                 (this_epoch - other_epoch).cmp(&0)
             } else {
@@ -188,22 +281,46 @@ pub(super) fn invoke_time(
             if other_ref == Reference::Null {
                 return Ok(Some(Value::Int(0)));
             }
-            let this_epoch = get_instant_epoch_second(vm, this_ref)?.unwrap_or(Value::Long(0)).as_long()?;
-            let this_nano = get_instant_nano(vm, this_ref)?.unwrap_or(Value::Int(0)).as_int()?;
-            let other_epoch = get_instant_epoch_second(vm, other_ref)?.unwrap_or(Value::Long(0)).as_long()?;
-            let other_nano = get_instant_nano(vm, other_ref)?.unwrap_or(Value::Int(0)).as_int()?;
-            Ok(Some(Value::Int(if this_epoch == other_epoch && this_nano == other_nano { 1 } else { 0 })))
+            let this_epoch = get_instant_epoch_second(vm, this_ref)?
+                .unwrap_or(Value::Long(0))
+                .as_long()?;
+            let this_nano = get_instant_nano(vm, this_ref)?
+                .unwrap_or(Value::Int(0))
+                .as_int()?;
+            let other_epoch = get_instant_epoch_second(vm, other_ref)?
+                .unwrap_or(Value::Long(0))
+                .as_long()?;
+            let other_nano = get_instant_nano(vm, other_ref)?
+                .unwrap_or(Value::Int(0))
+                .as_int()?;
+            Ok(Some(Value::Int(
+                if this_epoch == other_epoch && this_nano == other_nano {
+                    1
+                } else {
+                    0
+                },
+            )))
         }
         ("java/time/Instant", "hashCode", "()I") => {
             let this_ref = args[0].as_reference()?;
-            let epoch_second = get_instant_epoch_second(vm, this_ref)?.unwrap_or(Value::Long(0)).as_long()?;
-            let nano = get_instant_nano(vm, this_ref)?.unwrap_or(Value::Int(0)).as_int()?;
-            Ok(Some(Value::Int((epoch_second ^ (epoch_second >> 32)) as i32 ^ nano)))
+            let epoch_second = get_instant_epoch_second(vm, this_ref)?
+                .unwrap_or(Value::Long(0))
+                .as_long()?;
+            let nano = get_instant_nano(vm, this_ref)?
+                .unwrap_or(Value::Int(0))
+                .as_int()?;
+            Ok(Some(Value::Int(
+                (epoch_second ^ (epoch_second >> 32)) as i32 ^ nano,
+            )))
         }
         ("java/time/Instant", "toString", "()Ljava/lang/String;") => {
             let this_ref = args[0].as_reference()?;
-            let epoch_second = get_instant_epoch_second(vm, this_ref)?.unwrap_or(Value::Long(0)).as_long()?;
-            let nano = get_instant_nano(vm, this_ref)?.unwrap_or(Value::Int(0)).as_int()?;
+            let epoch_second = get_instant_epoch_second(vm, this_ref)?
+                .unwrap_or(Value::Long(0))
+                .as_long()?;
+            let nano = get_instant_nano(vm, this_ref)?
+                .unwrap_or(Value::Int(0))
+                .as_int()?;
             Ok(Some(vm.new_string(format!("{}.{:09}", epoch_second, nano))))
         }
         ("java/time/Duration", "ofSeconds", "(J)Ljava/time/Duration;") => {
@@ -222,7 +339,10 @@ pub(super) fn invoke_time(
             let millis = args[0].as_long()?;
             let mut fields = std::collections::HashMap::new();
             fields.insert("__seconds".to_string(), Value::Long(millis / 1000));
-            fields.insert("__nano".to_string(), Value::Int(((millis % 1000) * 1_000_000) as i32));
+            fields.insert(
+                "__nano".to_string(),
+                Value::Int(((millis % 1000) * 1_000_000) as i32),
+            );
             let heap = &mut vm.heap.lock().unwrap();
             let obj_ref = heap.allocate(HeapValue::Object {
                 class_name: "java/time/Duration".to_string(),
@@ -234,7 +354,10 @@ pub(super) fn invoke_time(
             let nanos = args[0].as_long()?;
             let mut fields = std::collections::HashMap::new();
             fields.insert("__seconds".to_string(), Value::Long(nanos / 1_000_000_000));
-            fields.insert("__nano".to_string(), Value::Int((nanos % 1_000_000_000) as i32));
+            fields.insert(
+                "__nano".to_string(),
+                Value::Int((nanos % 1_000_000_000) as i32),
+            );
             let heap = &mut vm.heap.lock().unwrap();
             let obj_ref = heap.allocate(HeapValue::Object {
                 class_name: "java/time/Duration".to_string(),
@@ -266,9 +389,29 @@ pub(super) fn invoke_time(
             let this_ref = args[0].as_reference()?;
             let heap = vm.heap.lock().unwrap();
             if let Ok(HeapValue::Object { fields, .. }) = heap.get(this_ref) {
-                let seconds = fields.get("__seconds").and_then(|v| if let Value::Long(s) = v { Some(*s) } else { None }).unwrap_or(0);
-                let nano = fields.get("__nano").and_then(|v| if let Value::Int(n) = v { Some(*n) } else { None }).unwrap_or(0);
-                return Ok(Some(Value::Long(seconds * 1000 + (nano / 1_000_000) as i64)));
+                let seconds = fields
+                    .get("__seconds")
+                    .and_then(|v| {
+                        if let Value::Long(s) = v {
+                            Some(*s)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(0);
+                let nano = fields
+                    .get("__nano")
+                    .and_then(|v| {
+                        if let Value::Int(n) = v {
+                            Some(*n)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(0);
+                return Ok(Some(Value::Long(
+                    seconds * 1000 + (nano / 1_000_000) as i64,
+                )));
             }
             Ok(Some(Value::Long(0)))
         }
@@ -276,9 +419,29 @@ pub(super) fn invoke_time(
             let this_ref = args[0].as_reference()?;
             let heap = vm.heap.lock().unwrap();
             if let Ok(HeapValue::Object { fields, .. }) = heap.get(this_ref) {
-                let seconds = fields.get("__seconds").and_then(|v| if let Value::Long(s) = v { Some(*s) } else { None }).unwrap_or(0);
-                let nano = fields.get("__nano").and_then(|v| if let Value::Int(n) = v { Some(*n) } else { None }).unwrap_or(0);
-                return Ok(Some(Value::Long(seconds * 1_000_000 + (nano / 1000) as i64)));
+                let seconds = fields
+                    .get("__seconds")
+                    .and_then(|v| {
+                        if let Value::Long(s) = v {
+                            Some(*s)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(0);
+                let nano = fields
+                    .get("__nano")
+                    .and_then(|v| {
+                        if let Value::Int(n) = v {
+                            Some(*n)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(0);
+                return Ok(Some(Value::Long(
+                    seconds * 1_000_000 + (nano / 1000) as i64,
+                )));
             }
             Ok(Some(Value::Long(0)))
         }
@@ -286,7 +449,16 @@ pub(super) fn invoke_time(
             let this_ref = args[0].as_reference()?;
             let heap = vm.heap.lock().unwrap();
             if let Ok(HeapValue::Object { fields, .. }) = heap.get(this_ref) {
-                let seconds = fields.get("__seconds").and_then(|v| if let Value::Long(s) = v { Some(*s) } else { None }).unwrap_or(0);
+                let seconds = fields
+                    .get("__seconds")
+                    .and_then(|v| {
+                        if let Value::Long(s) = v {
+                            Some(*s)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(0);
                 return Ok(Some(Value::Int(if seconds < 0 { 1 } else { 0 })));
             }
             Ok(Some(Value::Int(0)))
@@ -295,9 +467,31 @@ pub(super) fn invoke_time(
             let this_ref = args[0].as_reference()?;
             let heap = vm.heap.lock().unwrap();
             if let Ok(HeapValue::Object { fields, .. }) = heap.get(this_ref) {
-                let seconds = fields.get("__seconds").and_then(|v| if let Value::Long(s) = v { Some(*s) } else { None }).unwrap_or(0);
-                let nano = fields.get("__nano").and_then(|v| if let Value::Int(n) = v { Some(*n) } else { None }).unwrap_or(0);
-                return Ok(Some(Value::Int(if seconds == 0 && nano == 0 { 1 } else { 0 })));
+                let seconds = fields
+                    .get("__seconds")
+                    .and_then(|v| {
+                        if let Value::Long(s) = v {
+                            Some(*s)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(0);
+                let nano = fields
+                    .get("__nano")
+                    .and_then(|v| {
+                        if let Value::Int(n) = v {
+                            Some(*n)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(0);
+                return Ok(Some(Value::Int(if seconds == 0 && nano == 0 {
+                    1
+                } else {
+                    0
+                })));
             }
             Ok(Some(Value::Int(0)))
         }
@@ -306,17 +500,61 @@ pub(super) fn invoke_time(
             let this_ref = args[1].as_reference()?;
             let heap = vm.heap.lock().unwrap();
             let this_seconds = if let Ok(HeapValue::Object { fields, .. }) = heap.get(this_ref) {
-                fields.get("__seconds").and_then(|v| if let Value::Long(s) = v { Some(*s) } else { None }).unwrap_or(0)
-            } else { 0 };
+                fields
+                    .get("__seconds")
+                    .and_then(|v| {
+                        if let Value::Long(s) = v {
+                            Some(*s)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(0)
+            } else {
+                0
+            };
             let this_nano = if let Ok(HeapValue::Object { fields, .. }) = heap.get(this_ref) {
-                fields.get("__nano").and_then(|v| if let Value::Int(n) = v { Some(*n) } else { None }).unwrap_or(0)
-            } else { 0 };
+                fields
+                    .get("__nano")
+                    .and_then(|v| {
+                        if let Value::Int(n) = v {
+                            Some(*n)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(0)
+            } else {
+                0
+            };
             let other_seconds = if let Ok(HeapValue::Object { fields, .. }) = heap.get(other_ref) {
-                fields.get("__seconds").and_then(|v| if let Value::Long(s) = v { Some(*s) } else { None }).unwrap_or(0)
-            } else { 0 };
+                fields
+                    .get("__seconds")
+                    .and_then(|v| {
+                        if let Value::Long(s) = v {
+                            Some(*s)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(0)
+            } else {
+                0
+            };
             let other_nano = if let Ok(HeapValue::Object { fields, .. }) = heap.get(other_ref) {
-                fields.get("__nano").and_then(|v| if let Value::Int(n) = v { Some(*n) } else { None }).unwrap_or(0)
-            } else { 0 };
+                fields
+                    .get("__nano")
+                    .and_then(|v| {
+                        if let Value::Int(n) = v {
+                            Some(*n)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(0)
+            } else {
+                0
+            };
             let cmp = if this_seconds != other_seconds {
                 (this_seconds - other_seconds).cmp(&0)
             } else {
@@ -332,14 +570,36 @@ pub(super) fn invoke_time(
             let this_ref = args[0].as_reference()?;
             let heap = vm.heap.lock().unwrap();
             let (seconds, nano) = if let Ok(HeapValue::Object { fields, .. }) = heap.get(this_ref) {
-                let s = fields.get("__seconds").and_then(|v| if let Value::Long(s) = v { Some(*s) } else { None }).unwrap_or(0);
-                let n = fields.get("__nano").and_then(|v| if let Value::Int(n) = v { Some(*n) } else { None }).unwrap_or(0);
+                let s = fields
+                    .get("__seconds")
+                    .and_then(|v| {
+                        if let Value::Long(s) = v {
+                            Some(*s)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(0);
+                let n = fields
+                    .get("__nano")
+                    .and_then(|v| {
+                        if let Value::Int(n) = v {
+                            Some(*n)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(0);
                 (s, n)
             } else {
                 (0, 0)
             };
             drop(heap);
-            let sign = if seconds < 0 || (seconds == 0 && nano < 0) { "-" } else { "" };
+            let sign = if seconds < 0 || (seconds == 0 && nano < 0) {
+                "-"
+            } else {
+                ""
+            };
             Ok(Some(vm.new_string(format!("{}PT{}S", sign, seconds.abs()))))
         }
         _ => Err(VmError::UnhandledException {

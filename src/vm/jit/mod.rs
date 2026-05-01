@@ -1,14 +1,14 @@
 pub mod compiler;
-pub mod optimizer;
 pub mod emitter;
+pub mod optimizer;
 pub mod runtime;
 
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::RwLock;
 
-use crate::vm::types::Method;
 use crate::vm::Frame;
+use crate::vm::types::Method;
 use cranelift::codegen::isa::TargetIsa;
 use cranelift_native;
 use runtime::JitContext;
@@ -96,9 +96,6 @@ impl JitCompiler {
     }
 
     pub fn should_compile(&self, frame: &Frame, cp_index: Option<usize>) -> bool {
-        if frame.code.len() > 200 {
-            return false;
-        }
         if let Some(index) = cp_index {
             let call_count = frame.call_counts.get(&index).copied().unwrap_or(0);
             call_count >= self.invocation_threshold
@@ -139,9 +136,8 @@ impl JitCompiler {
             return Some(code);
         }
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.compile(method)
-        }));
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.compile(method)));
 
         match result {
             Ok(Ok(code)) => {

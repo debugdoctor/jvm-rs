@@ -18,11 +18,15 @@ pub(super) fn invoke_text(
         }
         ("java/text/NumberFormat", "format", "(F)Ljava/lang/String;") => {
             let val = args[0].as_float()?;
-            Ok(Some(vm.new_string(crate::vm::builtin::format::format_float(val as f64))))
+            Ok(Some(vm.new_string(
+                crate::vm::builtin::format::format_float(val as f64),
+            )))
         }
         ("java/text/NumberFormat", "format", "(D)Ljava/lang/String;") => {
             let val = args[0].as_double()?;
-            Ok(Some(vm.new_string(crate::vm::builtin::format::format_float(val))))
+            Ok(Some(
+                vm.new_string(crate::vm::builtin::format::format_float(val)),
+            ))
         }
         ("java/text/NumberFormat", "format", "(Ljava/lang/Object;)Ljava/lang/String;") => {
             let r = args[0].as_reference()?;
@@ -96,7 +100,11 @@ pub(super) fn invoke_text(
             }
             Ok(None)
         }
-        ("java/text/MessageFormat", "format", "(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;") => {
+        (
+            "java/text/MessageFormat",
+            "format",
+            "(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;",
+        ) => {
             let pattern_ref = args[0].as_reference()?;
             let args_ref = args[1].as_reference()?;
             let pattern = crate::vm::builtin::helpers::stringify_reference(vm, pattern_ref)?;

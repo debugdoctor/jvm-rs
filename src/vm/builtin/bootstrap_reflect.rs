@@ -5,12 +5,24 @@ use crate::vm::{ClassMethod, RuntimeClass, Value, Vm};
 pub(super) fn bootstrap_java_lang_reflect(vm: &mut Vm) {
     let mut class_methods = HashMap::new();
     for (name, desc) in [
-        ("getDeclaredMethod", "(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;"),
+        (
+            "getDeclaredMethod",
+            "(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;",
+        ),
         ("getDeclaredMethods", "()[Ljava/lang/reflect/Method;"),
-        ("getDeclaredField", "(Ljava/lang/String;)Ljava/lang/reflect/Field;"),
+        (
+            "getDeclaredField",
+            "(Ljava/lang/String;)Ljava/lang/reflect/Field;",
+        ),
         ("getDeclaredFields", "()[Ljava/lang/reflect/Field;"),
-        ("getDeclaredConstructor", "([Ljava/lang/Class;)Ljava/lang/reflect/Constructor;"),
-        ("getDeclaredConstructors", "()[Ljava/lang/reflect/Constructor;"),
+        (
+            "getDeclaredConstructor",
+            "([Ljava/lang/Class;)Ljava/lang/reflect/Constructor;",
+        ),
+        (
+            "getDeclaredConstructors",
+            "()[Ljava/lang/reflect/Constructor;",
+        ),
         ("getSuperclass", "()Ljava/lang/Class;"),
         ("getInterfaces", "()[Ljava/lang/Class;"),
         ("getModifiers", "()I"),
@@ -37,13 +49,19 @@ pub(super) fn bootstrap_java_lang_reflect(vm: &mut Vm) {
 
     let mut method_methods = HashMap::new();
     for (name, desc) in [
-        ("<init>", "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/String;[Ljava/lang/Class;)V"),
+        (
+            "<init>",
+            "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/String;[Ljava/lang/Class;)V",
+        ),
         ("getName", "()Ljava/lang/String;"),
         ("getReturnType", "()Ljava/lang/Class;"),
         ("getParameterTypes", "()[Ljava/lang/Class;"),
         ("getDeclaringClass", "()Ljava/lang/Class;"),
         ("getModifiers", "()I"),
-        ("invoke", "(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;"),
+        (
+            "invoke",
+            "(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;",
+        ),
         ("equals", "(Ljava/lang/Object;)Z"),
         ("hashCode", "()I"),
         ("toString", "()Ljava/lang/String;"),
@@ -56,10 +74,16 @@ pub(super) fn bootstrap_java_lang_reflect(vm: &mut Vm) {
         methods: method_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![
-            ("__declaring_class".to_string(), "Ljava/lang/Class;".to_string()),
+            (
+                "__declaring_class".to_string(),
+                "Ljava/lang/Class;".to_string(),
+            ),
             ("__name".to_string(), "Ljava/lang/String;".to_string()),
             ("__descriptor".to_string(), "Ljava/lang/String;".to_string()),
-            ("__parameter_types".to_string(), "[Ljava/lang/Class;".to_string()),
+            (
+                "__parameter_types".to_string(),
+                "[Ljava/lang/Class;".to_string(),
+            ),
             ("__return_type".to_string(), "Ljava/lang/Class;".to_string()),
             ("__modifiers".to_string(), "I".to_string()),
         ],
@@ -68,7 +92,10 @@ pub(super) fn bootstrap_java_lang_reflect(vm: &mut Vm) {
 
     let mut field_methods = HashMap::new();
     for (name, desc) in [
-        ("<init>", "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Class;I)V"),
+        (
+            "<init>",
+            "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Class;I)V",
+        ),
         ("getName", "()Ljava/lang/String;"),
         ("getType", "()Ljava/lang/Class;"),
         ("getDeclaringClass", "()Ljava/lang/Class;"),
@@ -93,7 +120,10 @@ pub(super) fn bootstrap_java_lang_reflect(vm: &mut Vm) {
         methods: field_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![
-            ("__declaring_class".to_string(), "Ljava/lang/Class;".to_string()),
+            (
+                "__declaring_class".to_string(),
+                "Ljava/lang/Class;".to_string(),
+            ),
             ("__name".to_string(), "Ljava/lang/String;".to_string()),
             ("__type".to_string(), "Ljava/lang/Class;".to_string()),
             ("__descriptor".to_string(), "Ljava/lang/String;".to_string()),
@@ -122,8 +152,14 @@ pub(super) fn bootstrap_java_lang_reflect(vm: &mut Vm) {
         methods: constructor_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![
-            ("__declaring_class".to_string(), "Ljava/lang/Class;".to_string()),
-            ("__parameter_types".to_string(), "[Ljava/lang/Class;".to_string()),
+            (
+                "__declaring_class".to_string(),
+                "Ljava/lang/Class;".to_string(),
+            ),
+            (
+                "__parameter_types".to_string(),
+                "[Ljava/lang/Class;".to_string(),
+            ),
             ("__modifiers".to_string(), "I".to_string()),
             ("__slot".to_string(), "I".to_string()),
         ],

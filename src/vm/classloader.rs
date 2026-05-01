@@ -85,9 +85,9 @@ impl BootstrapClassLoader {
                     }
                 }
             }
-            for homebrew_prefix in &[
-                "/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home",
-            ] {
+            for homebrew_prefix in
+                &["/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home"]
+            {
                 let jmods = PathBuf::from(homebrew_prefix).join("jmods");
                 if jmods.exists() {
                     if let Ok(entries) = fs::read_dir(&jmods) {
@@ -219,11 +219,11 @@ impl ClassLoader for BootstrapClassLoader {
             return Ok(None);
         }
 
-        let bytes = self.find_class_bytes(class_name).ok_or_else(|| {
-            VmError::ClassNotFound {
+        let bytes = self
+            .find_class_bytes(class_name)
+            .ok_or_else(|| VmError::ClassNotFound {
                 class_name: class_name.to_string(),
-            }
-        })?;
+            })?;
         ClassFile::parse(&bytes)
             .map(Some)
             .map_err(|_| VmError::ClassNotFound {
@@ -290,7 +290,12 @@ impl ClassLoader for BootstrapClassLoader {
                     code.max_stack as usize,
                     vec![None],
                 )
-                .with_metadata(&resolved_name, &name, &descriptor, member.access_flags);
+                .with_metadata(
+                    &resolved_name,
+                    &name,
+                    &descriptor,
+                    member.access_flags,
+                );
 
                 methods.insert((name, descriptor), ClassMethod::Bytecode(method));
             }
@@ -331,10 +336,16 @@ mod tests {
         let result = loader.load_class("java/util/ArrayList");
         assert!(result.is_ok(), "load_class error: {:?}", result);
         let class = result.unwrap();
-        assert!(class.is_some(), "ArrayList should be found in bootstrap path");
+        assert!(
+            class.is_some(),
+            "ArrayList should be found in bootstrap path"
+        );
         let class = class.unwrap();
         assert_eq!(class.name, "java/util/ArrayList");
-        assert_eq!(class.super_class, Some("java/util/AbstractList".to_string()));
+        assert_eq!(
+            class.super_class,
+            Some("java/util/AbstractList".to_string())
+        );
         assert!(!class.methods.is_empty(), "ArrayList should have methods");
     }
 

@@ -938,38 +938,48 @@ public class Box<T> {
         let class_bytes = fs::read(root.join("demo").join("Box.class")).unwrap();
         let class_file = ClassFile::parse(&class_bytes).unwrap();
 
-        assert!(class_file
-            .attributes
-            .iter()
-            .any(|attr| matches!(attr, AttributeInfo::Signature(_))));
-        assert!(class_file
-            .attributes
-            .iter()
-            .any(|attr| matches!(attr, AttributeInfo::InnerClasses(_))));
+        assert!(
+            class_file
+                .attributes
+                .iter()
+                .any(|attr| matches!(attr, AttributeInfo::Signature(_)))
+        );
+        assert!(
+            class_file
+                .attributes
+                .iter()
+                .any(|attr| matches!(attr, AttributeInfo::InnerClasses(_)))
+        );
 
         let field = class_file
             .fields
             .iter()
             .find(|field| field.name(&class_file.constant_pool).unwrap() == "MAGIC")
             .unwrap();
-        assert!(field
-            .attributes
-            .iter()
-            .any(|attr| matches!(attr, AttributeInfo::ConstantValue(_))));
+        assert!(
+            field
+                .attributes
+                .iter()
+                .any(|attr| matches!(attr, AttributeInfo::ConstantValue(_)))
+        );
 
         let method = class_file
             .methods
             .iter()
             .find(|method| method.name(&class_file.constant_pool).unwrap() == "id")
             .unwrap();
-        assert!(method
-            .attributes
-            .iter()
-            .any(|attr| matches!(attr, AttributeInfo::Signature(_))));
-        assert!(method
-            .attributes
-            .iter()
-            .any(|attr| matches!(attr, AttributeInfo::Exceptions(_))));
+        assert!(
+            method
+                .attributes
+                .iter()
+                .any(|attr| matches!(attr, AttributeInfo::Signature(_)))
+        );
+        assert!(
+            method
+                .attributes
+                .iter()
+                .any(|attr| matches!(attr, AttributeInfo::Exceptions(_)))
+        );
     }
 
     fn temp_dir(test_name: &str) -> std::path::PathBuf {

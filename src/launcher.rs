@@ -7,8 +7,8 @@ use crate::classfile::{
     AttributeInfo, ClassFile, ClassFileError, ConstantPoolEntry, MemberInfo, StackMapFrame,
 };
 use crate::vm::{
-    ClassMethod, ExceptionHandler, ExecutionResult, FieldRef, InvokeDynamicKind,
-    InvokeDynamicSite, Method, MethodRef, Reference, RuntimeClass, Value, Vm, VmError,
+    ClassMethod, ExceptionHandler, ExecutionResult, FieldRef, InvokeDynamicKind, InvokeDynamicSite,
+    Method, MethodRef, Reference, RuntimeClass, Value, Vm, VmError,
 };
 use zip::ZipArchive;
 
@@ -174,11 +174,12 @@ pub fn parse_launch_options(args: &[String]) -> Result<LaunchOptions, LaunchErro
 }
 
 pub fn launch(options: &LaunchOptions) -> Result<ExecutionResult, LaunchError> {
-    let source = resolve_class_path(&options.class_path, &options.main_class)
-        .ok_or_else(|| LaunchError::MainClassNotFound {
+    let source = resolve_class_path(&options.class_path, &options.main_class).ok_or_else(|| {
+        LaunchError::MainClassNotFound {
             main_class: options.main_class.clone(),
             path: class_relative_path(&options.main_class),
-        })?;
+        }
+    })?;
     let mut vm = Vm::new().map_err(|e| LaunchError::VmInitFailed(e))?;
     vm.set_class_path(options.class_path.clone());
     vm.set_trace(options.trace);
@@ -331,16 +332,24 @@ fn read_class_source(
                 path: jar_path.clone(),
                 source: std::io::Error::new(std::io::ErrorKind::InvalidData, source.to_string()),
             })?;
-            let mut entry = archive.by_name(entry_name).map_err(|_| LaunchError::MainClassNotFound {
-                main_class: main_class.to_string(),
-                path: PathBuf::from(format!("{}!/{entry_name}", jar_path.display())),
-            })?;
+            let mut entry =
+                archive
+                    .by_name(entry_name)
+                    .map_err(|_| LaunchError::MainClassNotFound {
+                        main_class: main_class.to_string(),
+                        path: PathBuf::from(format!("{}!/{entry_name}", jar_path.display())),
+                    })?;
             let mut bytes = Vec::new();
-            entry.read_to_end(&mut bytes).map_err(|source| LaunchError::Io {
-                path: PathBuf::from(format!("{}!/{entry_name}", jar_path.display())),
-                source,
-            })?;
-            Ok((PathBuf::from(format!("{}!/{entry_name}", jar_path.display())), bytes))
+            entry
+                .read_to_end(&mut bytes)
+                .map_err(|source| LaunchError::Io {
+                    path: PathBuf::from(format!("{}!/{entry_name}", jar_path.display())),
+                    source,
+                })?;
+            Ok((
+                PathBuf::from(format!("{}!/{entry_name}", jar_path.display())),
+                bytes,
+            ))
         }
     }
 }
@@ -387,7 +396,9 @@ pub(crate) fn register_class(
             // Best-effort verification: log but don't fail on verification errors
             // since some javac output may use patterns the verifier doesn't handle yet.
             if let Err(e) = Vm::verify_method(&method) {
-                eprintln!("warning: bytecode verification failed for {class_name}.{name}{descriptor}: {e}");
+                eprintln!(
+                    "warning: bytecode verification failed for {class_name}.{name}{descriptor}: {e}"
+                );
             }
 
             methods.insert((name, descriptor), ClassMethod::Bytecode(method));
@@ -399,7 +410,8 @@ pub(crate) fn register_class(
     // Extract instance field definitions (name, descriptor) from the class file.
     // Also extract static field values from ConstantValue attributes.
     let mut instance_fields = Vec::new();
-    let mut static_fields: std::collections::HashMap<String, Value> = std::collections::HashMap::new();
+    let mut static_fields: std::collections::HashMap<String, Value> =
+        std::collections::HashMap::new();
     for field in &class_file.fields {
         let name = field
             .name(&class_file.constant_pool)
@@ -591,9 +603,9 @@ fn extract_runtime_constants(class_file: &ClassFile, vm: &mut Vm) -> Vec<Option<
                     Err(_) => Some(Value::Reference(Reference::Null)),
                 }
             }
-            Ok(ConstantPoolEntry::MethodType { descriptor_index: _ }) => {
-                Some(Value::Reference(Reference::Null))
-            }
+            Ok(ConstantPoolEntry::MethodType {
+                descriptor_index: _,
+            }) => Some(Value::Reference(Reference::Null)),
             _ => None,
         };
         constants.push(value);
@@ -683,8 +695,7 @@ fn extract_invoke_dynamic_sites(class_file: &ClassFile) -> Vec<Option<InvokeDyna
                 name_and_type_index,
             }) => {
                 let (name, descriptor) =
-                    resolve_name_and_type(class_file, *name_and_type_index)
-                        .unwrap_or_default();
+                    resolve_name_and_type(class_file, *name_and_type_index).unwrap_or_default();
                 let kind = bootstrap_methods
                     .get(*bootstrap_method_attr_index as usize)
                     .map(|bm| resolve_invoke_dynamic_kind(class_file, bm))
@@ -756,7 +767,10 @@ pub(crate) fn resolve_bootstrap_method(
         return Err(ClassFileError::UnexpectedConstantType {
             index: method_handle_index,
             expected: "MethodHandle",
-            actual: class_file.constant_pool.get(method_handle_index)?.kind_name(),
+            actual: class_file
+                .constant_pool
+                .get(method_handle_index)?
+                .kind_name(),
         });
     };
     let method_ref = resolve_method_ref(class_file, *reference_index)?;
@@ -767,7 +781,10 @@ pub(crate) fn resolve_bootstrap_method(
     ))
 }
 
-pub(crate) fn resolve_method_handle_target(class_file: &ClassFile, method_handle_index: u16) -> Option<MethodRef> {
+pub(crate) fn resolve_method_handle_target(
+    class_file: &ClassFile,
+    method_handle_index: u16,
+) -> Option<MethodRef> {
     let Ok(ConstantPoolEntry::MethodHandle {
         reference_index, ..
     }) = class_file.constant_pool.get(method_handle_index)
@@ -779,17 +796,21 @@ pub(crate) fn resolve_method_handle_target(class_file: &ClassFile, method_handle
 
 fn constant_string_value(class_file: &ClassFile, index: u16) -> Option<String> {
     match class_file.constant_pool.get(index).ok()? {
-        ConstantPoolEntry::String { string_index } => {
-            class_file.constant_pool.utf8(*string_index).ok().map(str::to_string)
-        }
+        ConstantPoolEntry::String { string_index } => class_file
+            .constant_pool
+            .utf8(*string_index)
+            .ok()
+            .map(str::to_string),
         ConstantPoolEntry::Utf8(value) => Some(value.clone()),
         ConstantPoolEntry::Integer(value) => Some(value.to_string()),
         ConstantPoolEntry::Long(value) => Some(value.to_string()),
         ConstantPoolEntry::Float(value) => Some(value.to_string()),
         ConstantPoolEntry::Double(value) => Some(value.to_string()),
-        ConstantPoolEntry::Class { name_index } => {
-            class_file.constant_pool.utf8(*name_index).ok().map(str::to_string)
-        }
+        ConstantPoolEntry::Class { name_index } => class_file
+            .constant_pool
+            .utf8(*name_index)
+            .ok()
+            .map(str::to_string),
         _ => None,
     }
 }
@@ -797,7 +818,10 @@ fn constant_string_value(class_file: &ClassFile, index: u16) -> Option<String> {
 fn extract_line_numbers(code: &crate::classfile::CodeAttribute) -> Vec<(u16, u16)> {
     for attr in &code.attributes {
         if let AttributeInfo::LineNumberTable(entries) = attr {
-            return entries.iter().map(|e| (e.start_pc, e.line_number)).collect();
+            return entries
+                .iter()
+                .map(|e| (e.start_pc, e.line_number))
+                .collect();
         }
     }
     Vec::new()
@@ -818,9 +842,11 @@ fn resolve_field_ref(class_file: &ClassFile, index: u16) -> Result<FieldRef, Cla
             class_index,
             name_and_type_index,
         } => {
-            let class_name = class_file.constant_pool.class_name(*class_index)?.to_string();
-            let (field_name, descriptor) =
-                resolve_name_and_type(class_file, *name_and_type_index)?;
+            let class_name = class_file
+                .constant_pool
+                .class_name(*class_index)?
+                .to_string();
+            let (field_name, descriptor) = resolve_name_and_type(class_file, *name_and_type_index)?;
             Ok(FieldRef {
                 class_name,
                 field_name,
@@ -845,7 +871,10 @@ fn resolve_method_ref(class_file: &ClassFile, index: u16) -> Result<MethodRef, C
             class_index,
             name_and_type_index,
         } => {
-            let class_name = class_file.constant_pool.class_name(*class_index)?.to_string();
+            let class_name = class_file
+                .constant_pool
+                .class_name(*class_index)?
+                .to_string();
             let (method_name, descriptor) =
                 resolve_name_and_type(class_file, *name_and_type_index)?;
             Ok(MethodRef {
@@ -872,7 +901,10 @@ fn resolve_name_and_type(
             descriptor_index,
         } => Ok((
             class_file.constant_pool.utf8(*name_index)?.to_string(),
-            class_file.constant_pool.utf8(*descriptor_index)?.to_string(),
+            class_file
+                .constant_pool
+                .utf8(*descriptor_index)?
+                .to_string(),
         )),
         entry => Err(ClassFileError::UnexpectedConstantType {
             index,

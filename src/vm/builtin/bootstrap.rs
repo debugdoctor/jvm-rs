@@ -14,10 +14,7 @@ pub(super) fn bootstrap_java_lang(vm: &mut Vm) {
         ("toString", "()Ljava/lang/String;"),
         ("getClass", "()Ljava/lang/Class;"),
     ] {
-        object_methods.insert(
-            (name.to_string(), desc.to_string()),
-            ClassMethod::Native,
-        );
+        object_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
     vm.register_class(RuntimeClass {
         name: "java/lang/Object".to_string(),
@@ -38,10 +35,7 @@ pub(super) fn bootstrap_java_lang(vm: &mut Vm) {
         ("isPrimitive", "()Z"),
         ("toString", "()Ljava/lang/String;"),
     ] {
-        class_methods.insert(
-            (name.to_string(), desc.to_string()),
-            ClassMethod::Native,
-        );
+        class_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
     vm.register_class(RuntimeClass {
         name: "java/lang/Class".to_string(),
@@ -82,10 +76,7 @@ pub(super) fn bootstrap_java_lang(vm: &mut Vm) {
         ("valueOf", "(D)Ljava/lang/String;"),
         ("valueOf", "(F)Ljava/lang/String;"),
     ] {
-        string_methods.insert(
-            (name.to_string(), desc.to_string()),
-            ClassMethod::Native,
-        );
+        string_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
     vm.register_class(RuntimeClass {
         name: "java/lang/String".to_string(),
@@ -120,10 +111,7 @@ pub(super) fn bootstrap_java_lang(vm: &mut Vm) {
         ("lowestOneBit", "(I)I"),
         ("signum", "(I)I"),
     ] {
-        integer_methods.insert(
-            (name.to_string(), desc.to_string()),
-            ClassMethod::Native,
-        );
+        integer_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
     let mut integer_static = HashMap::new();
     integer_static.insert("MIN_VALUE".to_string(), Value::Int(i32::MIN));
@@ -150,10 +138,7 @@ pub(super) fn bootstrap_java_lang(vm: &mut Vm) {
         ("toString", "(J)Ljava/lang/String;"),
         ("compare", "(JJ)I"),
     ] {
-        long_methods.insert(
-            (name.to_string(), desc.to_string()),
-            ClassMethod::Native,
-        );
+        long_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
     vm.register_class(RuntimeClass {
         name: "java/lang/Long".to_string(),
@@ -176,10 +161,7 @@ pub(super) fn bootstrap_java_lang(vm: &mut Vm) {
         ("toUpperCase", "(C)C"),
         ("toString", "(C)Ljava/lang/String;"),
     ] {
-        character_methods.insert(
-            (name.to_string(), desc.to_string()),
-            ClassMethod::Native,
-        );
+        character_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
     vm.register_class(RuntimeClass {
         name: "java/lang/Character".to_string(),
@@ -198,10 +180,7 @@ pub(super) fn bootstrap_java_lang(vm: &mut Vm) {
         ("booleanValue", "()Z"),
         ("getBoolean", "(Ljava/lang/String;)Z"),
     ] {
-        boolean_methods.insert(
-            (name.to_string(), desc.to_string()),
-            ClassMethod::Native,
-        );
+        boolean_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
     vm.register_class(RuntimeClass {
         name: "java/lang/Boolean".to_string(),
@@ -252,10 +231,7 @@ pub(super) fn bootstrap_java_lang(vm: &mut Vm) {
         ("reverse", "()Ljava/lang/StringBuilder;"),
         ("insert", "(ILjava/lang/String;)Ljava/lang/StringBuilder;"),
     ] {
-        sb_methods.insert(
-            (name.to_string(), desc.to_string()),
-            ClassMethod::Native,
-        );
+        sb_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
     vm.register_class(RuntimeClass {
         name: "java/lang/StringBuilder".to_string(),
@@ -301,10 +277,7 @@ pub(super) fn bootstrap_java_lang(vm: &mut Vm) {
         ("multiplyExact", "(JJ)J"),
         ("signum", "(I)I"),
     ] {
-        math_methods.insert(
-            (name.to_string(), desc.to_string()),
-            ClassMethod::Native,
-        );
+        math_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
     vm.register_class(RuntimeClass {
         name: "java/lang/Math".to_string(),
@@ -347,10 +320,7 @@ pub(super) fn bootstrap_java_lang(vm: &mut Vm) {
         ("sleep", "(J)V"),
         ("yield", "()V"),
     ] {
-        thread_methods.insert(
-            (name.to_string(), desc.to_string()),
-            ClassMethod::Native,
-        );
+        thread_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
     vm.register_class(RuntimeClass {
         name: "java/lang/Thread".to_string(),
@@ -365,14 +335,35 @@ pub(super) fn bootstrap_java_lang(vm: &mut Vm) {
         ("java/lang/Throwable", "java/lang/Object"),
         ("java/lang/Exception", "java/lang/Throwable"),
         ("java/lang/RuntimeException", "java/lang/Exception"),
-        ("java/lang/IllegalThreadStateException", "java/lang/RuntimeException"),
-        ("java/lang/ArithmeticException", "java/lang/RuntimeException"),
-        ("java/lang/NullPointerException", "java/lang/RuntimeException"),
+        (
+            "java/lang/IllegalThreadStateException",
+            "java/lang/RuntimeException",
+        ),
+        (
+            "java/lang/ArithmeticException",
+            "java/lang/RuntimeException",
+        ),
+        (
+            "java/lang/NullPointerException",
+            "java/lang/RuntimeException",
+        ),
         ("java/lang/ClassCastException", "java/lang/RuntimeException"),
-        ("java/lang/NegativeArraySizeException", "java/lang/RuntimeException"),
-        ("java/lang/ArrayIndexOutOfBoundsException", "java/lang/RuntimeException"),
-        ("java/lang/IndexOutOfBoundsException", "java/lang/RuntimeException"),
-        ("java/lang/IllegalMonitorStateException", "java/lang/RuntimeException"),
+        (
+            "java/lang/NegativeArraySizeException",
+            "java/lang/RuntimeException",
+        ),
+        (
+            "java/lang/ArrayIndexOutOfBoundsException",
+            "java/lang/RuntimeException",
+        ),
+        (
+            "java/lang/IndexOutOfBoundsException",
+            "java/lang/RuntimeException",
+        ),
+        (
+            "java/lang/IllegalMonitorStateException",
+            "java/lang/RuntimeException",
+        ),
     ];
     for (name, parent) in exception_chain {
         let mut methods = HashMap::new();
@@ -383,10 +374,7 @@ pub(super) fn bootstrap_java_lang(vm: &mut Vm) {
             ("<init>", "(Ljava/lang/Throwable;)V"),
             ("getMessage", "()Ljava/lang/String;"),
         ] {
-            methods.insert(
-                (mname.to_string(), mdesc.to_string()),
-                ClassMethod::Native,
-            );
+            methods.insert((mname.to_string(), mdesc.to_string()), ClassMethod::Native);
         }
         vm.register_class(RuntimeClass {
             name: name.to_string(),
@@ -416,18 +404,8 @@ pub(super) fn bootstrap_java_lang(vm: &mut Vm) {
         interfaces: vec![],
     });
 
-    for boxed in [
-        "java/lang/Integer",
-        "java/lang/Long",
-        "java/lang/Boolean",
-    ] {
-        if let Some(class) = vm
-            .runtime
-            .lock()
-            .unwrap()
-            .classes
-            .get_mut(boxed)
-        {
+    for boxed in ["java/lang/Integer", "java/lang/Long", "java/lang/Boolean"] {
+        if let Some(class) = vm.runtime.lock().unwrap().classes.get_mut(boxed) {
             class.interfaces.push("java/lang/Comparable".to_string());
         }
     }
@@ -460,10 +438,7 @@ pub(super) fn bootstrap_java_io(vm: &mut Vm) {
             ("println".to_string(), desc.to_string()),
             ClassMethod::Native,
         );
-        ps_methods.insert(
-            ("print".to_string(), desc.to_string()),
-            ClassMethod::Native,
-        );
+        ps_methods.insert(("print".to_string(), desc.to_string()), ClassMethod::Native);
     }
     ps_methods.insert(
         ("<init>".to_string(), "()V".to_string()),
@@ -501,10 +476,7 @@ pub(super) fn bootstrap_java_io(vm: &mut Vm) {
         ("lineSeparator", "()Ljava/lang/String;"),
         ("identityHashCode", "(Ljava/lang/Object;)I"),
     ] {
-        system_methods.insert(
-            (name.to_string(), desc.to_string()),
-            ClassMethod::Native,
-        );
+        system_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
     vm.register_class(RuntimeClass {
         name: "java/lang/System".to_string(),
@@ -528,10 +500,7 @@ pub(super) fn bootstrap_java_io(vm: &mut Vm) {
         ("mark", "(I)V"),
         ("markSupported", "()Z"),
     ] {
-        input_stream_methods.insert(
-            (name.to_string(), desc.to_string()),
-            ClassMethod::Native,
-        );
+        input_stream_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
     vm.register_class(RuntimeClass {
         name: "java/io/InputStream".to_string(),
@@ -551,10 +520,7 @@ pub(super) fn bootstrap_java_io(vm: &mut Vm) {
         ("flush", "()V"),
         ("close", "()V"),
     ] {
-        output_stream_methods.insert(
-            (name.to_string(), desc.to_string()),
-            ClassMethod::Native,
-        );
+        output_stream_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
     vm.register_class(RuntimeClass {
         name: "java/io/OutputStream".to_string(),
@@ -567,7 +533,10 @@ pub(super) fn bootstrap_java_io(vm: &mut Vm) {
 
     // java/io/ByteArrayOutputStream - output stream backed by byte array
     let mut baos_methods = HashMap::new();
-    baos_methods.insert(("<init>".to_string(), "()V".to_string()), ClassMethod::Native);
+    baos_methods.insert(
+        ("<init>".to_string(), "()V".to_string()),
+        ClassMethod::Native,
+    );
     for (name, desc) in [
         ("write", "(I)V"),
         ("write", "([B)V"),
@@ -606,10 +575,7 @@ pub(super) fn bootstrap_java_io_writer(vm: &mut Vm) {
         ("flush", "()V"),
         ("close", "()V"),
     ] {
-        writer_methods.insert(
-            (name.to_string(), desc.to_string()),
-            ClassMethod::Native,
-        );
+        writer_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
     vm.register_class(RuntimeClass {
         name: "java/io/Writer".to_string(),
@@ -656,7 +622,10 @@ pub(super) fn bootstrap_java_io_writer(vm: &mut Vm) {
         "(Ljava/lang/String;)V",
         "(Ljava/lang/Object;)V",
     ] {
-        pw_methods.insert(("println".to_string(), desc.to_string()), ClassMethod::Native);
+        pw_methods.insert(
+            ("println".to_string(), desc.to_string()),
+            ClassMethod::Native,
+        );
         pw_methods.insert(("print".to_string(), desc.to_string()), ClassMethod::Native);
     }
     pw_methods.insert(
@@ -668,7 +637,10 @@ pub(super) fn bootstrap_java_io_writer(vm: &mut Vm) {
         ClassMethod::Native,
     );
     pw_methods.insert(
-        ("<init>".to_string(), "(Ljava/io/OutputStream;)V".to_string()),
+        (
+            "<init>".to_string(),
+            "(Ljava/io/OutputStream;)V".to_string(),
+        ),
         ClassMethod::Native,
     );
     pw_methods.insert(
@@ -676,15 +648,27 @@ pub(super) fn bootstrap_java_io_writer(vm: &mut Vm) {
         ClassMethod::Native,
     );
     pw_methods.insert(
-        ("append".to_string(), "(Ljava/lang/CharSequence;)Ljava/io/Writer;".to_string()),
+        (
+            "append".to_string(),
+            "(Ljava/lang/CharSequence;)Ljava/io/Writer;".to_string(),
+        ),
         ClassMethod::Native,
     );
     pw_methods.insert(
-        ("append".to_string(), "(Ljava/lang/CharSequence;II)Ljava/io/Writer;".to_string()),
+        (
+            "append".to_string(),
+            "(Ljava/lang/CharSequence;II)Ljava/io/Writer;".to_string(),
+        ),
         ClassMethod::Native,
     );
-    pw_methods.insert(("flush".to_string(), "()V".to_string()), ClassMethod::Native);
-    pw_methods.insert(("close".to_string(), "()V".to_string()), ClassMethod::Native);
+    pw_methods.insert(
+        ("flush".to_string(), "()V".to_string()),
+        ClassMethod::Native,
+    );
+    pw_methods.insert(
+        ("close".to_string(), "()V".to_string()),
+        ClassMethod::Native,
+    );
     vm.register_class(RuntimeClass {
         name: "java/io/PrintWriter".to_string(),
         super_class: Some("java/io/Writer".to_string()),
@@ -735,10 +719,7 @@ pub(super) fn bootstrap_java_io_writer(vm: &mut Vm) {
         ("reset", "()V"),
         ("markSupported", "()Z"),
     ] {
-        reader_methods.insert(
-            (name.to_string(), desc.to_string()),
-            ClassMethod::Native,
-        );
+        reader_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
     vm.register_class(RuntimeClass {
         name: "java/io/Reader".to_string(),
@@ -854,21 +835,19 @@ pub(super) fn bootstrap_java_util(vm: &mut Vm) {
         ("toArray", "()[I"),
         ("asLongStream", "()Ljava/util/stream/LongStream;"),
         ("asDoubleStream", "()Ljava/util/stream/DoubleStream;"),
-        ("collect", "(Ljava/util/stream/Collector;)Ljava/lang/Object;"),
+        (
+            "collect",
+            "(Ljava/util/stream/Collector;)Ljava/lang/Object;",
+        ),
     ] {
-        native_int_stream_methods.insert(
-            (name.to_string(), desc.to_string()),
-            ClassMethod::Native,
-        );
+        native_int_stream_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
     vm.register_class(RuntimeClass {
         name: "__jvm_rs/NativeIntStream".to_string(),
         super_class: Some("java/lang/Object".to_string()),
         methods: native_int_stream_methods,
         static_fields: HashMap::new(),
-        instance_fields: vec![
-            ("__array".to_string(), "[I".to_string()),
-        ],
+        instance_fields: vec![("__array".to_string(), "[I".to_string())],
         interfaces: vec!["java/util/stream/IntStream".to_string()],
     });
 
@@ -881,21 +860,20 @@ pub(super) fn bootstrap_java_util(vm: &mut Vm) {
         ("average", "()Ljava/util/OptionalDouble;"),
         ("toArray", "()[J"),
         ("asDoubleStream", "()Ljava/util/stream/DoubleStream;"),
-        ("collect", "(Ljava/util/stream/Collector;)Ljava/lang/Object;"),
+        (
+            "collect",
+            "(Ljava/util/stream/Collector;)Ljava/lang/Object;",
+        ),
     ] {
-        native_long_stream_methods.insert(
-            (name.to_string(), desc.to_string()),
-            ClassMethod::Native,
-        );
+        native_long_stream_methods
+            .insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
     vm.register_class(RuntimeClass {
         name: "__jvm_rs/NativeLongStream".to_string(),
         super_class: Some("java/lang/Object".to_string()),
         methods: native_long_stream_methods,
         static_fields: HashMap::new(),
-        instance_fields: vec![
-            ("__array".to_string(), "[J".to_string()),
-        ],
+        instance_fields: vec![("__array".to_string(), "[J".to_string())],
         interfaces: vec!["java/util/stream/LongStream".to_string()],
     });
 
@@ -907,21 +885,20 @@ pub(super) fn bootstrap_java_util(vm: &mut Vm) {
         ("max", "()Ljava/util/OptionalDouble;"),
         ("average", "()D"),
         ("toArray", "()[D"),
-        ("collect", "(Ljava/util/stream/Collector;)Ljava/lang/Object;"),
+        (
+            "collect",
+            "(Ljava/util/stream/Collector;)Ljava/lang/Object;",
+        ),
     ] {
-        native_double_stream_methods.insert(
-            (name.to_string(), desc.to_string()),
-            ClassMethod::Native,
-        );
+        native_double_stream_methods
+            .insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
     vm.register_class(RuntimeClass {
         name: "__jvm_rs/NativeDoubleStream".to_string(),
         super_class: Some("java/lang/Object".to_string()),
         methods: native_double_stream_methods,
         static_fields: HashMap::new(),
-        instance_fields: vec![
-            ("__array".to_string(), "[D".to_string()),
-        ],
+        instance_fields: vec![("__array".to_string(), "[D".to_string())],
         interfaces: vec!["java/util/stream/DoubleStream".to_string()],
     });
 
@@ -930,10 +907,7 @@ pub(super) fn bootstrap_java_util(vm: &mut Vm) {
         ("get".to_string(), "()Ljava/lang/Object;".to_string()),
         ClassMethod::Native,
     );
-    native_collector_methods.insert(
-        ("size".to_string(), "()I".to_string()),
-        ClassMethod::Native,
-    );
+    native_collector_methods.insert(("size".to_string(), "()I".to_string()), ClassMethod::Native);
     vm.register_class(RuntimeClass {
         name: "__jvm_rs/NativeCollector".to_string(),
         super_class: Some("java/lang/Object".to_string()),
@@ -973,9 +947,18 @@ pub(super) fn bootstrap_java_util(vm: &mut Vm) {
     });
 
     for (name, fields) in [
-        ("java/util/OptionalInt", vec![("value".to_string(), "I".to_string())]),
-        ("java/util/OptionalLong", vec![("value".to_string(), "J".to_string())]),
-        ("java/util/OptionalDouble", vec![("value".to_string(), "D".to_string())]),
+        (
+            "java/util/OptionalInt",
+            vec![("value".to_string(), "I".to_string())],
+        ),
+        (
+            "java/util/OptionalLong",
+            vec![("value".to_string(), "J".to_string())],
+        ),
+        (
+            "java/util/OptionalDouble",
+            vec![("value".to_string(), "D".to_string())],
+        ),
     ] {
         let mut methods = HashMap::new();
         for (mname, mdesc) in [
@@ -1006,7 +989,10 @@ pub(super) fn bootstrap_java_util(vm: &mut Vm) {
         ("get", "()Ljava/lang/Object;"),
         ("orElse", "(Ljava/lang/Object;)Ljava/lang/Object;"),
         ("isEmpty", "()Z"),
-        ("filter", "(Ljava/util/function/Predicate;)Ljava/util/Optional;"),
+        (
+            "filter",
+            "(Ljava/util/function/Predicate;)Ljava/util/Optional;",
+        ),
         ("map", "(Ljava/util/function/Function;)Ljava/util/Optional;"),
     ] {
         optional_methods.insert((mname.to_string(), mdesc.to_string()), ClassMethod::Native);
@@ -1187,7 +1173,10 @@ pub(super) fn bootstrap_java_nio(vm: &mut Vm) {
     // java.nio.file.Paths - Path factory
     let mut paths_methods = HashMap::new();
     paths_methods.insert(
-        ("get".to_string(), "(Ljava/lang/String;[Ljava/lang/String;)Ljava/nio/file/Path;".to_string()),
+        (
+            "get".to_string(),
+            "(Ljava/lang/String;[Ljava/lang/String;)Ljava/nio/file/Path;".to_string(),
+        ),
         ClassMethod::Native,
     );
     vm.register_class(RuntimeClass {
@@ -1202,22 +1191,52 @@ pub(super) fn bootstrap_java_nio(vm: &mut Vm) {
     // java.nio.file.Files - file operations utility
     let mut files_methods = HashMap::new();
     for (name, desc) in [
-        ("exists", "(Ljava/nio/file/Path;[Ljava/nio/file/attribute/FileAttribute;)Z"),
+        (
+            "exists",
+            "(Ljava/nio/file/Path;[Ljava/nio/file/attribute/FileAttribute;)Z",
+        ),
         ("isRegularFile", "(Ljava/nio/file/Path;)Z"),
         ("isDirectory", "(Ljava/nio/file/Path;)Z"),
-        ("createFile", "(Ljava/nio/file/Path;[Ljava/nio/file/attribute/FileAttribute;)Ljava/nio/file/Path;"),
+        (
+            "createFile",
+            "(Ljava/nio/file/Path;[Ljava/nio/file/attribute/FileAttribute;)Ljava/nio/file/Path;",
+        ),
         ("delete", "(Ljava/nio/file/Path;)V"),
-        ("copy", "(Ljava/nio/file/Path;Ljava/nio/file/Path;[Ljava/nio/file/CopyOption;)Ljava/nio/file/Path;"),
-        ("move", "(Ljava/nio/file/Path;Ljava/nio/file/Path;[Ljava/nio/file/CopyOption;)Ljava/nio/file/Path;"),
+        (
+            "copy",
+            "(Ljava/nio/file/Path;Ljava/nio/file/Path;[Ljava/nio/file/CopyOption;)Ljava/nio/file/Path;",
+        ),
+        (
+            "move",
+            "(Ljava/nio/file/Path;Ljava/nio/file/Path;[Ljava/nio/file/CopyOption;)Ljava/nio/file/Path;",
+        ),
         ("readString", "(Ljava/nio/file/Path;)Ljava/lang/String;"),
-        ("writeString", "(Ljava/nio/file/Path;Ljava/lang/CharSequence;[Ljava/nio/file/OpenOption;[Ljava/nio/file/attribute/FileAttribute;)Ljava/nio/file/Path;"),
+        (
+            "writeString",
+            "(Ljava/nio/file/Path;Ljava/lang/CharSequence;[Ljava/nio/file/OpenOption;[Ljava/nio/file/attribute/FileAttribute;)Ljava/nio/file/Path;",
+        ),
         ("size", "(Ljava/nio/file/Path;)J"),
         ("isHidden", "(Ljava/nio/file/Path;)Z"),
-        ("getFileStore", "(Ljava/nio/file/Path;)Ljava/nio/file/FileStore;"),
-        ("newInputStream", "(Ljava/nio/file/Path;[Ljava/nio/file/OpenOption;)Ljava/io/InputStream;"),
-        ("newOutputStream", "(Ljava/nio/file/Path;[Ljava/nio/file/OpenOption;)Ljava/io/OutputStream;"),
-        ("newBufferedReader", "(Ljava/nio/file/Path;)Ljava/io/BufferedReader;"),
-        ("newBufferedWriter", "(Ljava/nio/file/Path;[Ljava/nio/file/OpenOption;)Ljava/io/BufferedWriter;"),
+        (
+            "getFileStore",
+            "(Ljava/nio/file/Path;)Ljava/nio/file/FileStore;",
+        ),
+        (
+            "newInputStream",
+            "(Ljava/nio/file/Path;[Ljava/nio/file/OpenOption;)Ljava/io/InputStream;",
+        ),
+        (
+            "newOutputStream",
+            "(Ljava/nio/file/Path;[Ljava/nio/file/OpenOption;)Ljava/io/OutputStream;",
+        ),
+        (
+            "newBufferedReader",
+            "(Ljava/nio/file/Path;)Ljava/io/BufferedReader;",
+        ),
+        (
+            "newBufferedWriter",
+            "(Ljava/nio/file/Path;[Ljava/nio/file/OpenOption;)Ljava/io/BufferedWriter;",
+        ),
     ] {
         files_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
@@ -1254,10 +1273,22 @@ pub(super) fn bootstrap_java_nio(vm: &mut Vm) {
     // java.nio.channels.Channels - channel utilities
     let mut channels_methods = HashMap::new();
     for (name, desc) in [
-        ("newInputStream", "(Ljava/nio/channels/ReadableByteChannel;)Ljava/io/InputStream;"),
-        ("newOutputStream", "(Ljava/nio/channels/WritableByteChannel;)Ljava/io/OutputStream;"),
-        ("newChannel", "(Ljava/io/InputStream;)Ljava/nio/channels/ReadableByteChannel;"),
-        ("newChannel", "(Ljava/io/OutputStream;)Ljava/nio/channels/WritableByteChannel;"),
+        (
+            "newInputStream",
+            "(Ljava/nio/channels/ReadableByteChannel;)Ljava/io/InputStream;",
+        ),
+        (
+            "newOutputStream",
+            "(Ljava/nio/channels/WritableByteChannel;)Ljava/io/OutputStream;",
+        ),
+        (
+            "newChannel",
+            "(Ljava/io/InputStream;)Ljava/nio/channels/ReadableByteChannel;",
+        ),
+        (
+            "newChannel",
+            "(Ljava/io/OutputStream;)Ljava/nio/channels/WritableByteChannel;",
+        ),
     ] {
         channels_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
@@ -1274,9 +1305,18 @@ pub(super) fn bootstrap_java_nio(vm: &mut Vm) {
     let mut console_methods = HashMap::new();
     for (name, desc) in [
         ("readLine", "()Ljava/lang/String;"),
-        ("readLine", "(Ljava/lang/String;;[Ljava/lang/Object;)Ljava/lang/String;"),
-        ("printf", "(Ljava/lang/String;[Ljava/lang/Object;)Ljava/io/Console;"),
-        ("format", "(Ljava/lang/String;[Ljava/lang/Object;)Ljava/io/Console;"),
+        (
+            "readLine",
+            "(Ljava/lang/String;;[Ljava/lang/Object;)Ljava/lang/String;",
+        ),
+        (
+            "printf",
+            "(Ljava/lang/String;[Ljava/lang/Object;)Ljava/io/Console;",
+        ),
+        (
+            "format",
+            "(Ljava/lang/String;[Ljava/lang/Object;)Ljava/io/Console;",
+        ),
         ("flush", "()V"),
     ] {
         console_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
@@ -1394,10 +1434,16 @@ pub(super) fn bootstrap_java_nio(vm: &mut Vm) {
     static_fields.insert("READ".to_string(), Value::Reference(read_ref));
     static_fields.insert("WRITE".to_string(), Value::Reference(write_ref));
     static_fields.insert("APPEND".to_string(), Value::Reference(append_ref));
-    static_fields.insert("TRUNCATE_EXISTING".to_string(), Value::Reference(truncate_existing_ref));
+    static_fields.insert(
+        "TRUNCATE_EXISTING".to_string(),
+        Value::Reference(truncate_existing_ref),
+    );
     static_fields.insert("CREATE".to_string(), Value::Reference(create_ref));
     static_fields.insert("CREATE_NEW".to_string(), Value::Reference(create_new_ref));
-    static_fields.insert("DELETE_ON_CLOSE".to_string(), Value::Reference(delete_on_close_ref));
+    static_fields.insert(
+        "DELETE_ON_CLOSE".to_string(),
+        Value::Reference(delete_on_close_ref),
+    );
 
     vm.register_class(RuntimeClass {
         name: "java/nio/file/StandardOpenOption".to_string(),
@@ -1433,43 +1479,52 @@ pub(super) fn bootstrap_other(vm: &mut Vm) {
         ("pageSize", "()I"),
         ("objectFieldOffset", "(Ljava/lang/reflect/Field;)J"),
         ("staticFieldOffset", "(Ljava/lang/reflect/Field;)J"),
-        ("staticFieldBase", "(Ljava/lang/reflect/Field;)Ljava/lang/Object;"),
+        (
+            "staticFieldBase",
+            "(Ljava/lang/reflect/Field;)Ljava/lang/Object;",
+        ),
         ("allocateMemory", "(J)J"),
         ("freeMemory", "(J)V"),
         ("compareAndSetInt", "(Ljava/lang/Object;JII)Z"),
         ("compareAndSetLong", "(Ljava/lang/Object;JJJ)Z"),
-        ("compareAndSetReference", "(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z"),
-        ("compareAndSetObject", "(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z"),
-        ("getReferenceVolatile", "(Ljava/lang/Object;J)Ljava/lang/Object;"),
-        ("putReferenceVolatile", "(Ljava/lang/Object;JLjava/lang/Object;)V"),
+        (
+            "compareAndSetReference",
+            "(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z",
+        ),
+        (
+            "compareAndSetObject",
+            "(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z",
+        ),
+        (
+            "getReferenceVolatile",
+            "(Ljava/lang/Object;J)Ljava/lang/Object;",
+        ),
+        (
+            "putReferenceVolatile",
+            "(Ljava/lang/Object;JLjava/lang/Object;)V",
+        ),
         ("getIntVolatile", "(Ljava/lang/Object;J)I"),
         ("putIntVolatile", "(Ljava/lang/Object;JI)V"),
         ("storeFence", "()V"),
         ("loadFence", "()V"),
         ("fullFence", "()V"),
     ] {
-        unsafe_methods.insert(
-            (name.to_string(), desc.to_string()),
-            ClassMethod::Native,
-        );
+        unsafe_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
     let unsafe_instance_ref = vm.heap.lock().unwrap().allocate(HeapValue::Object {
         class_name: "jdk/internal/misc/Unsafe".to_string(),
         fields: HashMap::new(),
     });
     let mut unsafe_static = HashMap::new();
-    unsafe_static.insert("theUnsafe".to_string(), Value::Reference(unsafe_instance_ref));
+    unsafe_static.insert(
+        "theUnsafe".to_string(),
+        Value::Reference(unsafe_instance_ref),
+    );
     for prim in [
         "BOOLEAN", "BYTE", "SHORT", "CHAR", "INT", "LONG", "FLOAT", "DOUBLE", "OBJECT",
     ] {
-        unsafe_static.insert(
-            format!("ARRAY_{prim}_BASE_OFFSET"),
-            Value::Int(0),
-        );
-        unsafe_static.insert(
-            format!("ARRAY_{prim}_INDEX_SCALE"),
-            Value::Int(1),
-        );
+        unsafe_static.insert(format!("ARRAY_{prim}_BASE_OFFSET"), Value::Int(0));
+        unsafe_static.insert(format!("ARRAY_{prim}_INDEX_SCALE"), Value::Int(1));
     }
     unsafe_static.insert("ADDRESS_SIZE".to_string(), Value::Int(8));
     unsafe_static.insert("INVALID_FIELD_OFFSET".to_string(), Value::Int(-1));
@@ -1616,7 +1671,8 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         ("getThenReset", "()D"),
         ("accumulate", "(D)V"),
     ] {
-        double_accumulator_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+        double_accumulator_methods
+            .insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
     vm.register_class(RuntimeClass {
         name: "java/util/concurrent/atomic/DoubleAccumulator".to_string(),
@@ -1684,11 +1740,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
     });
 
     let mut condition_methods = HashMap::new();
-    for (name, desc) in [
-        ("await", "()V"),
-        ("signal", "()V"),
-        ("signalAll", "()V"),
-    ] {
+    for (name, desc) in [("await", "()V"), ("signal", "()V"), ("signalAll", "()V")] {
         condition_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
     vm.register_class(RuntimeClass {
@@ -1733,7 +1785,8 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         ("setExclusiveOwnerThread", "(Ljava/lang/Thread;)V"),
         ("getExclusiveOwnerThread", "()Ljava/lang/Thread;"),
     ] {
-        abstract_ownable_synchronizer_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+        abstract_ownable_synchronizer_methods
+            .insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
     vm.register_class(RuntimeClass {
         name: "java/util/concurrent/locks/AbstractOwnableSynchronizer".to_string(),
@@ -1754,8 +1807,14 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         ("size", "()I"),
         ("isEmpty", "()Z"),
         ("get", "(Ljava/lang/Object;)Ljava/lang/Object;"),
-        ("put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"),
-        ("putIfAbsent", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"),
+        (
+            "put",
+            "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
+        ),
+        (
+            "putIfAbsent",
+            "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
+        ),
         ("remove", "(Ljava/lang/Object;)Ljava/lang/Object;"),
         ("containsKey", "(Ljava/lang/Object;)Z"),
         ("contains", "(Ljava/lang/Object;)Z"),
@@ -1763,7 +1822,8 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         ("keys", "()Ljava/util/Enumeration;"),
         ("elements", "()Ljava/util/Enumeration;"),
     ] {
-        concurrent_hash_map_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+        concurrent_hash_map_methods
+            .insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
     vm.register_class(RuntimeClass {
         name: "java/util/concurrent/ConcurrentHashMap".to_string(),
@@ -1786,7 +1846,8 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         ("remove", "(Ljava/lang/Object;)Z"),
         ("contains", "(Ljava/lang/Object;)Z"),
     ] {
-        concurrent_linked_queue_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+        concurrent_linked_queue_methods
+            .insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
     vm.register_class(RuntimeClass {
         name: "java/util/concurrent/ConcurrentLinkedQueue".to_string(),
@@ -1814,7 +1875,8 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         ("size", "()I"),
         ("isEmpty", "()Z"),
     ] {
-        concurrent_linked_deque_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+        concurrent_linked_deque_methods
+            .insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
     vm.register_class(RuntimeClass {
         name: "java/util/concurrent/ConcurrentLinkedDeque".to_string(),
@@ -1841,7 +1903,8 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         ("contains", "(Ljava/lang/Object;)Z"),
         ("clear", "()V"),
     ] {
-        copy_on_write_array_list_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+        copy_on_write_array_list_methods
+            .insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
     vm.register_class(RuntimeClass {
         name: "java/util/concurrent/CopyOnWriteArrayList".to_string(),
@@ -1921,7 +1984,10 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
     for (name, desc) in [
         ("<init>", "()V"),
         ("exchange", "(Ljava/lang/Object;)Ljava/lang/Object;"),
-        ("exchange", "(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;"),
+        (
+            "exchange",
+            "(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;",
+        ),
     ] {
         exchanger_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
@@ -1976,7 +2042,8 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         ("clear", "()V"),
         ("contains", "(Ljava/lang/Object;)Z"),
     ] {
-        array_blocking_queue_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+        array_blocking_queue_methods
+            .insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
     vm.register_class(RuntimeClass {
         name: "java/util/concurrent/ArrayBlockingQueue".to_string(),
@@ -1993,9 +2060,15 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         ("<init>", "(I)V"),
         ("<init>", "(Ljava/util/Collection;)V"),
         ("offer", "(Ljava/lang/Object;)Z"),
-        ("offer", "(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z"),
+        (
+            "offer",
+            "(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z",
+        ),
         ("poll", "()Ljava/lang/Object;"),
-        ("poll", "(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;"),
+        (
+            "poll",
+            "(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;",
+        ),
         ("take", "()Ljava/lang/Object;"),
         ("peek", "()Ljava/lang/Object;"),
         ("size", "()I"),
@@ -2004,7 +2077,8 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         ("clear", "()V"),
         ("contains", "(Ljava/lang/Object;)Z"),
     ] {
-        linked_blocking_queue_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+        linked_blocking_queue_methods
+            .insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
     vm.register_class(RuntimeClass {
         name: "java/util/concurrent/LinkedBlockingQueue".to_string(),
@@ -2023,11 +2097,17 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         ("offerFirst", "(Ljava/lang/Object;)Z"),
         ("offerLast", "(Ljava/lang/Object;)Z"),
         ("offer", "(Ljava/lang/Object;)Z"),
-        ("offer", "(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z"),
+        (
+            "offer",
+            "(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z",
+        ),
         ("pollFirst", "()Ljava/lang/Object;"),
         ("pollLast", "()Ljava/lang/Object;"),
         ("poll", "()Ljava/lang/Object;"),
-        ("poll", "(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;"),
+        (
+            "poll",
+            "(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;",
+        ),
         ("takeFirst", "()Ljava/lang/Object;"),
         ("takeLast", "()Ljava/lang/Object;"),
         ("peekFirst", "()Ljava/lang/Object;"),
@@ -2037,7 +2117,8 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         ("clear", "()V"),
         ("contains", "(Ljava/lang/Object;)Z"),
     ] {
-        linked_blocking_deque_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+        linked_blocking_deque_methods
+            .insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
     vm.register_class(RuntimeClass {
         name: "java/util/concurrent/LinkedBlockingDeque".to_string(),
@@ -2053,9 +2134,15 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         ("<init>", "()V"),
         ("<init>", "(Z)V"),
         ("offer", "(Ljava/lang/Object;)Z"),
-        ("offer", "(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z"),
+        (
+            "offer",
+            "(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z",
+        ),
         ("poll", "()Ljava/lang/Object;"),
-        ("poll", "(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;"),
+        (
+            "poll",
+            "(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;",
+        ),
         ("isEmpty", "()Z"),
         ("size", "()I"),
     ] {
@@ -2077,9 +2164,15 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         ("<init>", "(Ljava/util/Collection;)V"),
         ("<init>", "(ILjava/util/Comparator;)V"),
         ("offer", "(Ljava/lang/Object;)Z"),
-        ("offer", "(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z"),
+        (
+            "offer",
+            "(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z",
+        ),
         ("poll", "()Ljava/lang/Object;"),
-        ("poll", "(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;"),
+        (
+            "poll",
+            "(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;",
+        ),
         ("take", "()Ljava/lang/Object;"),
         ("peek", "()Ljava/lang/Object;"),
         ("size", "()I"),
@@ -2087,7 +2180,8 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         ("clear", "()V"),
         ("contains", "(Ljava/lang/Object;)Z"),
     ] {
-        priority_blocking_queue_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+        priority_blocking_queue_methods
+            .insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
     vm.register_class(RuntimeClass {
         name: "java/util/concurrent/PriorityBlockingQueue".to_string(),
@@ -2103,9 +2197,15 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         ("<init>", "()V"),
         ("<init>", "(Ljava/util/Collection;)V"),
         ("offer", "(Ljava/lang/Object;)Z"),
-        ("offer", "(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z"),
+        (
+            "offer",
+            "(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z",
+        ),
         ("poll", "()Ljava/lang/Object;"),
-        ("poll", "(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;"),
+        (
+            "poll",
+            "(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;",
+        ),
         ("take", "()Ljava/lang/Object;"),
         ("peek", "()Ljava/lang/Object;"),
         ("size", "()I"),
@@ -2129,9 +2229,15 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
     for (name, desc) in [
         ("put", "(Ljava/lang/Object;)V"),
         ("offer", "(Ljava/lang/Object;)Z"),
-        ("offer", "(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z"),
+        (
+            "offer",
+            "(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z",
+        ),
         ("take", "()Ljava/lang/Object;"),
-        ("poll", "(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;"),
+        (
+            "poll",
+            "(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;",
+        ),
     ] {
         blocking_queue_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
@@ -2161,9 +2267,18 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         ("isShutdown", "()Z"),
         ("isTerminated", "()Z"),
         ("awaitTermination", "(JLjava/util/concurrent/TimeUnit;)Z"),
-        ("submit", "(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;"),
-        ("submit", "(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/Future;"),
-        ("submit", "(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/Future;"),
+        (
+            "submit",
+            "(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;",
+        ),
+        (
+            "submit",
+            "(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/Future;",
+        ),
+        (
+            "submit",
+            "(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/Future;",
+        ),
     ] {
         executor_service_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
@@ -2181,7 +2296,10 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         super_class: None,
         methods: {
             let mut m = HashMap::new();
-            m.insert(("execute".to_string(), "(Ljava/lang/Runnable;)V".to_string()), ClassMethod::Native);
+            m.insert(
+                ("execute".to_string(), "(Ljava/lang/Runnable;)V".to_string()),
+                ClassMethod::Native,
+            );
             m
         },
         static_fields: HashMap::new(),
@@ -2191,11 +2309,26 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
 
     let mut thread_pool_executor_methods = HashMap::new();
     for (name, desc) in [
-        ("<init>", "(ILjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;)V"),
-        ("<init>", "(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;)V"),
-        ("<init>", "(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;Ljava/lang/ThreadFactory;)V"),
-        ("<init>", "(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;Ljava/util/concurrent/RejectedExecutionHandler;)V"),
-        ("<init>", "(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;Ljava/lang/ThreadFactory;Ljava/util/concurrent/RejectedExecutionHandler;)V"),
+        (
+            "<init>",
+            "(ILjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;)V",
+        ),
+        (
+            "<init>",
+            "(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;)V",
+        ),
+        (
+            "<init>",
+            "(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;Ljava/lang/ThreadFactory;)V",
+        ),
+        (
+            "<init>",
+            "(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;Ljava/util/concurrent/RejectedExecutionHandler;)V",
+        ),
+        (
+            "<init>",
+            "(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;Ljava/lang/ThreadFactory;Ljava/util/concurrent/RejectedExecutionHandler;)V",
+        ),
         ("execute", "(Ljava/lang/Runnable;)V"),
         ("shutdown", "()V"),
         ("shutdownNow", "()Ljava/util/List;"),
@@ -2203,7 +2336,10 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         ("isTerminated", "()Z"),
         ("isTerminating", "()Z"),
         ("awaitTermination", "(JLjava/util/concurrent/TimeUnit;)Z"),
-        ("submit", "(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;"),
+        (
+            "submit",
+            "(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;",
+        ),
         ("getPoolSize", "()I"),
         ("getActiveCount", "()I"),
         ("getTaskCount", "()J"),
@@ -2211,7 +2347,8 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         ("remove", "(Ljava/lang/Runnable;)Z"),
         ("purge", "()V"),
     ] {
-        thread_pool_executor_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+        thread_pool_executor_methods
+            .insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
     vm.register_class(RuntimeClass {
         name: "java/util/concurrent/ThreadPoolExecutor".to_string(),
@@ -2224,15 +2361,31 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
 
     let mut abstract_executor_service_methods = HashMap::new();
     for (name, desc) in [
-        ("submit", "(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;"),
-        ("submit", "(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/Future;"),
-        ("submit", "(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/Future;"),
+        (
+            "submit",
+            "(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;",
+        ),
+        (
+            "submit",
+            "(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/Future;",
+        ),
+        (
+            "submit",
+            "(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/Future;",
+        ),
         ("invokeAll", "(Ljava/util/Collection;)Ljava/util/List;"),
-        ("invokeAll", "(Ljava/util/Collection;JLjava/util/concurrent/TimeUnit;)Ljava/util/List;"),
+        (
+            "invokeAll",
+            "(Ljava/util/Collection;JLjava/util/concurrent/TimeUnit;)Ljava/util/List;",
+        ),
         ("invokeAny", "(Ljava/util/Collection;)Ljava/lang/Object;"),
-        ("invokeAny", "(Ljava/util/Collection;JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;"),
+        (
+            "invokeAny",
+            "(Ljava/util/Collection;JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;",
+        ),
     ] {
-        abstract_executor_service_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+        abstract_executor_service_methods
+            .insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
     vm.register_class(RuntimeClass {
         name: "java/util/concurrent/AbstractExecutorService".to_string(),
@@ -2245,11 +2398,26 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
 
     let mut executors_methods = HashMap::new();
     for (name, desc) in [
-        ("newSingleThreadExecutor", "()Ljava/util/concurrent/ExecutorService;"),
-        ("newFixedThreadPool", "(I)Ljava/util/concurrent/ExecutorService;"),
-        ("newCachedThreadPool", "()Ljava/util/concurrent/ExecutorService;"),
-        ("newSingleThreadScheduledExecutor", "()Ljava/util/concurrent/ScheduledExecutorService;"),
-        ("newScheduledThreadPool", "(I)Ljava/util/concurrent/ScheduledExecutorService;"),
+        (
+            "newSingleThreadExecutor",
+            "()Ljava/util/concurrent/ExecutorService;",
+        ),
+        (
+            "newFixedThreadPool",
+            "(I)Ljava/util/concurrent/ExecutorService;",
+        ),
+        (
+            "newCachedThreadPool",
+            "()Ljava/util/concurrent/ExecutorService;",
+        ),
+        (
+            "newSingleThreadScheduledExecutor",
+            "()Ljava/util/concurrent/ScheduledExecutorService;",
+        ),
+        (
+            "newScheduledThreadPool",
+            "(I)Ljava/util/concurrent/ScheduledExecutorService;",
+        ),
     ] {
         executors_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
@@ -2265,12 +2433,25 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
     // --- ScheduledExecutorService ---
     let mut scheduled_executor_service_methods = HashMap::new();
     for (name, desc) in [
-        ("schedule", "(Ljava/lang/Runnable;JLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/ScheduledFuture;"),
-        ("schedule", "(Ljava/util/concurrent/Callable;JLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/ScheduledFuture;"),
-        ("scheduleAtFixedRate", "(Ljava/lang/Runnable;JJLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/ScheduledFuture;"),
-        ("scheduleWithFixedDelay", "(Ljava/lang/Runnable;JJLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/ScheduledFuture;"),
+        (
+            "schedule",
+            "(Ljava/lang/Runnable;JLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/ScheduledFuture;",
+        ),
+        (
+            "schedule",
+            "(Ljava/util/concurrent/Callable;JLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/ScheduledFuture;",
+        ),
+        (
+            "scheduleAtFixedRate",
+            "(Ljava/lang/Runnable;JJLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/ScheduledFuture;",
+        ),
+        (
+            "scheduleWithFixedDelay",
+            "(Ljava/lang/Runnable;JJLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/ScheduledFuture;",
+        ),
     ] {
-        scheduled_executor_service_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+        scheduled_executor_service_methods
+            .insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
     vm.register_class(RuntimeClass {
         name: "java/util/concurrent/ScheduledExecutorService".to_string(),
@@ -2282,7 +2463,13 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
     });
 
     let mut scheduled_future_methods = HashMap::new();
-    scheduled_future_methods.insert(("getDelay".to_string(), "(Ljava/util/concurrent/TimeUnit;)J".to_string()), ClassMethod::Native);
+    scheduled_future_methods.insert(
+        (
+            "getDelay".to_string(),
+            "(Ljava/util/concurrent/TimeUnit;)J".to_string(),
+        ),
+        ClassMethod::Native,
+    );
     vm.register_class(RuntimeClass {
         name: "java/util/concurrent/ScheduledFuture".to_string(),
         super_class: None,
@@ -2293,7 +2480,13 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
     });
 
     let mut delayed_methods = HashMap::new();
-    delayed_methods.insert(("getDelay".to_string(), "(Ljava/util/concurrent/TimeUnit;)J".to_string()), ClassMethod::Native);
+    delayed_methods.insert(
+        (
+            "getDelay".to_string(),
+            "(Ljava/util/concurrent/TimeUnit;)J".to_string(),
+        ),
+        ClassMethod::Native,
+    );
     vm.register_class(RuntimeClass {
         name: "java/util/concurrent/Delayed".to_string(),
         super_class: None,
@@ -2308,10 +2501,22 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
     for (name, desc) in [
         ("<init>", "(I)V"),
         ("<init>", "(ILjava/util/concurrent/ForkJoinPool$Factory;)V"),
-        ("<init>", "(ILjava/util/concurrent/ForkJoinPool$Factory;Ljava/util/concurrent/RejectedExecutionHandler;Z)V"),
-        ("submit", "(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;"),
-        ("submit", "(Ljava/util/concurrent/ForkJoinTask;)Ljava/util/concurrent/ForkJoinTask;"),
-        ("invoke", "(Ljava/util/concurrent/ForkJoinTask;)Ljava/lang/Object;"),
+        (
+            "<init>",
+            "(ILjava/util/concurrent/ForkJoinPool$Factory;Ljava/util/concurrent/RejectedExecutionHandler;Z)V",
+        ),
+        (
+            "submit",
+            "(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;",
+        ),
+        (
+            "submit",
+            "(Ljava/util/concurrent/ForkJoinTask;)Ljava/util/concurrent/ForkJoinTask;",
+        ),
+        (
+            "invoke",
+            "(Ljava/util/concurrent/ForkJoinTask;)Ljava/lang/Object;",
+        ),
         ("execute", "(Ljava/lang/Runnable;)V"),
         ("shutdown", "()V"),
         ("shutdownNow", "()Ljava/util/List;"),
@@ -2351,7 +2556,10 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         ("quietlyJoin", "()V"),
         ("quietlyFork", "()V"),
         ("get", "()Ljava/lang/Object;"),
-        ("get", "(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;"),
+        (
+            "get",
+            "(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;",
+        ),
     ] {
         fork_join_task_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
@@ -2398,10 +2606,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
     });
 
     let mut recursive_action_methods = HashMap::new();
-    for (name, desc) in [
-        ("compute", "()V"),
-        ("getRawResult", "()Ljava/lang/Object;"),
-    ] {
+    for (name, desc) in [("compute", "()V"), ("getRawResult", "()Ljava/lang/Object;")] {
         recursive_action_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
     vm.register_class(RuntimeClass {
@@ -2417,7 +2622,10 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
     let mut future_methods = HashMap::new();
     for (name, desc) in [
         ("get", "()Ljava/lang/Object;"),
-        ("get", "(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;"),
+        (
+            "get",
+            "(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;",
+        ),
         ("isDone", "()Z"),
         ("isCancelled", "()Z"),
         ("cancel", "(Z)Z"),
@@ -2437,21 +2645,46 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
     for (name, desc) in [
         ("<init>", "()V"),
         ("get", "()Ljava/lang/Object;"),
-        ("get", "(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;"),
+        (
+            "get",
+            "(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;",
+        ),
         ("isDone", "()Z"),
         ("isCancelled", "()Z"),
         ("cancel", "(Z)Z"),
         ("complete", "(Ljava/lang/Object;)Z"),
-        ("completedFuture", "(Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;"),
-        ("runAsync", "(Ljava/lang/Runnable;)Ljava/util/concurrent/CompletableFuture;"),
-        ("supplyAsync", "(Ljava/util/function/Supplier;)Ljava/util/concurrent/CompletableFuture;"),
-        ("thenApply", "(Ljava/util/function/Function;)Ljava/util/concurrent/CompletableFuture;"),
-        ("thenApplyAsync", "(Ljava/util/function/Function;)Ljava/util/concurrent/CompletableFuture;"),
-        ("thenAccept", "(Ljava/util/function/Consumer;)Ljava/util/concurrent/CompletableFuture;"),
-        ("thenRun", "(Ljava/lang/Runnable;)Ljava/util/concurrent/CompletableFuture;"),
+        (
+            "completedFuture",
+            "(Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;",
+        ),
+        (
+            "runAsync",
+            "(Ljava/lang/Runnable;)Ljava/util/concurrent/CompletableFuture;",
+        ),
+        (
+            "supplyAsync",
+            "(Ljava/util/function/Supplier;)Ljava/util/concurrent/CompletableFuture;",
+        ),
+        (
+            "thenApply",
+            "(Ljava/util/function/Function;)Ljava/util/concurrent/CompletableFuture;",
+        ),
+        (
+            "thenApplyAsync",
+            "(Ljava/util/function/Function;)Ljava/util/concurrent/CompletableFuture;",
+        ),
+        (
+            "thenAccept",
+            "(Ljava/util/function/Consumer;)Ljava/util/concurrent/CompletableFuture;",
+        ),
+        (
+            "thenRun",
+            "(Ljava/lang/Runnable;)Ljava/util/concurrent/CompletableFuture;",
+        ),
         ("join", "()Ljava/lang/Object;"),
     ] {
-        completable_future_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+        completable_future_methods
+            .insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
     vm.register_class(RuntimeClass {
         name: "java/util/concurrent/CompletableFuture".to_string(),
@@ -2459,22 +2692,58 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: completable_future_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
-        interfaces: vec!["java/util/concurrent/Future".to_string(), "java/util/concurrent/CompletionStage".to_string()],
+        interfaces: vec![
+            "java/util/concurrent/Future".to_string(),
+            "java/util/concurrent/CompletionStage".to_string(),
+        ],
     });
 
     let mut completion_stage_methods = HashMap::new();
     for (name, desc) in [
-        ("thenApply", "(Ljava/util/function/Function;)Ljava/util/concurrent/CompletionStage;"),
-        ("thenApplyAsync", "(Ljava/util/function/Function;)Ljava/util/concurrent/CompletionStage;"),
-        ("thenAccept", "(Ljava/util/function/Consumer;)Ljava/util/concurrent/CompletionStage;"),
-        ("thenAcceptAsync", "(Ljava/util/function/Consumer;)Ljava/util/concurrent/CompletionStage;"),
-        ("thenRun", "(Ljava/lang/Runnable;)Ljava/util/concurrent/CompletionStage;"),
-        ("thenRunAsync", "(Ljava/lang/Runnable;)Ljava/util/concurrent/CompletionStage;"),
-        ("thenCombine", "(Ljava/util/concurrent/CompletionStage;Ljava/util/function/BiFunction;)Ljava/util/concurrent/CompletionStage;"),
-        ("thenCompose", "(Ljava/util/function/Function;)Ljava/util/concurrent/CompletionStage;"),
-        ("exceptionally", "(Ljava/util/function/Function;)Ljava/util/concurrent/CompletionStage;"),
-        ("whenComplete", "(Ljava/util/function/BiConsumer;)Ljava/util/concurrent/CompletionStage;"),
-        ("handle", "(Ljava/util/function/BiFunction;)Ljava/util/concurrent/CompletionStage;"),
+        (
+            "thenApply",
+            "(Ljava/util/function/Function;)Ljava/util/concurrent/CompletionStage;",
+        ),
+        (
+            "thenApplyAsync",
+            "(Ljava/util/function/Function;)Ljava/util/concurrent/CompletionStage;",
+        ),
+        (
+            "thenAccept",
+            "(Ljava/util/function/Consumer;)Ljava/util/concurrent/CompletionStage;",
+        ),
+        (
+            "thenAcceptAsync",
+            "(Ljava/util/function/Consumer;)Ljava/util/concurrent/CompletionStage;",
+        ),
+        (
+            "thenRun",
+            "(Ljava/lang/Runnable;)Ljava/util/concurrent/CompletionStage;",
+        ),
+        (
+            "thenRunAsync",
+            "(Ljava/lang/Runnable;)Ljava/util/concurrent/CompletionStage;",
+        ),
+        (
+            "thenCombine",
+            "(Ljava/util/concurrent/CompletionStage;Ljava/util/function/BiFunction;)Ljava/util/concurrent/CompletionStage;",
+        ),
+        (
+            "thenCompose",
+            "(Ljava/util/function/Function;)Ljava/util/concurrent/CompletionStage;",
+        ),
+        (
+            "exceptionally",
+            "(Ljava/util/function/Function;)Ljava/util/concurrent/CompletionStage;",
+        ),
+        (
+            "whenComplete",
+            "(Ljava/util/function/BiConsumer;)Ljava/util/concurrent/CompletionStage;",
+        ),
+        (
+            "handle",
+            "(Ljava/util/function/BiFunction;)Ljava/util/concurrent/CompletionStage;",
+        ),
     ] {
         completion_stage_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
@@ -2516,14 +2785,18 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         ("size", "()I"),
         ("isEmpty", "()Z"),
         ("get", "(Ljava/lang/Object;)Ljava/lang/Object;"),
-        ("put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"),
+        (
+            "put",
+            "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
+        ),
         ("remove", "(Ljava/lang/Object;)Ljava/lang/Object;"),
         ("containsKey", "(Ljava/lang/Object;)Z"),
         ("clear", "()V"),
         ("firstKey", "()Ljava/lang/Object;"),
         ("lastKey", "()Ljava/lang/Object;"),
     ] {
-        concurrent_skip_list_map_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+        concurrent_skip_list_map_methods
+            .insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
     vm.register_class(RuntimeClass {
         name: "java/util/concurrent/ConcurrentSkipListMap".to_string(),
@@ -2549,7 +2822,8 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         ("first", "()Ljava/lang/Object;"),
         ("last", "()Ljava/lang/Object;"),
     ] {
-        concurrent_skip_list_set_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+        concurrent_skip_list_set_methods
+            .insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
     vm.register_class(RuntimeClass {
         name: "java/util/concurrent/ConcurrentSkipListSet".to_string(),
@@ -2562,7 +2836,10 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
 
     let mut key_set_view_methods = HashMap::new();
     for (name, desc) in [
-        ("<init>", "(Ljava/util/concurrent/ConcurrentHashMap;Ljava/lang/Object;)V"),
+        (
+            "<init>",
+            "(Ljava/util/concurrent/ConcurrentHashMap;Ljava/lang/Object;)V",
+        ),
         ("size", "()I"),
         ("isEmpty", "()Z"),
         ("contains", "(Ljava/lang/Object;)Z"),
@@ -2587,13 +2864,17 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         ("<init>", "()V"),
         ("<init>", "(Ljava/util/concurrent/ExecutorService;I)V"),
         ("submit", "(Ljava/lang/Object;)I"),
-        ("offer", "(Ljava/lang/Object;Ljava/util/concurrent/TimeUnit;)I"),
+        (
+            "offer",
+            "(Ljava/lang/Object;Ljava/util/concurrent/TimeUnit;)I",
+        ),
         ("close", "()V"),
         ("isClosed", "()Z"),
         ("hasSubscribers", "()Z"),
         ("getSubscriberCount", "()I"),
     ] {
-        submission_publisher_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+        submission_publisher_methods
+            .insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
     vm.register_class(RuntimeClass {
         name: "java/util/concurrent/SubmissionPublisher".to_string(),
@@ -2623,10 +2904,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
     });
 
     let mut flow_subscription_methods = HashMap::new();
-    for (name, desc) in [
-        ("request", "(J)V"),
-        ("cancel", "()V"),
-    ] {
+    for (name, desc) in [("request", "(J)V"), ("cancel", "()V")] {
         flow_subscription_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
     vm.register_class(RuntimeClass {
@@ -2653,11 +2931,20 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: flow_processor_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
-        interfaces: vec!["java/util/concurrent/Flow$Subscriber".to_string(), "java/util/concurrent/Flow$Publisher".to_string()],
+        interfaces: vec![
+            "java/util/concurrent/Flow$Subscriber".to_string(),
+            "java/util/concurrent/Flow$Publisher".to_string(),
+        ],
     });
 
     let mut flow_publisher_methods = HashMap::new();
-    flow_publisher_methods.insert(("subscribe".to_string(), "(Ljava/util/concurrent/Flow$Subscriber;)V".to_string()), ClassMethod::Native);
+    flow_publisher_methods.insert(
+        (
+            "subscribe".to_string(),
+            "(Ljava/util/concurrent/Flow$Subscriber;)V".to_string(),
+        ),
+        ClassMethod::Native,
+    );
     vm.register_class(RuntimeClass {
         name: "java/util/concurrent/Flow$Publisher".to_string(),
         super_class: None,
@@ -2669,7 +2956,10 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
 
     // --- Callable and ThreadFactory ---
     let mut callable_methods = HashMap::new();
-    callable_methods.insert(("call".to_string(), "()Ljava/lang/Object;".to_string()), ClassMethod::Native);
+    callable_methods.insert(
+        ("call".to_string(), "()Ljava/lang/Object;".to_string()),
+        ClassMethod::Native,
+    );
     vm.register_class(RuntimeClass {
         name: "java/util/concurrent/Callable".to_string(),
         super_class: None,
@@ -2680,7 +2970,13 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
     });
 
     let mut thread_factory_methods = HashMap::new();
-    thread_factory_methods.insert(("newThread".to_string(), "(Ljava/lang/Runnable;)Ljava/lang/Thread;".to_string()), ClassMethod::Native);
+    thread_factory_methods.insert(
+        (
+            "newThread".to_string(),
+            "(Ljava/lang/Runnable;)Ljava/lang/Thread;".to_string(),
+        ),
+        ClassMethod::Native,
+    );
     vm.register_class(RuntimeClass {
         name: "java/util/concurrent/ThreadFactory".to_string(),
         super_class: None,
@@ -2691,7 +2987,13 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
     });
 
     let mut rejected_execution_handler_methods = HashMap::new();
-    rejected_execution_handler_methods.insert(("rejectedExecution".to_string(), "(Ljava/lang/Runnable;Ljava/util/concurrent/ThreadPoolExecutor;)V".to_string()), ClassMethod::Native);
+    rejected_execution_handler_methods.insert(
+        (
+            "rejectedExecution".to_string(),
+            "(Ljava/lang/Runnable;Ljava/util/concurrent/ThreadPoolExecutor;)V".to_string(),
+        ),
+        ClassMethod::Native,
+    );
     vm.register_class(RuntimeClass {
         name: "java/util/concurrent/RejectedExecutionHandler".to_string(),
         super_class: None,
@@ -2706,9 +3008,18 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
     for (name, desc) in [
         ("get", "(Ljava/lang/Object;)Ljava/lang/Object;"),
         ("set", "(Ljava/lang/Object;Ljava/lang/Object;)V"),
-        ("compareAndSet", "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Z"),
-        ("weakCompareAndSet", "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Z"),
-        ("getAndSet", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"),
+        (
+            "compareAndSet",
+            "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Z",
+        ),
+        (
+            "weakCompareAndSet",
+            "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Z",
+        ),
+        (
+            "getAndSet",
+            "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
+        ),
     ] {
         varhandle_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }

@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, VecDeque};
 use crate::bytecode::Opcode;
 use crate::classfile::VerificationTypeInfo;
 
-use super::{Method, VmError, Value};
+use super::{Method, Value, VmError};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum VerifyType {
@@ -88,8 +88,7 @@ pub fn verify_method(method: &Method) -> Result<(), VmError> {
                 &mut states[handler.handler_pc as usize],
                 handler_state,
                 handler.handler_pc as usize,
-            )?
-            {
+            )? {
                 queue.push_back(handler.handler_pc as usize);
             }
         }
@@ -146,7 +145,11 @@ fn scan_method(method: &Method) -> Result<BTreeMap<usize, DecodedInstruction>, V
             Opcode::Invokedynamic => {
                 validate_invoke_dynamic_index(method, insn.cp_index.unwrap(), pc)?;
             }
-            Opcode::New | Opcode::Anewarray | Opcode::Checkcast | Opcode::Instanceof | Opcode::Multianewarray => {
+            Opcode::New
+            | Opcode::Anewarray
+            | Opcode::Checkcast
+            | Opcode::Instanceof
+            | Opcode::Multianewarray => {
                 validate_class_index(method, insn.cp_index.unwrap(), pc)?;
             }
             _ => {}
@@ -305,7 +308,10 @@ fn initial_frame(method: &Method) -> Result<FrameState, VmError> {
     let (params, _) = parse_method_descriptor(&method.descriptor)?;
     for ty in params {
         if index >= locals.len() {
-            return Err(verification_error(0, "descriptor requires more locals than max_locals"));
+            return Err(verification_error(
+                0,
+                "descriptor requires more locals than max_locals",
+            ));
         }
         locals[index] = ty;
         index += 1;
@@ -347,11 +353,15 @@ fn apply_instruction(
         | Opcode::Iconst5
         | Opcode::Bipush
         | Opcode::Sipush => push(state, VerifyType::Int, insn.pc, method.max_stack)?,
-        Opcode::Lconst0 | Opcode::Lconst1 => push(state, VerifyType::Long, insn.pc, method.max_stack)?,
+        Opcode::Lconst0 | Opcode::Lconst1 => {
+            push(state, VerifyType::Long, insn.pc, method.max_stack)?
+        }
         Opcode::Fconst0 | Opcode::Fconst1 | Opcode::Fconst2 => {
             push(state, VerifyType::Float, insn.pc, method.max_stack)?
         }
-        Opcode::Dconst0 | Opcode::Dconst1 => push(state, VerifyType::Double, insn.pc, method.max_stack)?,
+        Opcode::Dconst0 | Opcode::Dconst1 => {
+            push(state, VerifyType::Double, insn.pc, method.max_stack)?
+        }
         Opcode::Ldc | Opcode::LdcW | Opcode::Ldc2W => {
             let ty = constant_type(method, insn.cp_index.unwrap(), insn.pc)?;
             push(state, ty, insn.pc, method.max_stack)?;
@@ -401,7 +411,12 @@ fn apply_instruction(
         Opcode::Dstore | Opcode::Dstore0 | Opcode::Dstore1 | Opcode::Dstore2 | Opcode::Dstore3 => {
             let ty = pop(state, insn.pc)?;
             require_type(insn.pc, &ty, &VerifyType::Double)?;
-            store_local(state, insn.local_index.unwrap(), VerifyType::Double, insn.pc)?;
+            store_local(
+                state,
+                insn.local_index.unwrap(),
+                VerifyType::Double,
+                insn.pc,
+            )?;
         }
         Opcode::Astore | Opcode::Astore0 | Opcode::Astore1 | Opcode::Astore2 | Opcode::Astore3 => {
             let ty = pop(state, insn.pc)?;
@@ -432,7 +447,12 @@ fn apply_instruction(
         Opcode::Aaload => {
             pop_expect_int(state, insn.pc)?;
             pop_expect_reference(state, insn.pc)?;
-            push(state, VerifyType::Reference(None), insn.pc, method.max_stack)?;
+            push(
+                state,
+                VerifyType::Reference(None),
+                insn.pc,
+                method.max_stack,
+            )?;
         }
 
         Opcode::Iastore | Opcode::Bastore | Opcode::Castore | Opcode::Sastore => {
@@ -596,27 +616,43 @@ fn apply_instruction(
 
         Opcode::I2l | Opcode::F2l | Opcode::D2l => {
             let src = pop(state, insn.pc)?;
-            require_one_of(insn.pc, &src, &[VerifyType::Int, VerifyType::Float, VerifyType::Double])?;
+            require_one_of(
+                insn.pc,
+                &src,
+                &[VerifyType::Int, VerifyType::Float, VerifyType::Double],
+            )?;
             push(state, VerifyType::Long, insn.pc, method.max_stack)?;
         }
         Opcode::I2f | Opcode::L2f | Opcode::D2f => {
             let src = pop(state, insn.pc)?;
-            require_one_of(insn.pc, &src, &[VerifyType::Int, VerifyType::Long, VerifyType::Double])?;
+            require_one_of(
+                insn.pc,
+                &src,
+                &[VerifyType::Int, VerifyType::Long, VerifyType::Double],
+            )?;
             push(state, VerifyType::Float, insn.pc, method.max_stack)?;
         }
         Opcode::I2d | Opcode::L2d | Opcode::F2d => {
             let src = pop(state, insn.pc)?;
-            require_one_of(insn.pc, &src, &[VerifyType::Int, VerifyType::Long, VerifyType::Float])?;
+            require_one_of(
+                insn.pc,
+                &src,
+                &[VerifyType::Int, VerifyType::Long, VerifyType::Float],
+            )?;
             push(state, VerifyType::Double, insn.pc, method.max_stack)?;
         }
-        Opcode::L2i
-        | Opcode::F2i
-        | Opcode::D2i
-        | Opcode::I2b
-        | Opcode::I2c
-        | Opcode::I2s => {
+        Opcode::L2i | Opcode::F2i | Opcode::D2i | Opcode::I2b | Opcode::I2c | Opcode::I2s => {
             let src = pop(state, insn.pc)?;
-            require_one_of(insn.pc, &src, &[VerifyType::Long, VerifyType::Float, VerifyType::Double, VerifyType::Int])?;
+            require_one_of(
+                insn.pc,
+                &src,
+                &[
+                    VerifyType::Long,
+                    VerifyType::Float,
+                    VerifyType::Double,
+                    VerifyType::Int,
+                ],
+            )?;
             push(state, VerifyType::Int, insn.pc, method.max_stack)?;
         }
 
@@ -675,14 +711,19 @@ fn apply_instruction(
                     return Err(verification_error(
                         insn.pc,
                         format!("ret expects returnAddress local, got {}", type_name(&ty)),
-                    ))
+                    ));
                 }
             }
         }
 
         Opcode::Getstatic => {
             let field = method.field_refs[insn.cp_index.unwrap()].as_ref().unwrap();
-            push(state, parse_field_descriptor(&field.descriptor)?, insn.pc, method.max_stack)?;
+            push(
+                state,
+                parse_field_descriptor(&field.descriptor)?,
+                insn.pc,
+                method.max_stack,
+            )?;
         }
         Opcode::Putstatic => {
             let field = method.field_refs[insn.cp_index.unwrap()].as_ref().unwrap();
@@ -693,7 +734,12 @@ fn apply_instruction(
         Opcode::Getfield => {
             let field = method.field_refs[insn.cp_index.unwrap()].as_ref().unwrap();
             pop_expect_reference(state, insn.pc)?;
-            push(state, parse_field_descriptor(&field.descriptor)?, insn.pc, method.max_stack)?;
+            push(
+                state,
+                parse_field_descriptor(&field.descriptor)?,
+                insn.pc,
+                method.max_stack,
+            )?;
         }
         Opcode::Putfield => {
             let field = method.field_refs[insn.cp_index.unwrap()].as_ref().unwrap();
@@ -703,7 +749,10 @@ fn apply_instruction(
             pop_expect_reference(state, insn.pc)?;
         }
 
-        Opcode::Invokevirtual | Opcode::Invokestatic | Opcode::Invokeinterface | Opcode::Invokespecial => {
+        Opcode::Invokevirtual
+        | Opcode::Invokestatic
+        | Opcode::Invokeinterface
+        | Opcode::Invokespecial => {
             let method_ref = method.method_refs[insn.cp_index.unwrap()].as_ref().unwrap();
             let (args, ret) = parse_method_descriptor(&method_ref.descriptor)?;
             for expected in args.iter().rev() {
@@ -752,7 +801,12 @@ fn apply_instruction(
             for _ in 0..dims {
                 pop_expect_int(state, insn.pc)?;
             }
-            push(state, VerifyType::Reference(None), insn.pc, method.max_stack)?;
+            push(
+                state,
+                VerifyType::Reference(None),
+                insn.pc,
+                method.max_stack,
+            )?;
         }
         Opcode::Arraylength => {
             pop_expect_reference(state, insn.pc)?;
@@ -765,7 +819,12 @@ fn apply_instruction(
         Opcode::Checkcast => {
             pop_expect_reference(state, insn.pc)?;
             let target = method.reference_classes[insn.cp_index.unwrap()].clone();
-            push(state, VerifyType::Reference(target), insn.pc, method.max_stack)?;
+            push(
+                state,
+                VerifyType::Reference(target),
+                insn.pc,
+                method.max_stack,
+            )?;
         }
         Opcode::Instanceof => {
             pop_expect_reference(state, insn.pc)?;
@@ -806,7 +865,10 @@ fn apply_instruction(
         }
         Opcode::Return => {
             if ret_ty.is_some() {
-                return Err(verification_error(insn.pc, "void return in non-void method"));
+                return Err(verification_error(
+                    insn.pc,
+                    "void return in non-void method",
+                ));
             }
             state.stack.clear();
         }
@@ -819,7 +881,10 @@ fn apply_instruction(
 
 fn decode_instruction(code: &[u8], pc: usize) -> Result<DecodedInstruction, VmError> {
     let opcode_byte = *code.get(pc).ok_or(VmError::UnexpectedEof { pc })?;
-    let opcode = Opcode::from_byte(opcode_byte).ok_or(VmError::InvalidOpcode { opcode: opcode_byte, pc })?;
+    let opcode = Opcode::from_byte(opcode_byte).ok_or(VmError::InvalidOpcode {
+        opcode: opcode_byte,
+        pc,
+    })?;
     let mut insn = DecodedInstruction {
         pc,
         next_pc: pc + 1,
@@ -927,12 +992,14 @@ fn decode_instruction(code: &[u8], pc: usize) -> Result<DecodedInstruction, VmEr
         | Opcode::Ifnonnull => {
             let offset = read_i16(code, pc + 1)? as isize;
             insn.next_pc += 2;
-            insn.branch_targets.push(branch_target(pc, offset, code.len())?);
+            insn.branch_targets
+                .push(branch_target(pc, offset, code.len())?);
         }
         Opcode::GotoW | Opcode::JsrW => {
             let offset = read_i32(code, pc + 1)? as isize;
             insn.next_pc += 4;
-            insn.branch_targets.push(branch_target(pc, offset, code.len())?);
+            insn.branch_targets
+                .push(branch_target(pc, offset, code.len())?);
         }
         Opcode::Ret => {
             insn.local_index = Some(read_u8(code, pc + 1)? as usize);
@@ -968,10 +1035,12 @@ fn decode_instruction(code: &[u8], pc: usize) -> Result<DecodedInstruction, VmEr
             let low = read_i32(code, pos + 4)?;
             let high = read_i32(code, pos + 8)?;
             pos += 12;
-            insn.branch_targets.push(branch_target(pc, default, code.len())?);
+            insn.branch_targets
+                .push(branch_target(pc, default, code.len())?);
             for _ in low..=high {
                 let offset = read_i32(code, pos)? as isize;
-                insn.branch_targets.push(branch_target(pc, offset, code.len())?);
+                insn.branch_targets
+                    .push(branch_target(pc, offset, code.len())?);
                 pos += 4;
             }
             insn.next_pc = pos;
@@ -982,11 +1051,13 @@ fn decode_instruction(code: &[u8], pc: usize) -> Result<DecodedInstruction, VmEr
             let default = read_i32(code, pos)? as isize;
             let npairs = read_i32(code, pos + 4)? as usize;
             pos += 8;
-            insn.branch_targets.push(branch_target(pc, default, code.len())?);
+            insn.branch_targets
+                .push(branch_target(pc, default, code.len())?);
             for _ in 0..npairs {
                 let _key = read_i32(code, pos)?;
                 let offset = read_i32(code, pos + 4)? as isize;
-                insn.branch_targets.push(branch_target(pc, offset, code.len())?);
+                insn.branch_targets
+                    .push(branch_target(pc, offset, code.len())?);
                 pos += 8;
             }
             insn.next_pc = pos;
@@ -1060,18 +1131,20 @@ fn merge_state(
 
             let mut changed = false;
             for i in 0..max_len {
-                let merged = merge_type(&existing.locals[i], &incoming.locals[i]).map_err(|reason| {
-                    verification_error(pc, format!("local {i} merge failed: {reason}"))
-                })?;
+                let merged =
+                    merge_type(&existing.locals[i], &incoming.locals[i]).map_err(|reason| {
+                        verification_error(pc, format!("local {i} merge failed: {reason}"))
+                    })?;
                 if merged != existing.locals[i] {
                     existing.locals[i] = merged;
                     changed = true;
                 }
             }
             for i in 0..existing.stack.len() {
-                let merged = merge_type(&existing.stack[i], &incoming.stack[i]).map_err(|reason| {
-                    verification_error(pc, format!("stack {i} merge failed: {reason}"))
-                })?;
+                let merged =
+                    merge_type(&existing.stack[i], &incoming.stack[i]).map_err(|reason| {
+                        verification_error(pc, format!("stack {i} merge failed: {reason}"))
+                    })?;
                 if merged != existing.stack[i] {
                     existing.stack[i] = merged;
                     changed = true;
@@ -1097,7 +1170,7 @@ fn merge_type(left: &VerifyType, right: &VerifyType) -> Result<VerifyType, Strin
                 "incompatible types {} and {}",
                 type_name(a),
                 type_name(b)
-            ))
+            ));
         }
     })
 }
@@ -1116,7 +1189,9 @@ fn stack_map_type(method: &Method, info: &VerificationTypeInfo) -> Result<Verify
                 .reference_classes
                 .get(*index as usize)
                 .and_then(|value| value.clone())
-                .ok_or_else(|| verification_error(0, format!("invalid StackMapTable class index {index}")))?;
+                .ok_or_else(|| {
+                    verification_error(0, format!("invalid StackMapTable class index {index}"))
+                })?;
             VerifyType::Reference(Some(class))
         }
         VerificationTypeInfo::Uninitialized(offset) => VerifyType::Uninitialized(*offset),
@@ -1151,28 +1226,55 @@ fn constant_type(method: &Method, index: usize, _pc: usize) -> Result<VerifyType
 
 fn validate_constant_index(method: &Method, index: usize, pc: usize) -> Result<(), VmError> {
     if method.constants.get(index).and_then(|v| *v).is_none() {
-        return Err(verification_error(pc, format!("invalid constant pool index {index}")));
+        return Err(verification_error(
+            pc,
+            format!("invalid constant pool index {index}"),
+        ));
     }
     Ok(())
 }
 
 fn validate_class_index(method: &Method, index: usize, pc: usize) -> Result<(), VmError> {
-    if method.reference_classes.get(index).and_then(|v| v.as_ref()).is_none() {
-        return Err(verification_error(pc, format!("invalid class reference index {index}")));
+    if method
+        .reference_classes
+        .get(index)
+        .and_then(|v| v.as_ref())
+        .is_none()
+    {
+        return Err(verification_error(
+            pc,
+            format!("invalid class reference index {index}"),
+        ));
     }
     Ok(())
 }
 
 fn validate_field_ref_index(method: &Method, index: usize, pc: usize) -> Result<(), VmError> {
-    if method.field_refs.get(index).and_then(|v| v.as_ref()).is_none() {
-        return Err(verification_error(pc, format!("invalid field reference index {index}")));
+    if method
+        .field_refs
+        .get(index)
+        .and_then(|v| v.as_ref())
+        .is_none()
+    {
+        return Err(verification_error(
+            pc,
+            format!("invalid field reference index {index}"),
+        ));
     }
     Ok(())
 }
 
 fn validate_method_ref_index(method: &Method, index: usize, pc: usize) -> Result<(), VmError> {
-    if method.method_refs.get(index).and_then(|v| v.as_ref()).is_none() {
-        return Err(verification_error(pc, format!("invalid method reference index {index}")));
+    if method
+        .method_refs
+        .get(index)
+        .and_then(|v| v.as_ref())
+        .is_none()
+    {
+        return Err(verification_error(
+            pc,
+            format!("invalid method reference index {index}"),
+        ));
     }
     Ok(())
 }
@@ -1184,12 +1286,17 @@ fn validate_invoke_dynamic_index(method: &Method, index: usize, pc: usize) -> Re
         .and_then(|value| value.as_ref())
         .is_none()
     {
-        return Err(verification_error(pc, format!("invalid invokedynamic index {index}")));
+        return Err(verification_error(
+            pc,
+            format!("invalid invokedynamic index {index}"),
+        ));
     }
     Ok(())
 }
 
-fn parse_method_descriptor(descriptor: &str) -> Result<(Vec<VerifyType>, Option<VerifyType>), VmError> {
+fn parse_method_descriptor(
+    descriptor: &str,
+) -> Result<(Vec<VerifyType>, Option<VerifyType>), VmError> {
     let bytes = descriptor.as_bytes();
     if bytes.first() != Some(&b'(') {
         return Err(VmError::InvalidDescriptor {
@@ -1227,7 +1334,10 @@ fn parse_field_descriptor(descriptor: &str) -> Result<VerifyType, VmError> {
     Ok(ty)
 }
 
-fn parse_field_descriptor_at(descriptor: &str, start: usize) -> Result<(VerifyType, usize), VmError> {
+fn parse_field_descriptor_at(
+    descriptor: &str,
+    start: usize,
+) -> Result<(VerifyType, usize), VmError> {
     let bytes = descriptor.as_bytes();
     match bytes.get(start).copied() {
         Some(b'B' | b'C' | b'I' | b'S' | b'Z') => Ok((VerifyType::Int, start + 1)),
@@ -1252,7 +1362,10 @@ fn parse_field_descriptor_at(descriptor: &str, start: usize) -> Result<(VerifyTy
                 end += 1;
             }
             let (_, next) = parse_field_descriptor_at(descriptor, end)?;
-            Ok((VerifyType::Reference(Some(descriptor[start..next].to_string())), next))
+            Ok((
+                VerifyType::Reference(Some(descriptor[start..next].to_string())),
+                next,
+            ))
         }
         _ => Err(VmError::InvalidDescriptor {
             descriptor: descriptor.to_string(),
@@ -1260,7 +1373,11 @@ fn parse_field_descriptor_at(descriptor: &str, start: usize) -> Result<(VerifyTy
     }
 }
 
-fn require_return_type(pc: usize, actual: &Option<VerifyType>, expected: &VerifyType) -> Result<(), VmError> {
+fn require_return_type(
+    pc: usize,
+    actual: &Option<VerifyType>,
+    expected: &VerifyType,
+) -> Result<(), VmError> {
     let actual = actual
         .as_ref()
         .ok_or_else(|| verification_error(pc, "typed return in void method"))?;
@@ -1269,10 +1386,15 @@ fn require_return_type(pc: usize, actual: &Option<VerifyType>, expected: &Verify
 
 fn require_constructor_receiver(pc: usize, ty: &VerifyType) -> Result<(), VmError> {
     match ty {
-        VerifyType::UninitializedThis | VerifyType::Uninitialized(_) | VerifyType::Reference(_) => Ok(()),
+        VerifyType::UninitializedThis | VerifyType::Uninitialized(_) | VerifyType::Reference(_) => {
+            Ok(())
+        }
         _ => Err(verification_error(
             pc,
-            format!("constructor receiver must be uninitialized or reference, got {}", type_name(ty)),
+            format!(
+                "constructor receiver must be uninitialized or reference, got {}",
+                type_name(ty)
+            ),
         )),
     }
 }
@@ -1291,7 +1413,11 @@ fn initialize_uninitialized(state: &mut FrameState, from: &VerifyType, class_nam
     }
 }
 
-fn require_assignable(pc: usize, actual: &VerifyType, expected: &VerifyType) -> Result<(), VmError> {
+fn require_assignable(
+    pc: usize,
+    actual: &VerifyType,
+    expected: &VerifyType,
+) -> Result<(), VmError> {
     if type_compatible(actual, expected) {
         Ok(())
     } else {
@@ -1387,14 +1513,22 @@ fn load_local(state: &FrameState, index: usize, pc: usize) -> Result<VerifyType,
         .ok_or_else(|| verification_error(pc, format!("local {index} out of bounds")))
         .and_then(|ty| {
             if ty == VerifyType::Top {
-                Err(verification_error(pc, format!("local {index} is not initialized")))
+                Err(verification_error(
+                    pc,
+                    format!("local {index} is not initialized"),
+                ))
             } else {
                 Ok(ty)
             }
         })
 }
 
-fn store_local(state: &mut FrameState, index: usize, ty: VerifyType, pc: usize) -> Result<(), VmError> {
+fn store_local(
+    state: &mut FrameState,
+    index: usize,
+    ty: VerifyType,
+    pc: usize,
+) -> Result<(), VmError> {
     let slot = state
         .locals
         .get_mut(index)
@@ -1403,9 +1537,17 @@ fn store_local(state: &mut FrameState, index: usize, ty: VerifyType, pc: usize) 
     Ok(())
 }
 
-fn push(state: &mut FrameState, ty: VerifyType, pc: usize, max_stack: usize) -> Result<(), VmError> {
+fn push(
+    state: &mut FrameState,
+    ty: VerifyType,
+    pc: usize,
+    max_stack: usize,
+) -> Result<(), VmError> {
     if state.stack.len() >= max_stack {
-        return Err(verification_error(pc, format!("stack overflow past max_stack {max_stack}")));
+        return Err(verification_error(
+            pc,
+            format!("stack overflow past max_stack {max_stack}"),
+        ));
     }
     state.stack.push(ty);
     Ok(())
@@ -1454,16 +1596,15 @@ fn trimmed(values: &[VerifyType]) -> &[VerifyType] {
 fn branch_target(pc: usize, offset: isize, code_len: usize) -> Result<usize, VmError> {
     let target = pc as isize + offset;
     if target < 0 || target as usize >= code_len {
-        return Err(VmError::InvalidBranchTarget {
-            target,
-            code_len,
-        });
+        return Err(VmError::InvalidBranchTarget { target, code_len });
     }
     Ok(target as usize)
 }
 
 fn read_u8(code: &[u8], pos: usize) -> Result<u8, VmError> {
-    code.get(pos).copied().ok_or(VmError::UnexpectedEof { pc: pos })
+    code.get(pos)
+        .copied()
+        .ok_or(VmError::UnexpectedEof { pc: pos })
 }
 
 fn read_i8(code: &[u8], pos: usize) -> Result<i8, VmError> {

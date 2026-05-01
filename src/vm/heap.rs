@@ -335,15 +335,10 @@ impl Heap {
     }
 
     fn check_array_index(index: i32, len: usize) -> Result<usize, VmError> {
-        let i = usize::try_from(index).map_err(|_| VmError::ArrayIndexOutOfBounds {
-            index,
-            len,
-        })?;
+        let i =
+            usize::try_from(index).map_err(|_| VmError::ArrayIndexOutOfBounds { index, len })?;
         if i >= len {
-            return Err(VmError::ArrayIndexOutOfBounds {
-                index,
-                len,
-            });
+            return Err(VmError::ArrayIndexOutOfBounds { index, len });
         }
         Ok(i)
     }

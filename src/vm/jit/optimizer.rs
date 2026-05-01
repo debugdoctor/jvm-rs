@@ -1,6 +1,6 @@
+use super::JitError;
 use cranelift::codegen::ir::Function;
 use cranelift::codegen::{Context, isa::TargetIsa};
-use super::JitError;
 
 pub struct Optimizer {
     inline_threshold: usize,
@@ -28,8 +28,9 @@ impl Optimizer {
         ctx.dce(isa)
             .map_err(|e| JitError::CompilationFailed(format!("DCE failed: {}", e)))?;
 
-        ctx.canonicalize_nans(isa)
-            .map_err(|e| JitError::CompilationFailed(format!("NaN canonicalization failed: {}", e)))?;
+        ctx.canonicalize_nans(isa).map_err(|e| {
+            JitError::CompilationFailed(format!("NaN canonicalization failed: {}", e))
+        })?;
 
         ctx.legalize(isa)
             .map_err(|e| JitError::CompilationFailed(format!("legalization failed: {}", e)))?;

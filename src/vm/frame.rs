@@ -35,7 +35,10 @@ pub(super) struct Frame {
 
 impl Frame {
     pub(super) fn method_key(&self) -> String {
-        format!("{}.{}{}", self.class_name, self.method_name, self.descriptor)
+        format!(
+            "{}.{}{}",
+            self.class_name, self.method_name, self.descriptor
+        )
     }
 
     pub(super) fn increment_invocation_count(&mut self) {

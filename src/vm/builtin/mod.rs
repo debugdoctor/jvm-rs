@@ -6,14 +6,14 @@ pub(super) mod bootstrap_time;
 pub(super) mod format;
 pub(super) mod helpers;
 pub(super) mod invoke;
-pub(super) mod invoke_other;
+pub(super) mod invoke_concurrent;
 pub(super) mod invoke_nio;
+pub(super) mod invoke_other;
 pub(super) mod invoke_reflect;
 pub(super) mod invoke_regex;
 pub(super) mod invoke_text;
 pub(super) mod invoke_time;
 pub(super) mod invoke_util;
-pub(super) mod invoke_concurrent;
 
 use std::collections::HashMap;
 
@@ -86,7 +86,8 @@ impl Vm {
             Err(e) => return Err(e),
         }
 
-        let result = invoke_concurrent::invoke_concurrent(self, class_name, method_name, descriptor, args);
+        let result =
+            invoke_concurrent::invoke_concurrent(self, class_name, method_name, descriptor, args);
         match result {
             Ok(Some(v)) => return Ok(Some(v)),
             Ok(None) => return Ok(None),
@@ -118,7 +119,8 @@ impl Vm {
             Err(e) => return Err(e),
         }
 
-        let result = invoke_reflect::invoke_reflect(self, class_name, method_name, descriptor, args);
+        let result =
+            invoke_reflect::invoke_reflect(self, class_name, method_name, descriptor, args);
         match result {
             Ok(Some(v)) => return Ok(Some(v)),
             Ok(None) => return Ok(None),
@@ -164,36 +166,58 @@ impl Vm {
         }
     }
 
-    fn native_int_stream_collect(&mut self, stream_ref: Reference, collector_ref: Reference) -> Result<Option<Value>, VmError> {
+    fn native_int_stream_collect(
+        &mut self,
+        stream_ref: Reference,
+        collector_ref: Reference,
+    ) -> Result<Option<Value>, VmError> {
         let source_array = crate::vm::builtin::helpers::native_int_stream_array(self, stream_ref)?;
         let mode = crate::vm::builtin::helpers::native_collector_mode(self, collector_ref)?;
         let heap = self.heap.lock().unwrap();
         let elements: Vec<Reference> = match heap.get(source_array)? {
-            HeapValue::IntArray { values } => values.iter().map(|&v| Reference::Heap(v as usize)).collect(),
+            HeapValue::IntArray { values } => values
+                .iter()
+                .map(|&v| Reference::Heap(v as usize))
+                .collect(),
             _ => return Ok(None),
         };
         drop(heap);
         crate::vm::builtin::helpers::collect_with_mode(self, elements, mode, collector_ref)
     }
 
-    fn native_long_stream_collect(&mut self, stream_ref: Reference, collector_ref: Reference) -> Result<Option<Value>, VmError> {
+    fn native_long_stream_collect(
+        &mut self,
+        stream_ref: Reference,
+        collector_ref: Reference,
+    ) -> Result<Option<Value>, VmError> {
         let source_array = crate::vm::builtin::helpers::native_long_stream_array(self, stream_ref)?;
         let mode = crate::vm::builtin::helpers::native_collector_mode(self, collector_ref)?;
         let heap = self.heap.lock().unwrap();
         let elements: Vec<Reference> = match heap.get(source_array)? {
-            HeapValue::LongArray { values } => values.iter().map(|&v| Reference::Heap(v as usize)).collect(),
+            HeapValue::LongArray { values } => values
+                .iter()
+                .map(|&v| Reference::Heap(v as usize))
+                .collect(),
             _ => return Ok(None),
         };
         drop(heap);
         crate::vm::builtin::helpers::collect_with_mode(self, elements, mode, collector_ref)
     }
 
-    fn native_double_stream_collect(&mut self, stream_ref: Reference, collector_ref: Reference) -> Result<Option<Value>, VmError> {
-        let source_array = crate::vm::builtin::helpers::native_double_stream_array(self, stream_ref)?;
+    fn native_double_stream_collect(
+        &mut self,
+        stream_ref: Reference,
+        collector_ref: Reference,
+    ) -> Result<Option<Value>, VmError> {
+        let source_array =
+            crate::vm::builtin::helpers::native_double_stream_array(self, stream_ref)?;
         let mode = crate::vm::builtin::helpers::native_collector_mode(self, collector_ref)?;
         let heap = self.heap.lock().unwrap();
         let elements: Vec<Reference> = match heap.get(source_array)? {
-            HeapValue::DoubleArray { values } => values.iter().map(|&v| Reference::Heap(v as usize)).collect(),
+            HeapValue::DoubleArray { values } => values
+                .iter()
+                .map(|&v| Reference::Heap(v as usize))
+                .collect(),
             _ => return Ok(None),
         };
         drop(heap);
@@ -230,7 +254,10 @@ impl Vm {
         Ok(Some(Value::Reference(r)))
     }
 
-    fn native_collectors_joining(&mut self, delimiter: Option<Reference>) -> Result<Option<Value>, VmError> {
+    fn native_collectors_joining(
+        &mut self,
+        delimiter: Option<Reference>,
+    ) -> Result<Option<Value>, VmError> {
         let mut fields = std::collections::HashMap::new();
         if let Some(d) = delimiter {
             fields.insert("__mode".to_string(), Value::Int(5));
@@ -245,7 +272,11 @@ impl Vm {
         Ok(Some(Value::Reference(r)))
     }
 
-    fn native_collectors_reducing(&mut self, identity: Reference, _combiner: Reference) -> Result<Option<Value>, VmError> {
+    fn native_collectors_reducing(
+        &mut self,
+        identity: Reference,
+        _combiner: Reference,
+    ) -> Result<Option<Value>, VmError> {
         let mut fields = std::collections::HashMap::new();
         fields.insert("__mode".to_string(), Value::Int(6));
         fields.insert("__array".to_string(), Value::Reference(identity));
@@ -256,7 +287,11 @@ impl Vm {
         Ok(Some(Value::Reference(r)))
     }
 
-    fn native_collectors_to_map(&mut self, key_mapper: Reference, value_mapper: Reference) -> Result<Option<Value>, VmError> {
+    fn native_collectors_to_map(
+        &mut self,
+        key_mapper: Reference,
+        value_mapper: Reference,
+    ) -> Result<Option<Value>, VmError> {
         let mut fields = std::collections::HashMap::new();
         fields.insert("__mode".to_string(), Value::Int(7));
         fields.insert("__array".to_string(), Value::Reference(key_mapper));

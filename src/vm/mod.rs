@@ -9,27 +9,25 @@ mod types;
 pub mod verify;
 
 pub use crate::classfile::ClassFile;
+use frame::Frame;
 pub use heap::GcStats;
+use heap::{Heap, HeapValue};
+use interpreter::{
+    execute_aconst_null, execute_aload, execute_areturn_full, execute_astore, execute_bipush,
+    execute_dconst, execute_dload, execute_dstore, execute_dup, execute_fconst, execute_fload,
+    execute_fstore, execute_iadd, execute_iconst, execute_iload, execute_imul,
+    execute_ireturn_full, execute_istore, execute_isub, execute_lconst, execute_ldc, execute_ldc_w,
+    execute_lload, execute_lreturn_full, execute_lstore, execute_pop, execute_return_full,
+    execute_sipush,
+};
+use smallvec::SmallVec;
 pub use thread::JvmThread;
+use thread::{
+    ClassInitializationState, JavaThreadState, RuntimeState, SharedMonitors, SharedThreads, Thread,
+};
 pub use types::{
     ClassMethod, ExceptionHandler, ExecutionResult, FieldRef, InvokeDynamicKind, InvokeDynamicSite,
     Method, MethodRef, Reference, RuntimeClass, Value, VmError,
-};
-use frame::Frame;
-use heap::{Heap, HeapValue};
-use smallvec::SmallVec;
-use thread::{
-    ClassInitializationState, JavaThreadState, RuntimeState, SharedMonitors,
-    SharedThreads, Thread,
-};
-use interpreter::{
-    execute_aconst_null, execute_iconst, execute_lconst, execute_fconst, execute_dconst,
-    execute_bipush, execute_sipush, execute_ldc, execute_ldc_w,
-    execute_iload, execute_lload, execute_fload, execute_dload, execute_aload,
-    execute_istore, execute_lstore, execute_fstore, execute_dstore, execute_astore,
-    execute_iadd, execute_isub, execute_imul,
-    execute_pop, execute_dup,
-    execute_ireturn_full, execute_lreturn_full, execute_areturn_full, execute_return_full,
 };
 use types::{default_value_for_descriptor, format_vm_float, parse_arg_count, parse_arg_types};
 
@@ -39,11 +37,11 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use crate::bytecode::Opcode;
-use classloader::{ClassLoader, LazyClassLoader, BootstrapClassLoader};
 use crate::vm::jit::JitCompiler;
 use crate::vm::jit::runtime::JitContext;
+use classloader::{BootstrapClassLoader, ClassLoader, LazyClassLoader};
 
-use crate::vm::jit::runtime::{set_current_vm, clear_current_vm, get_current_vm_ptr};
+use crate::vm::jit::runtime::{clear_current_vm, get_current_vm_ptr, set_current_vm};
 
 static NEXT_THREAD_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
@@ -133,8 +131,7 @@ impl Vm {
     /// while method-local execution state remains isolated per thread.
     pub fn spawn(&self, method: Method) -> JvmThread {
         let mut child_vm = self.clone();
-        child_vm.thread_id =
-            NEXT_THREAD_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        child_vm.thread_id = NEXT_THREAD_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let handle = std::thread::spawn(move || child_vm.execute(method));
         JvmThread {
             handle: Some(handle),
@@ -149,8 +146,7 @@ impl Vm {
         args: Vec<Value>,
     ) -> Result<JvmThread, VmError> {
         let mut child_vm = self.clone();
-        child_vm.thread_id =
-            NEXT_THREAD_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        child_vm.thread_id = NEXT_THREAD_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         let start_class = start_class.to_string();
         let method_name = method_name.to_string();
@@ -161,8 +157,12 @@ impl Vm {
                 child_vm.resolve_method(&start_class, &method_name, &descriptor)?;
             match class_method {
                 ClassMethod::Native => {
-                    let result =
-                        child_vm.invoke_native(&resolved_class, &method_name, &descriptor, &args)?;
+                    let result = child_vm.invoke_native(
+                        &resolved_class,
+                        &method_name,
+                        &descriptor,
+                        &args,
+                    )?;
                     Ok(result.map_or(ExecutionResult::Void, ExecutionResult::Value))
                 }
                 ClassMethod::Bytecode(method) => {
@@ -178,7 +178,7 @@ impl Vm {
     }
 
     /// Run garbage collection, freeing unreachable heap objects.
-fn collect_garbage(&mut self, thread: &Thread) {
+    fn collect_garbage(&mut self, thread: &Thread) {
         let mut roots = Vec::new();
 
         // Roots from thread frames: stack + locals.
@@ -244,8 +244,9 @@ fn collect_garbage(&mut self, thread: &Thread) {
         self.jit.is_some() && self.jit_context.is_some()
     }
 
-    /// Test hook: how many times the JIT-compiled entry path successfully
-    /// produced a return value for the current process. Reset on each Vm.
+    /// Test hook: how many times execution reached the JIT tier. Methods that
+    /// the backend cannot lower yet are counted before deoptimizing to the
+    /// interpreter so threshold bugs do not look like normal interpreter runs.
     pub fn jit_executions(&self) -> u64 {
         self.runtime.lock().unwrap().jit_executions
     }
@@ -293,7 +294,9 @@ fn collect_garbage(&mut self, thread: &Thread) {
     pub(super) fn collect_jit_args_static(method: &Method, frame: &Frame) -> Vec<Value> {
         // JIT signature is built from the descriptor; for non-static methods the
         // JIT does not include `this`, so we skip locals[0] in that case.
-        let arg_count = parse_arg_types(&method.descriptor).map(|v| v.len()).unwrap_or(0);
+        let arg_count = parse_arg_types(&method.descriptor)
+            .map(|v| v.len())
+            .unwrap_or(0);
         let is_static = method.access_flags & 0x0008 != 0;
         let mut out = Vec::with_capacity(arg_count);
         let mut local_idx = if is_static { 0 } else { 1 };
@@ -322,6 +325,369 @@ fn collect_garbage(&mut self, thread: &Thread) {
         locals
     }
 
+    fn try_execute_jit_method(&mut self, method: &Method, args: &[Value]) -> Option<Option<Value>> {
+        let method_key = format!("{}.{}{}", method.class_name, method.name, method.descriptor);
+        let code = self.jit.as_ref()?.get_or_compile(method)?;
+        let jit_context = self.jit_context.as_mut()?;
+
+        if jit_context.get_entry(&method_key).is_none()
+            && !jit_context.add_method(method_key.clone(), code)
+        {
+            return None;
+        }
+
+        let ret = crate::vm::jit::runtime::JitReturn::from_descriptor(&method.descriptor);
+        let result = jit_context.execute_typed(&method_key, args, ret)?;
+        self.runtime.lock().unwrap().jit_executions += 1;
+
+        if matches!(ret, crate::vm::jit::runtime::JitReturn::Void) {
+            Some(None)
+        } else {
+            Some(Some(result))
+        }
+    }
+
+    pub(crate) fn invoke_jit_static_method_ref(
+        &mut self,
+        method_ref: &MethodRef,
+        args_ptr: u64,
+        argc: usize,
+    ) -> Option<Value> {
+        let args = unsafe { Vm::jit_raw_args_to_values(&method_ref.descriptor, args_ptr, argc) }?;
+        self.ensure_class_loaded(&method_ref.class_name).ok()?;
+        self.ensure_class_initialized(&method_ref.class_name).ok()?;
+
+        if self.has_native_override(
+            &method_ref.class_name,
+            &method_ref.method_name,
+            &method_ref.descriptor,
+        ) {
+            return self
+                .invoke_native(
+                    &method_ref.class_name,
+                    &method_ref.method_name,
+                    &method_ref.descriptor,
+                    &args,
+                )
+                .ok()
+                .flatten();
+        }
+
+        let class = self.get_class(&method_ref.class_name).ok()?;
+        let class_method = class
+            .methods
+            .get(&(
+                method_ref.method_name.clone(),
+                method_ref.descriptor.clone(),
+            ))
+            .cloned()?;
+
+        match class_method {
+            ClassMethod::Native => self
+                .invoke_native(
+                    &method_ref.class_name,
+                    &method_ref.method_name,
+                    &method_ref.descriptor,
+                    &args,
+                )
+                .ok()
+                .flatten(),
+            ClassMethod::Bytecode(method) => {
+                let callee = method.with_initial_locals(Vm::args_to_locals(args));
+                let saved_jit = self.jit.take();
+                let result = self.execute(callee);
+                self.jit = saved_jit;
+                match result.ok()? {
+                    ExecutionResult::Value(value) => Some(value),
+                    ExecutionResult::Void => None,
+                }
+            }
+        }
+    }
+
+    pub(crate) fn invoke_jit_virtual_method_ref(
+        &mut self,
+        method_ref: &MethodRef,
+        receiver_raw: u64,
+        args_ptr: u64,
+        argc: usize,
+    ) -> Option<Value> {
+        let receiver = Vm::jit_raw_reference(receiver_raw)?;
+        let class_name = self.get_object_class(receiver).ok()?;
+        self.invoke_jit_instance_method_ref(&class_name, method_ref, receiver, args_ptr, argc)
+    }
+
+    pub(crate) fn invoke_jit_special_method_ref(
+        &mut self,
+        method_ref: &MethodRef,
+        receiver_raw: u64,
+        args_ptr: u64,
+        argc: usize,
+    ) -> Option<Value> {
+        let receiver = Vm::jit_raw_reference(receiver_raw)?;
+        self.invoke_jit_instance_method_ref(
+            &method_ref.class_name,
+            method_ref,
+            receiver,
+            args_ptr,
+            argc,
+        )
+    }
+
+    pub(crate) fn invoke_jit_interface_method_ref(
+        &mut self,
+        method_ref: &MethodRef,
+        receiver_raw: u64,
+        args_ptr: u64,
+        argc: usize,
+    ) -> Option<Value> {
+        let receiver = Vm::jit_raw_reference(receiver_raw)?;
+        let class_name = self.get_object_class(receiver).ok()?;
+        self.invoke_jit_instance_method_ref(&class_name, method_ref, receiver, args_ptr, argc)
+    }
+
+    pub(crate) fn invoke_jit_native_method_ref(
+        &mut self,
+        method_ref: &MethodRef,
+        args_ptr: u64,
+        argc: usize,
+    ) -> Option<Value> {
+        let args = unsafe { Vm::jit_raw_args_to_values(&method_ref.descriptor, args_ptr, argc) }?;
+        self.invoke_native(
+            &method_ref.class_name,
+            &method_ref.method_name,
+            &method_ref.descriptor,
+            &args,
+        )
+        .ok()
+        .flatten()
+    }
+
+    pub(crate) fn invoke_jit_dynamic_site(
+        &mut self,
+        site: &InvokeDynamicSite,
+        args_ptr: u64,
+        argc: usize,
+    ) -> Option<Value> {
+        let args = unsafe { Vm::jit_raw_args_to_values(&site.descriptor, args_ptr, argc) }?;
+        match &site.kind {
+            InvokeDynamicKind::LambdaProxy {
+                target_class,
+                target_method,
+                target_descriptor,
+            } => {
+                let mut fields = HashMap::new();
+                fields.insert(
+                    "__target_class".to_string(),
+                    Value::Reference(
+                        self.heap
+                            .lock()
+                            .unwrap()
+                            .allocate_string(target_class.clone()),
+                    ),
+                );
+                fields.insert(
+                    "__target_method".to_string(),
+                    Value::Reference(
+                        self.heap
+                            .lock()
+                            .unwrap()
+                            .allocate_string(target_method.clone()),
+                    ),
+                );
+                fields.insert(
+                    "__target_desc".to_string(),
+                    Value::Reference(
+                        self.heap
+                            .lock()
+                            .unwrap()
+                            .allocate_string(target_descriptor.clone()),
+                    ),
+                );
+                for (i, val) in args.into_iter().enumerate() {
+                    fields.insert(format!("__capture_{i}"), val);
+                }
+
+                let proxy = self.heap.lock().unwrap().allocate(HeapValue::Object {
+                    class_name: format!("__lambda_proxy_{}", site.name),
+                    fields,
+                });
+                Some(Value::Reference(proxy))
+            }
+            InvokeDynamicKind::StringConcat { recipe, constants } => self
+                .build_string_concat(recipe.as_deref(), constants, &args, &site.descriptor)
+                .ok()
+                .map(|concat| self.new_string(concat)),
+            InvokeDynamicKind::Unknown => Some(Value::Reference(Reference::Null)),
+        }
+    }
+
+    pub(crate) fn invoke_jit_get_static_field_ref(
+        &mut self,
+        field_ref: &FieldRef,
+    ) -> Option<Value> {
+        self.ensure_class_loaded(&field_ref.class_name).ok()?;
+        self.ensure_class_initialized(&field_ref.class_name).ok()?;
+        self.get_static_field(&field_ref.class_name, &field_ref.field_name)
+            .ok()
+    }
+
+    pub(crate) fn invoke_jit_put_static_field_ref(
+        &mut self,
+        field_ref: &FieldRef,
+        raw_value: u64,
+    ) -> bool {
+        let Some(value) = Vm::jit_raw_field_value_to_value(&field_ref.descriptor, raw_value) else {
+            return false;
+        };
+        self.ensure_class_loaded(&field_ref.class_name).is_ok()
+            && self.ensure_class_initialized(&field_ref.class_name).is_ok()
+            && self
+                .put_static_field(&field_ref.class_name, &field_ref.field_name, value)
+                .is_ok()
+    }
+
+    pub(crate) fn invoke_jit_get_instance_field_ref(
+        &mut self,
+        field_ref: &FieldRef,
+        receiver_raw: u64,
+    ) -> Option<Value> {
+        let receiver = Vm::jit_raw_reference(receiver_raw)?;
+        match self.heap.lock().unwrap().get(receiver).ok()? {
+            HeapValue::Object { fields, .. } => fields.get(&field_ref.field_name).copied(),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn invoke_jit_put_instance_field_ref(
+        &mut self,
+        field_ref: &FieldRef,
+        receiver_raw: u64,
+        raw_value: u64,
+    ) -> bool {
+        let Some(receiver) = Vm::jit_raw_reference(receiver_raw) else {
+            return false;
+        };
+        let Some(value) = Vm::jit_raw_field_value_to_value(&field_ref.descriptor, raw_value) else {
+            return false;
+        };
+        self.set_object_field(receiver, &field_ref.field_name, value)
+            .is_ok()
+    }
+
+    fn invoke_jit_instance_method_ref(
+        &mut self,
+        class_name: &str,
+        method_ref: &MethodRef,
+        receiver: Reference,
+        args_ptr: u64,
+        argc: usize,
+    ) -> Option<Value> {
+        if class_name.starts_with("__lambda_proxy_") {
+            return None;
+        }
+
+        let args = unsafe { Vm::jit_raw_args_to_values(&method_ref.descriptor, args_ptr, argc) }?;
+        let mut all_args = vec![Value::Reference(receiver)];
+        all_args.extend(args);
+
+        if self.has_native_override(class_name, &method_ref.method_name, &method_ref.descriptor) {
+            return self
+                .invoke_native(
+                    class_name,
+                    &method_ref.method_name,
+                    &method_ref.descriptor,
+                    &all_args,
+                )
+                .ok()
+                .flatten();
+        }
+
+        let (resolved_class, class_method) = self
+            .resolve_method(class_name, &method_ref.method_name, &method_ref.descriptor)
+            .ok()?;
+
+        match class_method {
+            ClassMethod::Native => self
+                .invoke_native(
+                    &resolved_class,
+                    &method_ref.method_name,
+                    &method_ref.descriptor,
+                    &all_args,
+                )
+                .ok()
+                .flatten(),
+            ClassMethod::Bytecode(method) => {
+                let callee = method.with_initial_locals(Vm::args_to_locals(all_args));
+                let saved_jit = self.jit.take();
+                let result = self.execute(callee);
+                self.jit = saved_jit;
+                match result.ok()? {
+                    ExecutionResult::Value(value) => Some(value),
+                    ExecutionResult::Void => None,
+                }
+            }
+        }
+    }
+
+    fn jit_raw_reference(raw: u64) -> Option<Reference> {
+        if raw == 0 {
+            None
+        } else {
+            Some(Reference::Heap(raw as usize))
+        }
+    }
+
+    fn jit_raw_field_value_to_value(descriptor: &str, raw: u64) -> Option<Value> {
+        match descriptor.as_bytes().first()? {
+            b'B' | b'C' | b'I' | b'S' | b'Z' => Some(Value::Int(raw as i32)),
+            b'J' => Some(Value::Long(raw as i64)),
+            b'F' => Some(Value::Float(f32::from_bits(raw as u32))),
+            b'D' => Some(Value::Double(f64::from_bits(raw))),
+            b'L' | b'[' => Some(Value::Reference(if raw == 0 {
+                Reference::Null
+            } else {
+                Reference::Heap(raw as usize)
+            })),
+            _ => None,
+        }
+    }
+
+    unsafe fn jit_raw_args_to_values(
+        descriptor: &str,
+        args_ptr: u64,
+        argc: usize,
+    ) -> Option<Vec<Value>> {
+        let arg_types = parse_arg_types(descriptor)?;
+        if arg_types.len() != argc {
+            return None;
+        }
+
+        let mut values = Vec::with_capacity(arg_types.len());
+        for (index, arg_type) in arg_types.into_iter().enumerate() {
+            let slot = unsafe { (args_ptr as *const u8).add(index * 8) };
+            let value = match arg_type {
+                b'B' | b'C' | b'I' | b'S' | b'Z' => {
+                    Value::Int(unsafe { std::ptr::read_unaligned(slot as *const i64) } as i32)
+                }
+                b'J' => Value::Long(unsafe { std::ptr::read_unaligned(slot as *const i64) }),
+                b'F' => Value::Float(unsafe { std::ptr::read_unaligned(slot as *const f32) }),
+                b'D' => Value::Double(unsafe { std::ptr::read_unaligned(slot as *const f64) }),
+                b'L' | b'[' => {
+                    let raw = unsafe { std::ptr::read_unaligned(slot as *const u64) };
+                    if raw == 0 {
+                        Value::Reference(Reference::Null)
+                    } else {
+                        Value::Reference(Reference::Heap(raw as usize))
+                    }
+                }
+                _ => return None,
+            };
+            values.push(value);
+        }
+        Some(values)
+    }
+
     /// Invoke an instance method on the receiver, resolving dynamically from
     /// the receiver's runtime class (like `invokevirtual`), and return its
     /// value. For calling back into Java bytecode from native implementations
@@ -341,12 +707,8 @@ fn collect_garbage(&mut self, thread: &Thread) {
         all_args.extend(extra_args);
         match class_method {
             ClassMethod::Native => {
-                let result = self.invoke_native(
-                    &resolved_class,
-                    method_name,
-                    descriptor,
-                    &all_args,
-                )?;
+                let result =
+                    self.invoke_native(&resolved_class, method_name, descriptor, &all_args)?;
                 Ok(match result {
                     Some(v) => ExecutionResult::Value(v),
                     None => ExecutionResult::Void,
@@ -384,9 +746,21 @@ fn collect_garbage(&mut self, thread: &Thread) {
                     "(Ljava/util/List;Ljava/util/Comparator;)V",
                 )
                 | ("java/util/Collections", "reverse", "(Ljava/util/List;)V")
-                | ("java/util/Arrays", "stream", "([I)Ljava/util/stream/IntStream;")
-                | ("java/util/Arrays", "stream", "([J)Ljava/util/stream/LongStream;")
-                | ("java/util/Arrays", "stream", "([D)Ljava/util/stream/DoubleStream;")
+                | (
+                    "java/util/Arrays",
+                    "stream",
+                    "([I)Ljava/util/stream/IntStream;"
+                )
+                | (
+                    "java/util/Arrays",
+                    "stream",
+                    "([J)Ljava/util/stream/LongStream;"
+                )
+                | (
+                    "java/util/Arrays",
+                    "stream",
+                    "([D)Ljava/util/stream/DoubleStream;"
+                )
                 | ("java/util/Arrays", "equals", "([I[I)Z")
                 | ("java/util/Arrays", "equals", "([J[J)Z")
                 | ("java/util/Arrays", "equals", "([B[B)Z")
@@ -400,16 +774,56 @@ fn collect_garbage(&mut self, thread: &Thread) {
                     "equals",
                     "([Ljava/lang/Object;[Ljava/lang/Object;)Z",
                 )
-                | ("java/util/stream/Collectors", "toList", "()Ljava/util/stream/Collector;")
-                | ("java/util/stream/Collectors", "toSet", "()Ljava/util/stream/Collector;")
-                | ("java/util/stream/Collectors", "counting", "()Ljava/util/function/Supplier;")
-                | ("java/util/stream/Collectors", "joining", "()Ljava/util/stream/Collector;")
-                | ("java/util/stream/Collectors", "joining", "(Ljava/lang/CharSequence;)Ljava/util/stream/Collector;")
-                | ("java/util/stream/Collectors", "reducing", "(Ljava/lang/Object;Ljava/util/function/BinaryOperator;)Ljava/util/stream/Collector;")
-                | ("java/util/stream/Collectors", "toMap", "(Ljava/util/function/Function;Ljava/util/function/Function;)Ljava/util/stream/Collector;")
-                | ("__jvm_rs/NativeIntStream", "collect", "(Ljava/util/stream/Collector;)Ljava/lang/Object;")
-                | ("__jvm_rs/NativeLongStream", "collect", "(Ljava/util/stream/Collector;)Ljava/lang/Object;")
-                | ("__jvm_rs/NativeDoubleStream", "collect", "(Ljava/util/stream/Collector;)Ljava/lang/Object;")
+                | (
+                    "java/util/stream/Collectors",
+                    "toList",
+                    "()Ljava/util/stream/Collector;"
+                )
+                | (
+                    "java/util/stream/Collectors",
+                    "toSet",
+                    "()Ljava/util/stream/Collector;"
+                )
+                | (
+                    "java/util/stream/Collectors",
+                    "counting",
+                    "()Ljava/util/function/Supplier;"
+                )
+                | (
+                    "java/util/stream/Collectors",
+                    "joining",
+                    "()Ljava/util/stream/Collector;"
+                )
+                | (
+                    "java/util/stream/Collectors",
+                    "joining",
+                    "(Ljava/lang/CharSequence;)Ljava/util/stream/Collector;"
+                )
+                | (
+                    "java/util/stream/Collectors",
+                    "reducing",
+                    "(Ljava/lang/Object;Ljava/util/function/BinaryOperator;)Ljava/util/stream/Collector;"
+                )
+                | (
+                    "java/util/stream/Collectors",
+                    "toMap",
+                    "(Ljava/util/function/Function;Ljava/util/function/Function;)Ljava/util/stream/Collector;"
+                )
+                | (
+                    "__jvm_rs/NativeIntStream",
+                    "collect",
+                    "(Ljava/util/stream/Collector;)Ljava/lang/Object;"
+                )
+                | (
+                    "__jvm_rs/NativeLongStream",
+                    "collect",
+                    "(Ljava/util/stream/Collector;)Ljava/lang/Object;"
+                )
+                | (
+                    "__jvm_rs/NativeDoubleStream",
+                    "collect",
+                    "(Ljava/util/stream/Collector;)Ljava/lang/Object;"
+                )
         )
     }
 
@@ -484,11 +898,12 @@ fn collect_garbage(&mut self, thread: &Thread) {
 
         if !self.class_path.is_empty() {
             let class_path = self.class_path.clone();
-            let source = crate::launcher::resolve_class_path(&class_path, class_name).ok_or_else(
-                || VmError::ClassNotFound {
-                    class_name: class_name.to_string(),
-                },
-            )?;
+            let source =
+                crate::launcher::resolve_class_path(&class_path, class_name).ok_or_else(|| {
+                    VmError::ClassNotFound {
+                        class_name: class_name.to_string(),
+                    }
+                })?;
             crate::launcher::load_and_register_class_from(&source, class_name, self).map_err(|_| {
                 VmError::ClassNotFound {
                     class_name: class_name.to_string(),
@@ -508,7 +923,10 @@ fn collect_garbage(&mut self, thread: &Thread) {
 
         // For 1-dim primitive arrays like [I, [B, etc., create a simple runtime class
         // For object arrays like [Ljava/lang/String;, we need to know the element class
-        let super_class = if dimensions == 1 && !element_type.starts_with('[') && !element_type.starts_with('L') {
+        let super_class = if dimensions == 1
+            && !element_type.starts_with('[')
+            && !element_type.starts_with('L')
+        {
             // Primitive array's super is Object
             "java/lang/Object".to_string()
         } else if dimensions > 1 {
@@ -663,9 +1081,9 @@ fn collect_garbage(&mut self, thread: &Thread) {
     fn get_object_field(&self, reference: Reference, field_name: &str) -> Result<Value, VmError> {
         let heap = self.heap.lock().unwrap();
         match heap.get(reference)? {
-            HeapValue::Object { fields, .. } => {
-                Ok(*fields.get(field_name).unwrap_or(&Value::Reference(Reference::Null)))
-            }
+            HeapValue::Object { fields, .. } => Ok(*fields
+                .get(field_name)
+                .unwrap_or(&Value::Reference(Reference::Null))),
             value => Err(VmError::InvalidHeapValue {
                 expected: "object",
                 actual: value.kind_name(),
@@ -794,7 +1212,12 @@ fn collect_garbage(&mut self, thread: &Thread) {
     /// raw int fallback.
     fn stringify_concat_arg(&self, ty: u8, value: Value) -> Result<String, VmError> {
         match ty {
-            b'Z' => Ok(if value.as_int()? != 0 { "true" } else { "false" }.to_string()),
+            b'Z' => Ok(if value.as_int()? != 0 {
+                "true"
+            } else {
+                "false"
+            }
+            .to_string()),
             b'C' => {
                 let ch = char::from_u32(value.as_int()? as u32).unwrap_or('\0');
                 Ok(ch.to_string())
@@ -822,12 +1245,12 @@ fn collect_garbage(&mut self, thread: &Thread) {
                     '\u{0001}' => {
                         let value = args.get(arg_index).copied().ok_or_else(|| {
                             VmError::InvalidDescriptor {
-                                descriptor: format!("missing invokedynamic concat arg at {arg_index}"),
+                                descriptor: format!(
+                                    "missing invokedynamic concat arg at {arg_index}"
+                                ),
                             }
                         })?;
-                        result.push_str(
-                            &self.stringify_concat_arg(type_for(arg_index), value)?,
-                        );
+                        result.push_str(&self.stringify_concat_arg(type_for(arg_index), value)?);
                         arg_index += 1;
                     }
                     '\u{0002}' => {
@@ -947,7 +1370,9 @@ fn collect_garbage(&mut self, thread: &Thread) {
             });
         }
         let newly_available = if notify_all {
-            monitor.waiting_threads.saturating_sub(monitor.pending_notifies)
+            monitor
+                .waiting_threads
+                .saturating_sub(monitor.pending_notifies)
         } else if monitor.waiting_threads > monitor.pending_notifies {
             1
         } else {
@@ -994,9 +1419,7 @@ fn collect_garbage(&mut self, thread: &Thread) {
             HeapValue::LongArray { .. } => Ok("[J".to_string()),
             HeapValue::FloatArray { .. } => Ok("[F".to_string()),
             HeapValue::DoubleArray { .. } => Ok("[D".to_string()),
-            HeapValue::ReferenceArray { component_type, .. } => {
-                Ok(format!("[L{component_type};"))
-            }
+            HeapValue::ReferenceArray { component_type, .. } => Ok(format!("[L{component_type};")),
         }
     }
 
@@ -1027,8 +1450,11 @@ fn collect_garbage(&mut self, thread: &Thread) {
                         let installed = jit_context.add_method(method_key.clone(), code.clone());
                         if installed {
                             let jit_args = Vm::collect_jit_args_static(&method_clone, frame);
-                            let ret = crate::vm::jit::runtime::JitReturn::from_descriptor(&descriptor);
-                            if let Some(result) = jit_context.execute_typed(&method_key, &jit_args, ret) {
+                            let ret =
+                                crate::vm::jit::runtime::JitReturn::from_descriptor(&descriptor);
+                            if let Some(result) =
+                                jit_context.execute_typed(&method_key, &jit_args, ret)
+                            {
                                 self.runtime.lock().unwrap().jit_executions += 1;
                                 if matches!(ret, crate::vm::jit::runtime::JitReturn::Void) {
                                     return Ok(ExecutionResult::Void);
@@ -1036,75 +1462,67 @@ fn collect_garbage(&mut self, thread: &Thread) {
                                 return Ok(ExecutionResult::Value(result));
                             }
                         }
+                    } else {
+                        self.runtime.lock().unwrap().jit_executions += 1;
                     }
                 }
             }
 
             loop {
-            let opcode_pc = thread.current_frame().pc;
-            if opcode_pc >= thread.current_frame().code.len() {
-                return Err(VmError::MissingReturn);
-            }
-            let opcode_byte = thread.current_frame_mut().read_u8()?;
-            let opcode = Opcode::from_byte(opcode_byte).ok_or(VmError::InvalidOpcode {
-                opcode: opcode_byte,
-                pc: opcode_pc,
-            })?;
+                let opcode_pc = thread.current_frame().pc;
+                if opcode_pc >= thread.current_frame().code.len() {
+                    return Err(VmError::MissingReturn);
+                }
+                let opcode_byte = thread.current_frame_mut().read_u8()?;
+                let opcode = Opcode::from_byte(opcode_byte).ok_or(VmError::InvalidOpcode {
+                    opcode: opcode_byte,
+                    pc: opcode_pc,
+                })?;
 
-            if self.trace {
-                let frame = thread.current_frame();
-                let stack_repr: Vec<_> = frame
-                    .stack
-                    .iter()
-                    .map(|v| format!("{v}"))
-                    .collect();
-                eprintln!(
-                    "  [{}.{}{}] pc={opcode_pc:<4} {opcode:?}  stack=[{}]  depth={}",
-                    frame.class_name,
-                    frame.method_name,
-                    frame.descriptor,
-                    stack_repr.join(", "),
-                    thread.depth(),
-                );
-            }
+                if self.trace {
+                    let frame = thread.current_frame();
+                    let stack_repr: Vec<_> = frame.stack.iter().map(|v| format!("{v}")).collect();
+                    eprintln!(
+                        "  [{}.{}{}] pc={opcode_pc:<4} {opcode:?}  stack=[{}]  depth={}",
+                        frame.class_name,
+                        frame.method_name,
+                        frame.descriptor,
+                        stack_repr.join(", "),
+                        thread.depth(),
+                    );
+                }
 
-            match self.execute_opcode(&mut thread, opcode, opcode_pc) {
-                Ok(Some(result)) => return Ok(result),
-                Ok(None) => {}
-                Err(VmError::NullReference) => {
-                    self.throw_new_exception(
-                        &mut thread,
-                        "java/lang/NullPointerException",
-                    )?;
+                match self.execute_opcode(&mut thread, opcode, opcode_pc) {
+                    Ok(Some(result)) => return Ok(result),
+                    Ok(None) => {}
+                    Err(VmError::NullReference) => {
+                        self.throw_new_exception(&mut thread, "java/lang/NullPointerException")?;
+                    }
+                    Err(VmError::ArrayIndexOutOfBounds { .. }) => {
+                        self.throw_new_exception(
+                            &mut thread,
+                            "java/lang/ArrayIndexOutOfBoundsException",
+                        )?;
+                    }
+                    Err(VmError::NegativeArraySize { .. }) => {
+                        self.throw_new_exception(
+                            &mut thread,
+                            "java/lang/NegativeArraySizeException",
+                        )?;
+                    }
+                    Err(VmError::ClassCastError { .. }) => {
+                        self.throw_new_exception(&mut thread, "java/lang/ClassCastException")?;
+                    }
+                    Err(VmError::UnhandledException { class_name }) => {
+                        // Native methods return `UnhandledException` to signal a Java-level
+                        // throw. Try to deliver it to a matching handler. If no frame
+                        // handles it, `throw_new_exception` re-returns `UnhandledException`
+                        // and it propagates out of `execute`.
+                        self.throw_new_exception(&mut thread, &class_name)?;
+                    }
+                    Err(err) => return Err(err),
                 }
-                Err(VmError::ArrayIndexOutOfBounds { .. }) => {
-                    self.throw_new_exception(
-                        &mut thread,
-                        "java/lang/ArrayIndexOutOfBoundsException",
-                    )?;
-                }
-                Err(VmError::NegativeArraySize { .. }) => {
-                    self.throw_new_exception(
-                        &mut thread,
-                        "java/lang/NegativeArraySizeException",
-                    )?;
-                }
-                Err(VmError::ClassCastError { .. }) => {
-                    self.throw_new_exception(
-                        &mut thread,
-                        "java/lang/ClassCastException",
-                    )?;
-                }
-                Err(VmError::UnhandledException { class_name }) => {
-                    // Native methods return `UnhandledException` to signal a Java-level
-                    // throw. Try to deliver it to a matching handler. If no frame
-                    // handles it, `throw_new_exception` re-returns `UnhandledException`
-                    // and it propagates out of `execute`.
-                    self.throw_new_exception(&mut thread, &class_name)?;
-                }
-                Err(err) => return Err(err),
             }
-        }
         })();
 
         clear_current_vm();
@@ -1122,1280 +1540,1380 @@ fn collect_garbage(&mut self, thread: &Thread) {
         opcode: Opcode,
         opcode_pc: usize,
     ) -> Result<Option<ExecutionResult>, VmError> {
-            match opcode {
-                Opcode::AconstNull => execute_aconst_null(thread)?,
-                Opcode::IconstM1 => execute_iconst(thread, -1)?,
-                Opcode::Iconst0 => execute_iconst(thread, 0)?,
-                Opcode::Iconst1 => execute_iconst(thread, 1)?,
-                Opcode::Iconst2 => execute_iconst(thread, 2)?,
-                Opcode::Iconst3 => execute_iconst(thread, 3)?,
-                Opcode::Iconst4 => execute_iconst(thread, 4)?,
-                Opcode::Iconst5 => execute_iconst(thread, 5)?,
-                Opcode::Bipush => execute_bipush(thread)?,
-                Opcode::Sipush => execute_sipush(thread)?,
-                Opcode::Ldc => execute_ldc(thread)?,
-                Opcode::LdcW => execute_ldc_w(thread)?,
-                Opcode::Ldc2W => {
-                    let index = thread.current_frame_mut().read_u16()? as usize;
-                    let value = thread.current_frame().load_constant(index)?;
-                    thread.current_frame_mut().push(value)?;
+        match opcode {
+            Opcode::AconstNull => execute_aconst_null(thread)?,
+            Opcode::IconstM1 => execute_iconst(thread, -1)?,
+            Opcode::Iconst0 => execute_iconst(thread, 0)?,
+            Opcode::Iconst1 => execute_iconst(thread, 1)?,
+            Opcode::Iconst2 => execute_iconst(thread, 2)?,
+            Opcode::Iconst3 => execute_iconst(thread, 3)?,
+            Opcode::Iconst4 => execute_iconst(thread, 4)?,
+            Opcode::Iconst5 => execute_iconst(thread, 5)?,
+            Opcode::Bipush => execute_bipush(thread)?,
+            Opcode::Sipush => execute_sipush(thread)?,
+            Opcode::Ldc => execute_ldc(thread)?,
+            Opcode::LdcW => execute_ldc_w(thread)?,
+            Opcode::Ldc2W => {
+                let index = thread.current_frame_mut().read_u16()? as usize;
+                let value = thread.current_frame().load_constant(index)?;
+                thread.current_frame_mut().push(value)?;
+            }
+            Opcode::Lconst0 => execute_lconst(thread, 0)?,
+            Opcode::Lconst1 => execute_lconst(thread, 1)?,
+            Opcode::Fconst0 => execute_fconst(thread, 0.0)?,
+            Opcode::Fconst1 => execute_fconst(thread, 1.0)?,
+            Opcode::Fconst2 => execute_fconst(thread, 2.0)?,
+            Opcode::Dconst0 => execute_dconst(thread, 0.0)?,
+            Opcode::Dconst1 => execute_dconst(thread, 1.0)?,
+            Opcode::Newarray => {
+                let atype = thread.current_frame_mut().read_u8()?;
+                let count = thread.current_frame_mut().pop()?.as_int()?;
+                if count < 0 {
+                    return Err(VmError::NegativeArraySize { size: count });
                 }
-                Opcode::Lconst0 => execute_lconst(thread, 0)?,
-                Opcode::Lconst1 => execute_lconst(thread, 1)?,
-                Opcode::Fconst0 => execute_fconst(thread, 0.0)?,
-                Opcode::Fconst1 => execute_fconst(thread, 1.0)?,
-                Opcode::Fconst2 => execute_fconst(thread, 2.0)?,
-                Opcode::Dconst0 => execute_dconst(thread, 0.0)?,
-                Opcode::Dconst1 => execute_dconst(thread, 1.0)?,
-                Opcode::Newarray => {
-                    let atype = thread.current_frame_mut().read_u8()?;
-                    let count = thread.current_frame_mut().pop()?.as_int()?;
-                    if count < 0 {
-                        return Err(VmError::NegativeArraySize { size: count });
+                let n = count as usize;
+                let reference = match atype {
+                    4 | 5 | 8 | 9 | 10 => {
+                        // boolean(4), char(5), byte(8), short(9), int(10)
+                        self.heap.lock().unwrap().allocate_int_array(vec![0; n])
                     }
-                    let n = count as usize;
-                    let reference = match atype {
-                        4 | 5 | 8 | 9 | 10 => {
-                            // boolean(4), char(5), byte(8), short(9), int(10)
-                            self.heap.lock().unwrap().allocate_int_array(vec![0; n])
-                        }
-                        6 => self
-                            .heap
-                            .lock()
-                            .unwrap()
-                            .allocate(HeapValue::FloatArray { values: vec![0.0; n] }),
-                        7 => self
-                            .heap
-                            .lock()
-                            .unwrap()
-                            .allocate(HeapValue::DoubleArray { values: vec![0.0; n] }),
-                        11 => self
-                            .heap
-                            .lock()
-                            .unwrap()
-                            .allocate(HeapValue::LongArray { values: vec![0; n] }),
-                        _ => return Err(VmError::UnsupportedNewArrayType { atype }),
-                    };
-                    thread.current_frame_mut().push(Value::Reference(reference))?;
-                }
-                Opcode::Anewarray => {
-                    let index = thread.current_frame_mut().read_u16()? as usize;
-                    let component_type =
-                        thread.current_frame().load_reference_class(index)?.to_string();
-                    let count = thread.current_frame_mut().pop()?.as_int()?;
-                    if count < 0 {
-                        return Err(VmError::NegativeArraySize { size: count });
-                    }
-                    let values = vec![Reference::Null; count as usize];
-                    let reference = self
+                    6 => self.heap.lock().unwrap().allocate(HeapValue::FloatArray {
+                        values: vec![0.0; n],
+                    }),
+                    7 => self.heap.lock().unwrap().allocate(HeapValue::DoubleArray {
+                        values: vec![0.0; n],
+                    }),
+                    11 => self
                         .heap
                         .lock()
                         .unwrap()
-                        .allocate_reference_array(component_type, values);
-                    thread.current_frame_mut().push(Value::Reference(reference))?;
+                        .allocate(HeapValue::LongArray { values: vec![0; n] }),
+                    _ => return Err(VmError::UnsupportedNewArrayType { atype }),
+                };
+                thread
+                    .current_frame_mut()
+                    .push(Value::Reference(reference))?;
+            }
+            Opcode::Anewarray => {
+                let index = thread.current_frame_mut().read_u16()? as usize;
+                let component_type = thread
+                    .current_frame()
+                    .load_reference_class(index)?
+                    .to_string();
+                let count = thread.current_frame_mut().pop()?.as_int()?;
+                if count < 0 {
+                    return Err(VmError::NegativeArraySize { size: count });
                 }
-                Opcode::Aload => {
-                    let index = thread.current_frame_mut().read_u8()? as usize;
-                    execute_aload(thread, index)?;
+                let values = vec![Reference::Null; count as usize];
+                let reference = self
+                    .heap
+                    .lock()
+                    .unwrap()
+                    .allocate_reference_array(component_type, values);
+                thread
+                    .current_frame_mut()
+                    .push(Value::Reference(reference))?;
+            }
+            Opcode::Aload => {
+                let index = thread.current_frame_mut().read_u8()? as usize;
+                execute_aload(thread, index)?;
+            }
+            Opcode::Iload | Opcode::Lload | Opcode::Fload | Opcode::Dload => {
+                let index = thread.current_frame_mut().read_u8()? as usize;
+                execute_iload(thread, index)?;
+            }
+            Opcode::Iload0 | Opcode::Lload0 | Opcode::Fload0 | Opcode::Dload0 => {
+                execute_iload(thread, 0)?;
+            }
+            Opcode::Iload1 | Opcode::Lload1 | Opcode::Fload1 | Opcode::Dload1 => {
+                execute_iload(thread, 1)?;
+            }
+            Opcode::Iload2 | Opcode::Lload2 | Opcode::Fload2 | Opcode::Dload2 => {
+                execute_iload(thread, 2)?;
+            }
+            Opcode::Iload3 | Opcode::Lload3 | Opcode::Fload3 | Opcode::Dload3 => {
+                execute_iload(thread, 3)?;
+            }
+            Opcode::Aload0 => execute_iload(thread, 0)?,
+            Opcode::Aload1 => execute_iload(thread, 1)?,
+            Opcode::Aload2 => execute_iload(thread, 2)?,
+            Opcode::Aload3 => execute_iload(thread, 3)?,
+            Opcode::Iaload => {
+                let index = thread.current_frame_mut().pop()?.as_int()?;
+                let array_ref = thread.current_frame_mut().pop()?.as_reference()?;
+                let value = self
+                    .heap
+                    .lock()
+                    .unwrap()
+                    .load_int_array_element(array_ref, index)?;
+                thread.current_frame_mut().push(Value::Int(value))?;
+            }
+            Opcode::Laload | Opcode::Faload | Opcode::Daload => {
+                let index = thread.current_frame_mut().pop()?.as_int()?;
+                let array_ref = thread.current_frame_mut().pop()?.as_reference()?;
+                let value = self
+                    .heap
+                    .lock()
+                    .unwrap()
+                    .load_typed_array_element(array_ref, index)?;
+                thread.current_frame_mut().push(value)?;
+            }
+            Opcode::Baload | Opcode::Caload | Opcode::Saload => {
+                let index = thread.current_frame_mut().pop()?.as_int()?;
+                let array_ref = thread.current_frame_mut().pop()?.as_reference()?;
+                let value = self
+                    .heap
+                    .lock()
+                    .unwrap()
+                    .load_int_array_element(array_ref, index)?;
+                thread.current_frame_mut().push(Value::Int(value))?;
+            }
+            Opcode::Aaload => {
+                let index = thread.current_frame_mut().pop()?.as_int()?;
+                let array_ref = thread.current_frame_mut().pop()?.as_reference()?;
+                let reference = self
+                    .heap
+                    .lock()
+                    .unwrap()
+                    .load_reference_array_element(array_ref, index)?;
+                thread
+                    .current_frame_mut()
+                    .push(Value::Reference(reference))?;
+            }
+            Opcode::Lastore | Opcode::Fastore | Opcode::Dastore => {
+                let value = thread.current_frame_mut().pop()?;
+                let index = thread.current_frame_mut().pop()?.as_int()?;
+                let array_ref = thread.current_frame_mut().pop()?.as_reference()?;
+                self.heap
+                    .lock()
+                    .unwrap()
+                    .store_typed_array_element(array_ref, index, value)?;
+            }
+            Opcode::Bastore | Opcode::Castore | Opcode::Sastore => {
+                let value = thread.current_frame_mut().pop()?.as_int()?;
+                let index = thread.current_frame_mut().pop()?.as_int()?;
+                let array_ref = thread.current_frame_mut().pop()?.as_reference()?;
+                self.heap
+                    .lock()
+                    .unwrap()
+                    .store_int_array_element(array_ref, index, value)?;
+            }
+            Opcode::Aastore => {
+                let value = thread.current_frame_mut().pop()?.as_reference()?;
+                let index = thread.current_frame_mut().pop()?.as_int()?;
+                let array_ref = thread.current_frame_mut().pop()?.as_reference()?;
+                self.heap
+                    .lock()
+                    .unwrap()
+                    .store_reference_array_element(array_ref, index, value)?;
+            }
+            Opcode::Astore => {
+                let index = thread.current_frame_mut().read_u8()? as usize;
+                execute_astore(thread, index)?;
+            }
+            Opcode::Istore | Opcode::Lstore | Opcode::Fstore | Opcode::Dstore => {
+                let index = thread.current_frame_mut().read_u8()? as usize;
+                execute_istore(thread, index)?;
+            }
+            Opcode::Istore0 | Opcode::Lstore0 | Opcode::Fstore0 | Opcode::Dstore0 => {
+                execute_istore(thread, 0)?;
+            }
+            Opcode::Istore1 | Opcode::Lstore1 | Opcode::Fstore1 | Opcode::Dstore1 => {
+                execute_istore(thread, 1)?;
+            }
+            Opcode::Istore2 | Opcode::Lstore2 | Opcode::Fstore2 | Opcode::Dstore2 => {
+                execute_istore(thread, 2)?;
+            }
+            Opcode::Istore3 | Opcode::Lstore3 | Opcode::Fstore3 | Opcode::Dstore3 => {
+                execute_istore(thread, 3)?;
+            }
+            Opcode::Astore0 => execute_istore(thread, 0)?,
+            Opcode::Astore1 => execute_istore(thread, 1)?,
+            Opcode::Astore2 => execute_istore(thread, 2)?,
+            Opcode::Astore3 => execute_istore(thread, 3)?,
+            Opcode::Iastore => {
+                let value = thread.current_frame_mut().pop()?.as_int()?;
+                let index = thread.current_frame_mut().pop()?.as_int()?;
+                let array_ref = thread.current_frame_mut().pop()?.as_reference()?;
+                self.heap
+                    .lock()
+                    .unwrap()
+                    .store_int_array_element(array_ref, index, value)?;
+            }
+            Opcode::Pop => execute_pop(thread)?,
+            Opcode::Pop2 => {
+                let _ = thread.current_frame_mut().pop()?;
+                let _ = thread.current_frame_mut().pop()?;
+            }
+            Opcode::Dup => execute_dup(thread)?,
+            Opcode::DupX1 => {
+                let top = thread.current_frame_mut().pop()?;
+                let below = thread.current_frame_mut().pop()?;
+                thread.current_frame_mut().push(top)?;
+                thread.current_frame_mut().push(below)?;
+                thread.current_frame_mut().push(top)?;
+            }
+            Opcode::Dup2 => {
+                let top = thread.current_frame_mut().pop()?;
+                let below = thread.current_frame_mut().pop()?;
+                thread.current_frame_mut().push(below)?;
+                thread.current_frame_mut().push(top)?;
+                thread.current_frame_mut().push(below)?;
+                thread.current_frame_mut().push(top)?;
+            }
+            Opcode::DupX2 => {
+                let v1 = thread.current_frame_mut().pop()?;
+                let v2 = thread.current_frame_mut().pop()?;
+                let v3 = thread.current_frame_mut().pop()?;
+                thread.current_frame_mut().push(v1)?;
+                thread.current_frame_mut().push(v3)?;
+                thread.current_frame_mut().push(v2)?;
+                thread.current_frame_mut().push(v1)?;
+            }
+            Opcode::Dup2X1 => {
+                let v1 = thread.current_frame_mut().pop()?;
+                let v2 = thread.current_frame_mut().pop()?;
+                let v3 = thread.current_frame_mut().pop()?;
+                thread.current_frame_mut().push(v2)?;
+                thread.current_frame_mut().push(v1)?;
+                thread.current_frame_mut().push(v3)?;
+                thread.current_frame_mut().push(v2)?;
+                thread.current_frame_mut().push(v1)?;
+            }
+            Opcode::Dup2X2 => {
+                let v1 = thread.current_frame_mut().pop()?;
+                let v2 = thread.current_frame_mut().pop()?;
+                let v3 = thread.current_frame_mut().pop()?;
+                let v4 = thread.current_frame_mut().pop()?;
+                thread.current_frame_mut().push(v2)?;
+                thread.current_frame_mut().push(v1)?;
+                thread.current_frame_mut().push(v4)?;
+                thread.current_frame_mut().push(v3)?;
+                thread.current_frame_mut().push(v2)?;
+                thread.current_frame_mut().push(v1)?;
+            }
+            Opcode::Swap => {
+                let top = thread.current_frame_mut().pop()?;
+                let below = thread.current_frame_mut().pop()?;
+                thread.current_frame_mut().push(top)?;
+                thread.current_frame_mut().push(below)?;
+            }
+            Opcode::Iadd => execute_iadd(thread)?,
+            Opcode::Isub => execute_isub(thread)?,
+            Opcode::Imul => execute_imul(thread)?,
+            Opcode::Idiv => {
+                let rhs = thread.current_frame_mut().pop()?.as_int()?;
+                if rhs == 0 {
+                    self.throw_new_exception(&mut thread, "java/lang/ArithmeticException")?;
+                    return Ok(None);
                 }
-                Opcode::Iload | Opcode::Lload | Opcode::Fload | Opcode::Dload => {
-                    let index = thread.current_frame_mut().read_u8()? as usize;
-                    execute_iload(thread, index)?;
+                let lhs = thread.current_frame_mut().pop()?.as_int()?;
+                thread.current_frame_mut().push(Value::Int(lhs / rhs))?;
+            }
+            Opcode::Irem => {
+                let rhs = thread.current_frame_mut().pop()?.as_int()?;
+                if rhs == 0 {
+                    self.throw_new_exception(&mut thread, "java/lang/ArithmeticException")?;
+                    return Ok(None);
                 }
-                Opcode::Iload0 | Opcode::Lload0 | Opcode::Fload0 | Opcode::Dload0 => {
-                    execute_iload(thread, 0)?;
+                let lhs = thread.current_frame_mut().pop()?.as_int()?;
+                thread.current_frame_mut().push(Value::Int(lhs % rhs))?;
+            }
+            Opcode::Ineg => {
+                let value = thread.current_frame_mut().pop()?.as_int()?;
+                thread.current_frame_mut().push(Value::Int(-value))?;
+            }
+            // --- Long arithmetic ---
+            Opcode::Ladd => {
+                let rhs = thread.current_frame_mut().pop()?.as_long()?;
+                let lhs = thread.current_frame_mut().pop()?.as_long()?;
+                thread
+                    .current_frame_mut()
+                    .push(Value::Long(lhs.wrapping_add(rhs)))?;
+            }
+            Opcode::Lsub => {
+                let rhs = thread.current_frame_mut().pop()?.as_long()?;
+                let lhs = thread.current_frame_mut().pop()?.as_long()?;
+                thread
+                    .current_frame_mut()
+                    .push(Value::Long(lhs.wrapping_sub(rhs)))?;
+            }
+            Opcode::Lmul => {
+                let rhs = thread.current_frame_mut().pop()?.as_long()?;
+                let lhs = thread.current_frame_mut().pop()?.as_long()?;
+                thread
+                    .current_frame_mut()
+                    .push(Value::Long(lhs.wrapping_mul(rhs)))?;
+            }
+            Opcode::Ldiv => {
+                let rhs = thread.current_frame_mut().pop()?.as_long()?;
+                if rhs == 0 {
+                    self.throw_new_exception(&mut thread, "java/lang/ArithmeticException")?;
+                    return Ok(None);
                 }
-                Opcode::Iload1 | Opcode::Lload1 | Opcode::Fload1 | Opcode::Dload1 => {
-                    execute_iload(thread, 1)?;
+                let lhs = thread.current_frame_mut().pop()?.as_long()?;
+                thread.current_frame_mut().push(Value::Long(lhs / rhs))?;
+            }
+            Opcode::Lrem => {
+                let rhs = thread.current_frame_mut().pop()?.as_long()?;
+                if rhs == 0 {
+                    self.throw_new_exception(&mut thread, "java/lang/ArithmeticException")?;
+                    return Ok(None);
                 }
-                Opcode::Iload2 | Opcode::Lload2 | Opcode::Fload2 | Opcode::Dload2 => {
-                    execute_iload(thread, 2)?;
-                }
-                Opcode::Iload3 | Opcode::Lload3 | Opcode::Fload3 | Opcode::Dload3 => {
-                    execute_iload(thread, 3)?;
-                }
-                Opcode::Aload0 => execute_iload(thread, 0)?,
-                Opcode::Aload1 => execute_iload(thread, 1)?,
-                Opcode::Aload2 => execute_iload(thread, 2)?,
-                Opcode::Aload3 => execute_iload(thread, 3)?,
-                Opcode::Iaload => {
-                    let index = thread.current_frame_mut().pop()?.as_int()?;
-                    let array_ref = thread.current_frame_mut().pop()?.as_reference()?;
-                    let value = self
-                        .heap
-                        .lock()
-                        .unwrap()
-                        .load_int_array_element(array_ref, index)?;
-                    thread.current_frame_mut().push(Value::Int(value))?;
-                }
-                Opcode::Laload | Opcode::Faload | Opcode::Daload => {
-                    let index = thread.current_frame_mut().pop()?.as_int()?;
-                    let array_ref = thread.current_frame_mut().pop()?.as_reference()?;
-                    let value = self
-                        .heap
-                        .lock()
-                        .unwrap()
-                        .load_typed_array_element(array_ref, index)?;
-                    thread.current_frame_mut().push(value)?;
-                }
-                Opcode::Baload | Opcode::Caload | Opcode::Saload => {
-                    let index = thread.current_frame_mut().pop()?.as_int()?;
-                    let array_ref = thread.current_frame_mut().pop()?.as_reference()?;
-                    let value = self
-                        .heap
-                        .lock()
-                        .unwrap()
-                        .load_int_array_element(array_ref, index)?;
-                    thread.current_frame_mut().push(Value::Int(value))?;
-                }
-                Opcode::Aaload => {
-                    let index = thread.current_frame_mut().pop()?.as_int()?;
-                    let array_ref = thread.current_frame_mut().pop()?.as_reference()?;
-                    let reference = self
-                        .heap
-                        .lock()
-                        .unwrap()
-                        .load_reference_array_element(array_ref, index)?;
-                    thread.current_frame_mut().push(Value::Reference(reference))?;
-                }
-                Opcode::Lastore | Opcode::Fastore | Opcode::Dastore => {
-                    let value = thread.current_frame_mut().pop()?;
-                    let index = thread.current_frame_mut().pop()?.as_int()?;
-                    let array_ref = thread.current_frame_mut().pop()?.as_reference()?;
-                    self.heap
-                        .lock()
-                        .unwrap()
-                        .store_typed_array_element(array_ref, index, value)?;
-                }
-                Opcode::Bastore | Opcode::Castore | Opcode::Sastore => {
-                    let value = thread.current_frame_mut().pop()?.as_int()?;
-                    let index = thread.current_frame_mut().pop()?.as_int()?;
-                    let array_ref = thread.current_frame_mut().pop()?.as_reference()?;
-                    self.heap
-                        .lock()
-                        .unwrap()
-                        .store_int_array_element(array_ref, index, value)?;
-                }
-                Opcode::Aastore => {
-                    let value = thread.current_frame_mut().pop()?.as_reference()?;
-                    let index = thread.current_frame_mut().pop()?.as_int()?;
-                    let array_ref = thread.current_frame_mut().pop()?.as_reference()?;
-                    self.heap
-                        .lock()
-                        .unwrap()
-                        .store_reference_array_element(array_ref, index, value)?;
-                }
-                Opcode::Astore => {
-                    let index = thread.current_frame_mut().read_u8()? as usize;
-                    execute_astore(thread, index)?;
-                }
-                Opcode::Istore | Opcode::Lstore | Opcode::Fstore | Opcode::Dstore => {
-                    let index = thread.current_frame_mut().read_u8()? as usize;
-                    execute_istore(thread, index)?;
-                }
-                Opcode::Istore0 | Opcode::Lstore0 | Opcode::Fstore0 | Opcode::Dstore0 => {
-                    execute_istore(thread, 0)?;
-                }
-                Opcode::Istore1 | Opcode::Lstore1 | Opcode::Fstore1 | Opcode::Dstore1 => {
-                    execute_istore(thread, 1)?;
-                }
-                Opcode::Istore2 | Opcode::Lstore2 | Opcode::Fstore2 | Opcode::Dstore2 => {
-                    execute_istore(thread, 2)?;
-                }
-                Opcode::Istore3 | Opcode::Lstore3 | Opcode::Fstore3 | Opcode::Dstore3 => {
-                    execute_istore(thread, 3)?;
-                }
-                Opcode::Astore0 => execute_istore(thread, 0)?,
-                Opcode::Astore1 => execute_istore(thread, 1)?,
-                Opcode::Astore2 => execute_istore(thread, 2)?,
-                Opcode::Astore3 => execute_istore(thread, 3)?,
-                Opcode::Iastore => {
-                    let value = thread.current_frame_mut().pop()?.as_int()?;
-                    let index = thread.current_frame_mut().pop()?.as_int()?;
-                    let array_ref = thread.current_frame_mut().pop()?.as_reference()?;
-                    self.heap
-                        .lock()
-                        .unwrap()
-                        .store_int_array_element(array_ref, index, value)?;
-                }
-Opcode::Pop => execute_pop(thread)?,
-                Opcode::Pop2 => {
-                    let _ = thread.current_frame_mut().pop()?;
-                    let _ = thread.current_frame_mut().pop()?;
-                }
-                Opcode::Dup => execute_dup(thread)?,
-                Opcode::DupX1 => {
-                    let top = thread.current_frame_mut().pop()?;
-                    let below = thread.current_frame_mut().pop()?;
-                    thread.current_frame_mut().push(top)?;
-                    thread.current_frame_mut().push(below)?;
-                    thread.current_frame_mut().push(top)?;
-                }
-                Opcode::Dup2 => {
-                    let top = thread.current_frame_mut().pop()?;
-                    let below = thread.current_frame_mut().pop()?;
-                    thread.current_frame_mut().push(below)?;
-                    thread.current_frame_mut().push(top)?;
-                    thread.current_frame_mut().push(below)?;
-                    thread.current_frame_mut().push(top)?;
-                }
-                Opcode::DupX2 => {
-                    let v1 = thread.current_frame_mut().pop()?;
-                    let v2 = thread.current_frame_mut().pop()?;
-                    let v3 = thread.current_frame_mut().pop()?;
-                    thread.current_frame_mut().push(v1)?;
-                    thread.current_frame_mut().push(v3)?;
-                    thread.current_frame_mut().push(v2)?;
-                    thread.current_frame_mut().push(v1)?;
-                }
-                Opcode::Dup2X1 => {
-                    let v1 = thread.current_frame_mut().pop()?;
-                    let v2 = thread.current_frame_mut().pop()?;
-                    let v3 = thread.current_frame_mut().pop()?;
-                    thread.current_frame_mut().push(v2)?;
-                    thread.current_frame_mut().push(v1)?;
-                    thread.current_frame_mut().push(v3)?;
-                    thread.current_frame_mut().push(v2)?;
-                    thread.current_frame_mut().push(v1)?;
-                }
-                Opcode::Dup2X2 => {
-                    let v1 = thread.current_frame_mut().pop()?;
-                    let v2 = thread.current_frame_mut().pop()?;
-                    let v3 = thread.current_frame_mut().pop()?;
-                    let v4 = thread.current_frame_mut().pop()?;
-                    thread.current_frame_mut().push(v2)?;
-                    thread.current_frame_mut().push(v1)?;
-                    thread.current_frame_mut().push(v4)?;
-                    thread.current_frame_mut().push(v3)?;
-                    thread.current_frame_mut().push(v2)?;
-                    thread.current_frame_mut().push(v1)?;
-                }
-                Opcode::Swap => {
-                    let top = thread.current_frame_mut().pop()?;
-                    let below = thread.current_frame_mut().pop()?;
-                    thread.current_frame_mut().push(top)?;
-                    thread.current_frame_mut().push(below)?;
-                }
-                Opcode::Iadd => execute_iadd(thread)?,
-                Opcode::Isub => execute_isub(thread)?,
-                Opcode::Imul => execute_imul(thread)?,
-                Opcode::Idiv => {
-                    let rhs = thread.current_frame_mut().pop()?.as_int()?;
-                    if rhs == 0 {
-                        self.throw_new_exception(
-                            &mut thread,
-                            "java/lang/ArithmeticException",
-                        )?;
-                        return Ok(None);
-                    }
-                    let lhs = thread.current_frame_mut().pop()?.as_int()?;
-                    thread.current_frame_mut().push(Value::Int(lhs / rhs))?;
-                }
-                Opcode::Irem => {
-                    let rhs = thread.current_frame_mut().pop()?.as_int()?;
-                    if rhs == 0 {
-                        self.throw_new_exception(
-                            &mut thread,
-                            "java/lang/ArithmeticException",
-                        )?;
-                        return Ok(None);
-                    }
-                    let lhs = thread.current_frame_mut().pop()?.as_int()?;
-                    thread.current_frame_mut().push(Value::Int(lhs % rhs))?;
-                }
-                Opcode::Ineg => {
-                    let value = thread.current_frame_mut().pop()?.as_int()?;
-                    thread.current_frame_mut().push(Value::Int(-value))?;
-                }
-                // --- Long arithmetic ---
-                Opcode::Ladd => {
-                    let rhs = thread.current_frame_mut().pop()?.as_long()?;
-                    let lhs = thread.current_frame_mut().pop()?.as_long()?;
-                    thread.current_frame_mut().push(Value::Long(lhs.wrapping_add(rhs)))?;
-                }
-                Opcode::Lsub => {
-                    let rhs = thread.current_frame_mut().pop()?.as_long()?;
-                    let lhs = thread.current_frame_mut().pop()?.as_long()?;
-                    thread.current_frame_mut().push(Value::Long(lhs.wrapping_sub(rhs)))?;
-                }
-                Opcode::Lmul => {
-                    let rhs = thread.current_frame_mut().pop()?.as_long()?;
-                    let lhs = thread.current_frame_mut().pop()?.as_long()?;
-                    thread.current_frame_mut().push(Value::Long(lhs.wrapping_mul(rhs)))?;
-                }
-                Opcode::Ldiv => {
-                    let rhs = thread.current_frame_mut().pop()?.as_long()?;
-                    if rhs == 0 {
-                        self.throw_new_exception(
-                            &mut thread,
-                            "java/lang/ArithmeticException",
-                        )?;
-                        return Ok(None);
-                    }
-                    let lhs = thread.current_frame_mut().pop()?.as_long()?;
-                    thread.current_frame_mut().push(Value::Long(lhs / rhs))?;
-                }
-                Opcode::Lrem => {
-                    let rhs = thread.current_frame_mut().pop()?.as_long()?;
-                    if rhs == 0 {
-                        self.throw_new_exception(
-                            &mut thread,
-                            "java/lang/ArithmeticException",
-                        )?;
-                        return Ok(None);
-                    }
-                    let lhs = thread.current_frame_mut().pop()?.as_long()?;
-                    thread.current_frame_mut().push(Value::Long(lhs % rhs))?;
-                }
-                Opcode::Lneg => {
-                    let value = thread.current_frame_mut().pop()?.as_long()?;
-                    thread.current_frame_mut().push(Value::Long(-value))?;
-                }
-                // --- Float arithmetic ---
-                Opcode::Fadd => {
-                    let rhs = thread.current_frame_mut().pop()?.as_float()?;
-                    let lhs = thread.current_frame_mut().pop()?.as_float()?;
-                    thread.current_frame_mut().push(Value::Float(lhs + rhs))?;
-                }
-                Opcode::Fsub => {
-                    let rhs = thread.current_frame_mut().pop()?.as_float()?;
-                    let lhs = thread.current_frame_mut().pop()?.as_float()?;
-                    thread.current_frame_mut().push(Value::Float(lhs - rhs))?;
-                }
-                Opcode::Fmul => {
-                    let rhs = thread.current_frame_mut().pop()?.as_float()?;
-                    let lhs = thread.current_frame_mut().pop()?.as_float()?;
-                    thread.current_frame_mut().push(Value::Float(lhs * rhs))?;
-                }
-                Opcode::Fdiv => {
-                    let rhs = thread.current_frame_mut().pop()?.as_float()?;
-                    let lhs = thread.current_frame_mut().pop()?.as_float()?;
-                    thread.current_frame_mut().push(Value::Float(lhs / rhs))?;
-                }
-                Opcode::Frem => {
-                    let rhs = thread.current_frame_mut().pop()?.as_float()?;
-                    let lhs = thread.current_frame_mut().pop()?.as_float()?;
-                    thread.current_frame_mut().push(Value::Float(lhs % rhs))?;
-                }
-                Opcode::Fneg => {
-                    let value = thread.current_frame_mut().pop()?.as_float()?;
-                    thread.current_frame_mut().push(Value::Float(-value))?;
-                }
-                // --- Double arithmetic ---
-                Opcode::Dadd => {
-                    let rhs = thread.current_frame_mut().pop()?.as_double()?;
-                    let lhs = thread.current_frame_mut().pop()?.as_double()?;
-                    thread.current_frame_mut().push(Value::Double(lhs + rhs))?;
-                }
-                Opcode::Dsub => {
-                    let rhs = thread.current_frame_mut().pop()?.as_double()?;
-                    let lhs = thread.current_frame_mut().pop()?.as_double()?;
-                    thread.current_frame_mut().push(Value::Double(lhs - rhs))?;
-                }
-                Opcode::Dmul => {
-                    let rhs = thread.current_frame_mut().pop()?.as_double()?;
-                    let lhs = thread.current_frame_mut().pop()?.as_double()?;
-                    thread.current_frame_mut().push(Value::Double(lhs * rhs))?;
-                }
-                Opcode::Ddiv => {
-                    let rhs = thread.current_frame_mut().pop()?.as_double()?;
-                    let lhs = thread.current_frame_mut().pop()?.as_double()?;
-                    thread.current_frame_mut().push(Value::Double(lhs / rhs))?;
-                }
-                Opcode::Drem => {
-                    let rhs = thread.current_frame_mut().pop()?.as_double()?;
-                    let lhs = thread.current_frame_mut().pop()?.as_double()?;
-                    thread.current_frame_mut().push(Value::Double(lhs % rhs))?;
-                }
-                Opcode::Dneg => {
-                    let value = thread.current_frame_mut().pop()?.as_double()?;
-                    thread.current_frame_mut().push(Value::Double(-value))?;
-                }
-                Opcode::Ishl => {
-                    let rhs = thread.current_frame_mut().pop()?.as_int()? & 0x1f;
-                    let lhs = thread.current_frame_mut().pop()?.as_int()?;
-                    thread.current_frame_mut().push(Value::Int(lhs << rhs))?;
-                }
-                Opcode::Ishr => {
-                    let rhs = thread.current_frame_mut().pop()?.as_int()? & 0x1f;
-                    let lhs = thread.current_frame_mut().pop()?.as_int()?;
-                    thread.current_frame_mut().push(Value::Int(lhs >> rhs))?;
-                }
-                Opcode::Iushr => {
-                    let rhs = thread.current_frame_mut().pop()?.as_int()? & 0x1f;
-                    let lhs = thread.current_frame_mut().pop()?.as_int()?;
+                let lhs = thread.current_frame_mut().pop()?.as_long()?;
+                thread.current_frame_mut().push(Value::Long(lhs % rhs))?;
+            }
+            Opcode::Lneg => {
+                let value = thread.current_frame_mut().pop()?.as_long()?;
+                thread.current_frame_mut().push(Value::Long(-value))?;
+            }
+            // --- Float arithmetic ---
+            Opcode::Fadd => {
+                let rhs = thread.current_frame_mut().pop()?.as_float()?;
+                let lhs = thread.current_frame_mut().pop()?.as_float()?;
+                thread.current_frame_mut().push(Value::Float(lhs + rhs))?;
+            }
+            Opcode::Fsub => {
+                let rhs = thread.current_frame_mut().pop()?.as_float()?;
+                let lhs = thread.current_frame_mut().pop()?.as_float()?;
+                thread.current_frame_mut().push(Value::Float(lhs - rhs))?;
+            }
+            Opcode::Fmul => {
+                let rhs = thread.current_frame_mut().pop()?.as_float()?;
+                let lhs = thread.current_frame_mut().pop()?.as_float()?;
+                thread.current_frame_mut().push(Value::Float(lhs * rhs))?;
+            }
+            Opcode::Fdiv => {
+                let rhs = thread.current_frame_mut().pop()?.as_float()?;
+                let lhs = thread.current_frame_mut().pop()?.as_float()?;
+                thread.current_frame_mut().push(Value::Float(lhs / rhs))?;
+            }
+            Opcode::Frem => {
+                let rhs = thread.current_frame_mut().pop()?.as_float()?;
+                let lhs = thread.current_frame_mut().pop()?.as_float()?;
+                thread.current_frame_mut().push(Value::Float(lhs % rhs))?;
+            }
+            Opcode::Fneg => {
+                let value = thread.current_frame_mut().pop()?.as_float()?;
+                thread.current_frame_mut().push(Value::Float(-value))?;
+            }
+            // --- Double arithmetic ---
+            Opcode::Dadd => {
+                let rhs = thread.current_frame_mut().pop()?.as_double()?;
+                let lhs = thread.current_frame_mut().pop()?.as_double()?;
+                thread.current_frame_mut().push(Value::Double(lhs + rhs))?;
+            }
+            Opcode::Dsub => {
+                let rhs = thread.current_frame_mut().pop()?.as_double()?;
+                let lhs = thread.current_frame_mut().pop()?.as_double()?;
+                thread.current_frame_mut().push(Value::Double(lhs - rhs))?;
+            }
+            Opcode::Dmul => {
+                let rhs = thread.current_frame_mut().pop()?.as_double()?;
+                let lhs = thread.current_frame_mut().pop()?.as_double()?;
+                thread.current_frame_mut().push(Value::Double(lhs * rhs))?;
+            }
+            Opcode::Ddiv => {
+                let rhs = thread.current_frame_mut().pop()?.as_double()?;
+                let lhs = thread.current_frame_mut().pop()?.as_double()?;
+                thread.current_frame_mut().push(Value::Double(lhs / rhs))?;
+            }
+            Opcode::Drem => {
+                let rhs = thread.current_frame_mut().pop()?.as_double()?;
+                let lhs = thread.current_frame_mut().pop()?.as_double()?;
+                thread.current_frame_mut().push(Value::Double(lhs % rhs))?;
+            }
+            Opcode::Dneg => {
+                let value = thread.current_frame_mut().pop()?.as_double()?;
+                thread.current_frame_mut().push(Value::Double(-value))?;
+            }
+            Opcode::Ishl => {
+                let rhs = thread.current_frame_mut().pop()?.as_int()? & 0x1f;
+                let lhs = thread.current_frame_mut().pop()?.as_int()?;
+                thread.current_frame_mut().push(Value::Int(lhs << rhs))?;
+            }
+            Opcode::Ishr => {
+                let rhs = thread.current_frame_mut().pop()?.as_int()? & 0x1f;
+                let lhs = thread.current_frame_mut().pop()?.as_int()?;
+                thread.current_frame_mut().push(Value::Int(lhs >> rhs))?;
+            }
+            Opcode::Iushr => {
+                let rhs = thread.current_frame_mut().pop()?.as_int()? & 0x1f;
+                let lhs = thread.current_frame_mut().pop()?.as_int()?;
+                thread
+                    .current_frame_mut()
+                    .push(Value::Int(((lhs as u32) >> rhs) as i32))?;
+            }
+            Opcode::Iand => {
+                let rhs = thread.current_frame_mut().pop()?.as_int()?;
+                let lhs = thread.current_frame_mut().pop()?.as_int()?;
+                thread.current_frame_mut().push(Value::Int(lhs & rhs))?;
+            }
+            Opcode::Ior => {
+                let rhs = thread.current_frame_mut().pop()?.as_int()?;
+                let lhs = thread.current_frame_mut().pop()?.as_int()?;
+                thread.current_frame_mut().push(Value::Int(lhs | rhs))?;
+            }
+            Opcode::Ixor => {
+                let rhs = thread.current_frame_mut().pop()?.as_int()?;
+                let lhs = thread.current_frame_mut().pop()?.as_int()?;
+                thread.current_frame_mut().push(Value::Int(lhs ^ rhs))?;
+            }
+            Opcode::Lshl => {
+                let rhs = thread.current_frame_mut().pop()?.as_int()? & 0x3f;
+                let lhs = thread.current_frame_mut().pop()?.as_long()?;
+                thread.current_frame_mut().push(Value::Long(lhs << rhs))?;
+            }
+            Opcode::Lshr => {
+                let rhs = thread.current_frame_mut().pop()?.as_int()? & 0x3f;
+                let lhs = thread.current_frame_mut().pop()?.as_long()?;
+                thread.current_frame_mut().push(Value::Long(lhs >> rhs))?;
+            }
+            Opcode::Lushr => {
+                let rhs = thread.current_frame_mut().pop()?.as_int()? & 0x3f;
+                let lhs = thread.current_frame_mut().pop()?.as_long()?;
+                thread
+                    .current_frame_mut()
+                    .push(Value::Long(((lhs as u64) >> rhs) as i64))?;
+            }
+            Opcode::Land => {
+                let rhs = thread.current_frame_mut().pop()?.as_long()?;
+                let lhs = thread.current_frame_mut().pop()?.as_long()?;
+                thread.current_frame_mut().push(Value::Long(lhs & rhs))?;
+            }
+            Opcode::Lor => {
+                let rhs = thread.current_frame_mut().pop()?.as_long()?;
+                let lhs = thread.current_frame_mut().pop()?.as_long()?;
+                thread.current_frame_mut().push(Value::Long(lhs | rhs))?;
+            }
+            Opcode::Lxor => {
+                let rhs = thread.current_frame_mut().pop()?.as_long()?;
+                let lhs = thread.current_frame_mut().pop()?.as_long()?;
+                thread.current_frame_mut().push(Value::Long(lhs ^ rhs))?;
+            }
+            Opcode::Iinc => {
+                let index = thread.current_frame_mut().read_u8()? as usize;
+                let delta = thread.current_frame_mut().read_u8()? as i8 as i32;
+                let value = thread.current_frame().load_local(index)?.as_int()?;
+                thread
+                    .current_frame_mut()
+                    .store_local(index, Value::Int(value + delta))?;
+            }
+            Opcode::I2b => {
+                let value = thread.current_frame_mut().pop()?.as_int()?;
+                thread
+                    .current_frame_mut()
+                    .push(Value::Int(value as i8 as i32))?;
+            }
+            Opcode::I2c => {
+                let value = thread.current_frame_mut().pop()?.as_int()?;
+                thread
+                    .current_frame_mut()
+                    .push(Value::Int(value as u16 as i32))?;
+            }
+            Opcode::I2s => {
+                let value = thread.current_frame_mut().pop()?.as_int()?;
+                thread
+                    .current_frame_mut()
+                    .push(Value::Int(value as i16 as i32))?;
+            }
+            // --- Widening / narrowing conversions ---
+            Opcode::I2l => {
+                let v = thread.current_frame_mut().pop()?.as_int()?;
+                thread.current_frame_mut().push(Value::Long(v as i64))?;
+            }
+            Opcode::I2f => {
+                let v = thread.current_frame_mut().pop()?.as_int()?;
+                thread.current_frame_mut().push(Value::Float(v as f32))?;
+            }
+            Opcode::I2d => {
+                let v = thread.current_frame_mut().pop()?.as_int()?;
+                thread.current_frame_mut().push(Value::Double(v as f64))?;
+            }
+            Opcode::L2i => {
+                let v = thread.current_frame_mut().pop()?.as_long()?;
+                thread.current_frame_mut().push(Value::Int(v as i32))?;
+            }
+            Opcode::L2f => {
+                let v = thread.current_frame_mut().pop()?.as_long()?;
+                thread.current_frame_mut().push(Value::Float(v as f32))?;
+            }
+            Opcode::L2d => {
+                let v = thread.current_frame_mut().pop()?.as_long()?;
+                thread.current_frame_mut().push(Value::Double(v as f64))?;
+            }
+            Opcode::F2i => {
+                let v = thread.current_frame_mut().pop()?.as_float()?;
+                thread.current_frame_mut().push(Value::Int(v as i32))?;
+            }
+            Opcode::F2l => {
+                let v = thread.current_frame_mut().pop()?.as_float()?;
+                thread.current_frame_mut().push(Value::Long(v as i64))?;
+            }
+            Opcode::F2d => {
+                let v = thread.current_frame_mut().pop()?.as_float()?;
+                thread.current_frame_mut().push(Value::Double(v as f64))?;
+            }
+            Opcode::D2i => {
+                let v = thread.current_frame_mut().pop()?.as_double()?;
+                thread.current_frame_mut().push(Value::Int(v as i32))?;
+            }
+            Opcode::D2l => {
+                let v = thread.current_frame_mut().pop()?.as_double()?;
+                thread.current_frame_mut().push(Value::Long(v as i64))?;
+            }
+            Opcode::D2f => {
+                let v = thread.current_frame_mut().pop()?.as_double()?;
+                thread.current_frame_mut().push(Value::Float(v as f32))?;
+            }
+            // --- Long / float / double comparisons ---
+            Opcode::Lcmp => {
+                let rhs = thread.current_frame_mut().pop()?.as_long()?;
+                let lhs = thread.current_frame_mut().pop()?.as_long()?;
+                let result = if lhs > rhs {
+                    1
+                } else if lhs == rhs {
+                    0
+                } else {
+                    -1
+                };
+                thread.current_frame_mut().push(Value::Int(result))?;
+            }
+            Opcode::Fcmpl => {
+                let rhs = thread.current_frame_mut().pop()?.as_float()?;
+                let lhs = thread.current_frame_mut().pop()?.as_float()?;
+                let result = if lhs > rhs {
+                    1
+                } else if lhs == rhs {
+                    0
+                } else {
+                    -1
+                };
+                thread.current_frame_mut().push(Value::Int(result))?;
+            }
+            Opcode::Fcmpg => {
+                let rhs = thread.current_frame_mut().pop()?.as_float()?;
+                let lhs = thread.current_frame_mut().pop()?.as_float()?;
+                let result = if lhs < rhs {
+                    -1
+                } else if lhs == rhs {
+                    0
+                } else {
+                    1
+                };
+                thread.current_frame_mut().push(Value::Int(result))?;
+            }
+            Opcode::Dcmpl => {
+                let rhs = thread.current_frame_mut().pop()?.as_double()?;
+                let lhs = thread.current_frame_mut().pop()?.as_double()?;
+                let result = if lhs > rhs {
+                    1
+                } else if lhs == rhs {
+                    0
+                } else {
+                    -1
+                };
+                thread.current_frame_mut().push(Value::Int(result))?;
+            }
+            Opcode::Dcmpg => {
+                let rhs = thread.current_frame_mut().pop()?.as_double()?;
+                let lhs = thread.current_frame_mut().pop()?.as_double()?;
+                let result = if lhs < rhs {
+                    -1
+                } else if lhs == rhs {
+                    0
+                } else {
+                    1
+                };
+                thread.current_frame_mut().push(Value::Int(result))?;
+            }
+            Opcode::Ifeq => {
+                let offset = thread.current_frame_mut().read_i16()?;
+                let value = thread.current_frame_mut().pop()?.as_int()?;
+                if value == 0 {
                     thread
                         .current_frame_mut()
-                        .push(Value::Int(((lhs as u32) >> rhs) as i32))?;
+                        .branch(opcode_pc, offset.into())?;
                 }
-                Opcode::Iand => {
-                    let rhs = thread.current_frame_mut().pop()?.as_int()?;
-                    let lhs = thread.current_frame_mut().pop()?.as_int()?;
-                    thread.current_frame_mut().push(Value::Int(lhs & rhs))?;
-                }
-                Opcode::Ior => {
-                    let rhs = thread.current_frame_mut().pop()?.as_int()?;
-                    let lhs = thread.current_frame_mut().pop()?.as_int()?;
-                    thread.current_frame_mut().push(Value::Int(lhs | rhs))?;
-                }
-                Opcode::Ixor => {
-                    let rhs = thread.current_frame_mut().pop()?.as_int()?;
-                    let lhs = thread.current_frame_mut().pop()?.as_int()?;
-                    thread.current_frame_mut().push(Value::Int(lhs ^ rhs))?;
-                }
-                Opcode::Lshl => {
-                    let rhs = thread.current_frame_mut().pop()?.as_int()? & 0x3f;
-                    let lhs = thread.current_frame_mut().pop()?.as_long()?;
-                    thread.current_frame_mut().push(Value::Long(lhs << rhs))?;
-                }
-                Opcode::Lshr => {
-                    let rhs = thread.current_frame_mut().pop()?.as_int()? & 0x3f;
-                    let lhs = thread.current_frame_mut().pop()?.as_long()?;
-                    thread.current_frame_mut().push(Value::Long(lhs >> rhs))?;
-                }
-                Opcode::Lushr => {
-                    let rhs = thread.current_frame_mut().pop()?.as_int()? & 0x3f;
-                    let lhs = thread.current_frame_mut().pop()?.as_long()?;
-                    thread.current_frame_mut().push(Value::Long(((lhs as u64) >> rhs) as i64))?;
-                }
-                Opcode::Land => {
-                    let rhs = thread.current_frame_mut().pop()?.as_long()?;
-                    let lhs = thread.current_frame_mut().pop()?.as_long()?;
-                    thread.current_frame_mut().push(Value::Long(lhs & rhs))?;
-                }
-                Opcode::Lor => {
-                    let rhs = thread.current_frame_mut().pop()?.as_long()?;
-                    let lhs = thread.current_frame_mut().pop()?.as_long()?;
-                    thread.current_frame_mut().push(Value::Long(lhs | rhs))?;
-                }
-                Opcode::Lxor => {
-                    let rhs = thread.current_frame_mut().pop()?.as_long()?;
-                    let lhs = thread.current_frame_mut().pop()?.as_long()?;
-                    thread.current_frame_mut().push(Value::Long(lhs ^ rhs))?;
-                }
-                Opcode::Iinc => {
-                    let index = thread.current_frame_mut().read_u8()? as usize;
-                    let delta = thread.current_frame_mut().read_u8()? as i8 as i32;
-                    let value = thread.current_frame().load_local(index)?.as_int()?;
+            }
+            Opcode::Ifne => {
+                let offset = thread.current_frame_mut().read_i16()?;
+                let value = thread.current_frame_mut().pop()?.as_int()?;
+                if value != 0 {
                     thread
                         .current_frame_mut()
-                        .store_local(index, Value::Int(value + delta))?;
+                        .branch(opcode_pc, offset.into())?;
                 }
-                Opcode::I2b => {
-                    let value = thread.current_frame_mut().pop()?.as_int()?;
+            }
+            Opcode::Iflt => {
+                let offset = thread.current_frame_mut().read_i16()?;
+                let value = thread.current_frame_mut().pop()?.as_int()?;
+                if value < 0 {
                     thread
                         .current_frame_mut()
-                        .push(Value::Int(value as i8 as i32))?;
+                        .branch(opcode_pc, offset.into())?;
                 }
-                Opcode::I2c => {
-                    let value = thread.current_frame_mut().pop()?.as_int()?;
+            }
+            Opcode::Ifge => {
+                let offset = thread.current_frame_mut().read_i16()?;
+                let value = thread.current_frame_mut().pop()?.as_int()?;
+                if value >= 0 {
                     thread
                         .current_frame_mut()
-                        .push(Value::Int(value as u16 as i32))?;
+                        .branch(opcode_pc, offset.into())?;
                 }
-                Opcode::I2s => {
-                    let value = thread.current_frame_mut().pop()?.as_int()?;
+            }
+            Opcode::Ifgt => {
+                let offset = thread.current_frame_mut().read_i16()?;
+                let value = thread.current_frame_mut().pop()?.as_int()?;
+                if value > 0 {
                     thread
                         .current_frame_mut()
-                        .push(Value::Int(value as i16 as i32))?;
+                        .branch(opcode_pc, offset.into())?;
                 }
-                // --- Widening / narrowing conversions ---
-                Opcode::I2l => {
-                    let v = thread.current_frame_mut().pop()?.as_int()?;
-                    thread.current_frame_mut().push(Value::Long(v as i64))?;
-                }
-                Opcode::I2f => {
-                    let v = thread.current_frame_mut().pop()?.as_int()?;
-                    thread.current_frame_mut().push(Value::Float(v as f32))?;
-                }
-                Opcode::I2d => {
-                    let v = thread.current_frame_mut().pop()?.as_int()?;
-                    thread.current_frame_mut().push(Value::Double(v as f64))?;
-                }
-                Opcode::L2i => {
-                    let v = thread.current_frame_mut().pop()?.as_long()?;
-                    thread.current_frame_mut().push(Value::Int(v as i32))?;
-                }
-                Opcode::L2f => {
-                    let v = thread.current_frame_mut().pop()?.as_long()?;
-                    thread.current_frame_mut().push(Value::Float(v as f32))?;
-                }
-                Opcode::L2d => {
-                    let v = thread.current_frame_mut().pop()?.as_long()?;
-                    thread.current_frame_mut().push(Value::Double(v as f64))?;
-                }
-                Opcode::F2i => {
-                    let v = thread.current_frame_mut().pop()?.as_float()?;
-                    thread.current_frame_mut().push(Value::Int(v as i32))?;
-                }
-                Opcode::F2l => {
-                    let v = thread.current_frame_mut().pop()?.as_float()?;
-                    thread.current_frame_mut().push(Value::Long(v as i64))?;
-                }
-                Opcode::F2d => {
-                    let v = thread.current_frame_mut().pop()?.as_float()?;
-                    thread.current_frame_mut().push(Value::Double(v as f64))?;
-                }
-                Opcode::D2i => {
-                    let v = thread.current_frame_mut().pop()?.as_double()?;
-                    thread.current_frame_mut().push(Value::Int(v as i32))?;
-                }
-                Opcode::D2l => {
-                    let v = thread.current_frame_mut().pop()?.as_double()?;
-                    thread.current_frame_mut().push(Value::Long(v as i64))?;
-                }
-                Opcode::D2f => {
-                    let v = thread.current_frame_mut().pop()?.as_double()?;
-                    thread.current_frame_mut().push(Value::Float(v as f32))?;
-                }
-                // --- Long / float / double comparisons ---
-                Opcode::Lcmp => {
-                    let rhs = thread.current_frame_mut().pop()?.as_long()?;
-                    let lhs = thread.current_frame_mut().pop()?.as_long()?;
-                    let result = if lhs > rhs { 1 } else if lhs == rhs { 0 } else { -1 };
-                    thread.current_frame_mut().push(Value::Int(result))?;
-                }
-                Opcode::Fcmpl => {
-                    let rhs = thread.current_frame_mut().pop()?.as_float()?;
-                    let lhs = thread.current_frame_mut().pop()?.as_float()?;
-                    let result = if lhs > rhs { 1 } else if lhs == rhs { 0 } else { -1 };
-                    thread.current_frame_mut().push(Value::Int(result))?;
-                }
-                Opcode::Fcmpg => {
-                    let rhs = thread.current_frame_mut().pop()?.as_float()?;
-                    let lhs = thread.current_frame_mut().pop()?.as_float()?;
-                    let result = if lhs < rhs { -1 } else if lhs == rhs { 0 } else { 1 };
-                    thread.current_frame_mut().push(Value::Int(result))?;
-                }
-                Opcode::Dcmpl => {
-                    let rhs = thread.current_frame_mut().pop()?.as_double()?;
-                    let lhs = thread.current_frame_mut().pop()?.as_double()?;
-                    let result = if lhs > rhs { 1 } else if lhs == rhs { 0 } else { -1 };
-                    thread.current_frame_mut().push(Value::Int(result))?;
-                }
-                Opcode::Dcmpg => {
-                    let rhs = thread.current_frame_mut().pop()?.as_double()?;
-                    let lhs = thread.current_frame_mut().pop()?.as_double()?;
-                    let result = if lhs < rhs { -1 } else if lhs == rhs { 0 } else { 1 };
-                    thread.current_frame_mut().push(Value::Int(result))?;
-                }
-                Opcode::Ifeq => {
-                    let offset = thread.current_frame_mut().read_i16()?;
-                    let value = thread.current_frame_mut().pop()?.as_int()?;
-                    if value == 0 {
-                        thread.current_frame_mut().branch(opcode_pc, offset.into())?;
-                    }
-                }
-                Opcode::Ifne => {
-                    let offset = thread.current_frame_mut().read_i16()?;
-                    let value = thread.current_frame_mut().pop()?.as_int()?;
-                    if value != 0 {
-                        thread.current_frame_mut().branch(opcode_pc, offset.into())?;
-                    }
-                }
-                Opcode::Iflt => {
-                    let offset = thread.current_frame_mut().read_i16()?;
-                    let value = thread.current_frame_mut().pop()?.as_int()?;
-                    if value < 0 {
-                        thread.current_frame_mut().branch(opcode_pc, offset.into())?;
-                    }
-                }
-                Opcode::Ifge => {
-                    let offset = thread.current_frame_mut().read_i16()?;
-                    let value = thread.current_frame_mut().pop()?.as_int()?;
-                    if value >= 0 {
-                        thread.current_frame_mut().branch(opcode_pc, offset.into())?;
-                    }
-                }
-                Opcode::Ifgt => {
-                    let offset = thread.current_frame_mut().read_i16()?;
-                    let value = thread.current_frame_mut().pop()?.as_int()?;
-                    if value > 0 {
-                        thread.current_frame_mut().branch(opcode_pc, offset.into())?;
-                    }
-                }
-                Opcode::Ifle => {
-                    let offset = thread.current_frame_mut().read_i16()?;
-                    let value = thread.current_frame_mut().pop()?.as_int()?;
-                    if value <= 0 {
-                        thread.current_frame_mut().branch(opcode_pc, offset.into())?;
-                    }
-                }
-                Opcode::IfIcmpeq => {
-                    let offset = thread.current_frame_mut().read_i16()?;
-                    let rhs = thread.current_frame_mut().pop()?.as_int()?;
-                    let lhs = thread.current_frame_mut().pop()?.as_int()?;
-                    if lhs == rhs {
-                        thread.current_frame_mut().branch(opcode_pc, offset.into())?;
-                    }
-                }
-                Opcode::IfIcmpne => {
-                    let offset = thread.current_frame_mut().read_i16()?;
-                    let rhs = thread.current_frame_mut().pop()?.as_int()?;
-                    let lhs = thread.current_frame_mut().pop()?.as_int()?;
-                    if lhs != rhs {
-                        thread.current_frame_mut().branch(opcode_pc, offset.into())?;
-                    }
-                }
-                Opcode::IfIcmplt => {
-                    let offset = thread.current_frame_mut().read_i16()?;
-                    let rhs = thread.current_frame_mut().pop()?.as_int()?;
-                    let lhs = thread.current_frame_mut().pop()?.as_int()?;
-                    if lhs < rhs {
-                        thread.current_frame_mut().branch(opcode_pc, offset.into())?;
-                    }
-                }
-                Opcode::IfIcmpge => {
-                    let offset = thread.current_frame_mut().read_i16()?;
-                    let rhs = thread.current_frame_mut().pop()?.as_int()?;
-                    let lhs = thread.current_frame_mut().pop()?.as_int()?;
-                    if lhs >= rhs {
-                        thread.current_frame_mut().branch(opcode_pc, offset.into())?;
-                    }
-                }
-                Opcode::IfIcmpgt => {
-                    let offset = thread.current_frame_mut().read_i16()?;
-                    let rhs = thread.current_frame_mut().pop()?.as_int()?;
-                    let lhs = thread.current_frame_mut().pop()?.as_int()?;
-                    if lhs > rhs {
-                        thread.current_frame_mut().branch(opcode_pc, offset.into())?;
-                    }
-                }
-                Opcode::IfIcmple => {
-                    let offset = thread.current_frame_mut().read_i16()?;
-                    let rhs = thread.current_frame_mut().pop()?.as_int()?;
-                    let lhs = thread.current_frame_mut().pop()?.as_int()?;
-                    if lhs <= rhs {
-                        thread.current_frame_mut().branch(opcode_pc, offset.into())?;
-                    }
-                }
-                Opcode::IfAcmpeq => {
-                    let offset = thread.current_frame_mut().read_i16()?;
-                    let rhs = thread.current_frame_mut().pop()?.as_reference()?;
-                    let lhs = thread.current_frame_mut().pop()?.as_reference()?;
-                    if lhs == rhs {
-                        thread.current_frame_mut().branch(opcode_pc, offset.into())?;
-                    }
-                }
-                Opcode::IfAcmpne => {
-                    let offset = thread.current_frame_mut().read_i16()?;
-                    let rhs = thread.current_frame_mut().pop()?.as_reference()?;
-                    let lhs = thread.current_frame_mut().pop()?.as_reference()?;
-                    if lhs != rhs {
-                        thread.current_frame_mut().branch(opcode_pc, offset.into())?;
-                    }
-                }
-                Opcode::Tableswitch => {
-                    // Align pc to a 4-byte boundary (relative to method start).
-                    let padding = (4 - (thread.current_frame().pc % 4)) % 4;
-                    for _ in 0..padding {
-                        thread.current_frame_mut().read_u8()?;
-                    }
-                    let default = thread.current_frame_mut().read_i32()?;
-                    let low = thread.current_frame_mut().read_i32()?;
-                    let high = thread.current_frame_mut().read_i32()?;
-                    let count = (high - low + 1) as usize;
-                    let mut offsets = Vec::with_capacity(count);
-                    for _ in 0..count {
-                        offsets.push(thread.current_frame_mut().read_i32()?);
-                    }
-                    let index = thread.current_frame_mut().pop()?.as_int()?;
-                    let offset = if index >= low && index <= high {
-                        offsets[(index - low) as usize]
-                    } else {
-                        default
-                    };
-                    thread.current_frame_mut().branch(opcode_pc, offset)?;
-                }
-                Opcode::Lookupswitch => {
-                    let padding = (4 - (thread.current_frame().pc % 4)) % 4;
-                    for _ in 0..padding {
-                        thread.current_frame_mut().read_u8()?;
-                    }
-                    let default = thread.current_frame_mut().read_i32()?;
-                    let npairs = thread.current_frame_mut().read_i32()? as usize;
-                    let mut pairs = Vec::with_capacity(npairs);
-                    for _ in 0..npairs {
-                        let key = thread.current_frame_mut().read_i32()?;
-                        let offset = thread.current_frame_mut().read_i32()?;
-                        pairs.push((key, offset));
-                    }
-                    let key = thread.current_frame_mut().pop()?.as_int()?;
-                    let offset = pairs
-                        .iter()
-                        .find(|(k, _)| *k == key)
-                        .map(|(_, o)| *o)
-                        .unwrap_or(default);
-                    thread.current_frame_mut().branch(opcode_pc, offset)?;
-                }
-                Opcode::Goto => {
-                    let offset = thread.current_frame_mut().read_i16()?;
-                    thread.current_frame_mut().branch(opcode_pc, offset.into())?;
-                }
-                Opcode::Jsr => {
-                    let offset = thread.current_frame_mut().read_i16()?;
-                    let return_pc = thread.current_frame().pc;
+            }
+            Opcode::Ifle => {
+                let offset = thread.current_frame_mut().read_i16()?;
+                let value = thread.current_frame_mut().pop()?.as_int()?;
+                if value <= 0 {
                     thread
                         .current_frame_mut()
-                        .push(Value::ReturnAddress(return_pc))?;
-                    thread.current_frame_mut().branch(opcode_pc, offset.into())?;
+                        .branch(opcode_pc, offset.into())?;
                 }
-                Opcode::Ret => {
-                    let index = thread.current_frame_mut().read_u8()? as usize;
-                    let target = thread.current_frame().load_local(index)?.as_return_address()?;
-                    if target >= thread.current_frame().code.len() {
-                        return Err(VmError::InvalidBranchTarget {
-                            target: target as isize,
-                            code_len: thread.current_frame().code.len(),
+            }
+            Opcode::IfIcmpeq => {
+                let offset = thread.current_frame_mut().read_i16()?;
+                let rhs = thread.current_frame_mut().pop()?.as_int()?;
+                let lhs = thread.current_frame_mut().pop()?.as_int()?;
+                if lhs == rhs {
+                    thread
+                        .current_frame_mut()
+                        .branch(opcode_pc, offset.into())?;
+                }
+            }
+            Opcode::IfIcmpne => {
+                let offset = thread.current_frame_mut().read_i16()?;
+                let rhs = thread.current_frame_mut().pop()?.as_int()?;
+                let lhs = thread.current_frame_mut().pop()?.as_int()?;
+                if lhs != rhs {
+                    thread
+                        .current_frame_mut()
+                        .branch(opcode_pc, offset.into())?;
+                }
+            }
+            Opcode::IfIcmplt => {
+                let offset = thread.current_frame_mut().read_i16()?;
+                let rhs = thread.current_frame_mut().pop()?.as_int()?;
+                let lhs = thread.current_frame_mut().pop()?.as_int()?;
+                if lhs < rhs {
+                    thread
+                        .current_frame_mut()
+                        .branch(opcode_pc, offset.into())?;
+                }
+            }
+            Opcode::IfIcmpge => {
+                let offset = thread.current_frame_mut().read_i16()?;
+                let rhs = thread.current_frame_mut().pop()?.as_int()?;
+                let lhs = thread.current_frame_mut().pop()?.as_int()?;
+                if lhs >= rhs {
+                    thread
+                        .current_frame_mut()
+                        .branch(opcode_pc, offset.into())?;
+                }
+            }
+            Opcode::IfIcmpgt => {
+                let offset = thread.current_frame_mut().read_i16()?;
+                let rhs = thread.current_frame_mut().pop()?.as_int()?;
+                let lhs = thread.current_frame_mut().pop()?.as_int()?;
+                if lhs > rhs {
+                    thread
+                        .current_frame_mut()
+                        .branch(opcode_pc, offset.into())?;
+                }
+            }
+            Opcode::IfIcmple => {
+                let offset = thread.current_frame_mut().read_i16()?;
+                let rhs = thread.current_frame_mut().pop()?.as_int()?;
+                let lhs = thread.current_frame_mut().pop()?.as_int()?;
+                if lhs <= rhs {
+                    thread
+                        .current_frame_mut()
+                        .branch(opcode_pc, offset.into())?;
+                }
+            }
+            Opcode::IfAcmpeq => {
+                let offset = thread.current_frame_mut().read_i16()?;
+                let rhs = thread.current_frame_mut().pop()?.as_reference()?;
+                let lhs = thread.current_frame_mut().pop()?.as_reference()?;
+                if lhs == rhs {
+                    thread
+                        .current_frame_mut()
+                        .branch(opcode_pc, offset.into())?;
+                }
+            }
+            Opcode::IfAcmpne => {
+                let offset = thread.current_frame_mut().read_i16()?;
+                let rhs = thread.current_frame_mut().pop()?.as_reference()?;
+                let lhs = thread.current_frame_mut().pop()?.as_reference()?;
+                if lhs != rhs {
+                    thread
+                        .current_frame_mut()
+                        .branch(opcode_pc, offset.into())?;
+                }
+            }
+            Opcode::Tableswitch => {
+                // Align pc to a 4-byte boundary (relative to method start).
+                let padding = (4 - (thread.current_frame().pc % 4)) % 4;
+                for _ in 0..padding {
+                    thread.current_frame_mut().read_u8()?;
+                }
+                let default = thread.current_frame_mut().read_i32()?;
+                let low = thread.current_frame_mut().read_i32()?;
+                let high = thread.current_frame_mut().read_i32()?;
+                let count = (high - low + 1) as usize;
+                let mut offsets = Vec::with_capacity(count);
+                for _ in 0..count {
+                    offsets.push(thread.current_frame_mut().read_i32()?);
+                }
+                let index = thread.current_frame_mut().pop()?.as_int()?;
+                let offset = if index >= low && index <= high {
+                    offsets[(index - low) as usize]
+                } else {
+                    default
+                };
+                thread.current_frame_mut().branch(opcode_pc, offset)?;
+            }
+            Opcode::Lookupswitch => {
+                let padding = (4 - (thread.current_frame().pc % 4)) % 4;
+                for _ in 0..padding {
+                    thread.current_frame_mut().read_u8()?;
+                }
+                let default = thread.current_frame_mut().read_i32()?;
+                let npairs = thread.current_frame_mut().read_i32()? as usize;
+                let mut pairs = Vec::with_capacity(npairs);
+                for _ in 0..npairs {
+                    let key = thread.current_frame_mut().read_i32()?;
+                    let offset = thread.current_frame_mut().read_i32()?;
+                    pairs.push((key, offset));
+                }
+                let key = thread.current_frame_mut().pop()?.as_int()?;
+                let offset = pairs
+                    .iter()
+                    .find(|(k, _)| *k == key)
+                    .map(|(_, o)| *o)
+                    .unwrap_or(default);
+                thread.current_frame_mut().branch(opcode_pc, offset)?;
+            }
+            Opcode::Goto => {
+                let offset = thread.current_frame_mut().read_i16()?;
+                thread
+                    .current_frame_mut()
+                    .branch(opcode_pc, offset.into())?;
+            }
+            Opcode::Jsr => {
+                let offset = thread.current_frame_mut().read_i16()?;
+                let return_pc = thread.current_frame().pc;
+                thread
+                    .current_frame_mut()
+                    .push(Value::ReturnAddress(return_pc))?;
+                thread
+                    .current_frame_mut()
+                    .branch(opcode_pc, offset.into())?;
+            }
+            Opcode::Ret => {
+                let index = thread.current_frame_mut().read_u8()? as usize;
+                let target = thread
+                    .current_frame()
+                    .load_local(index)?
+                    .as_return_address()?;
+                if target >= thread.current_frame().code.len() {
+                    return Err(VmError::InvalidBranchTarget {
+                        target: target as isize,
+                        code_len: thread.current_frame().code.len(),
+                    });
+                }
+                thread.current_frame_mut().pc = target;
+            }
+            Opcode::GotoW => {
+                let offset = thread.current_frame_mut().read_i32()?;
+                thread.current_frame_mut().branch(opcode_pc, offset)?;
+            }
+            Opcode::JsrW => {
+                let offset = thread.current_frame_mut().read_i32()?;
+                let return_pc = thread.current_frame().pc;
+                thread
+                    .current_frame_mut()
+                    .push(Value::ReturnAddress(return_pc))?;
+                thread.current_frame_mut().branch(opcode_pc, offset)?;
+            }
+
+            // --- References: field access ---
+            Opcode::Getstatic => {
+                let index = thread.current_frame_mut().read_u16()? as usize;
+                let field_ref = thread.current_frame().load_field_ref(index)?.clone();
+                self.ensure_class_loaded(&field_ref.class_name)?;
+                self.ensure_class_initialized(&field_ref.class_name)?;
+                let value = self.get_static_field(&field_ref.class_name, &field_ref.field_name)?;
+                thread.current_frame_mut().push(value)?;
+            }
+            Opcode::Putstatic => {
+                let index = thread.current_frame_mut().read_u16()? as usize;
+                let field_ref = thread.current_frame().load_field_ref(index)?.clone();
+                let value = thread.current_frame_mut().pop()?;
+                self.ensure_class_loaded(&field_ref.class_name)?;
+                self.ensure_class_initialized(&field_ref.class_name)?;
+                self.put_static_field(&field_ref.class_name, &field_ref.field_name, value)?;
+            }
+            Opcode::Getfield => {
+                let index = thread.current_frame_mut().read_u16()? as usize;
+                let field_ref = thread.current_frame().load_field_ref(index)?.clone();
+                let object_ref = thread.current_frame_mut().pop()?.as_reference()?;
+                let value = match self.heap.lock().unwrap().get(object_ref)? {
+                    HeapValue::Object { fields, .. } => fields
+                        .get(&field_ref.field_name)
+                        .copied()
+                        .ok_or_else(|| VmError::FieldNotFound {
+                            class_name: field_ref.class_name.clone(),
+                            field_name: field_ref.field_name.clone(),
+                        })?,
+                    value => {
+                        return Err(VmError::InvalidHeapValue {
+                            expected: "object",
+                            actual: value.kind_name(),
                         });
                     }
-                    thread.current_frame_mut().pc = target;
-                }
-                Opcode::GotoW => {
-                    let offset = thread.current_frame_mut().read_i32()?;
-                    thread.current_frame_mut().branch(opcode_pc, offset)?;
-                }
-                Opcode::JsrW => {
-                    let offset = thread.current_frame_mut().read_i32()?;
-                    let return_pc = thread.current_frame().pc;
-                    thread
-                        .current_frame_mut()
-                        .push(Value::ReturnAddress(return_pc))?;
-                    thread.current_frame_mut().branch(opcode_pc, offset)?;
-                }
-
-                // --- References: field access ---
-
-                Opcode::Getstatic => {
-                    let index = thread.current_frame_mut().read_u16()? as usize;
-                    let field_ref = thread.current_frame().load_field_ref(index)?.clone();
-                    self.ensure_class_loaded(&field_ref.class_name)?;
-                    self.ensure_class_initialized(&field_ref.class_name)?;
-                    let value =
-                        self.get_static_field(&field_ref.class_name, &field_ref.field_name)?;
-                    thread.current_frame_mut().push(value)?;
-                }
-                Opcode::Putstatic => {
-                    let index = thread.current_frame_mut().read_u16()? as usize;
-                    let field_ref = thread.current_frame().load_field_ref(index)?.clone();
-                    let value = thread.current_frame_mut().pop()?;
-                    self.ensure_class_loaded(&field_ref.class_name)?;
-                    self.ensure_class_initialized(&field_ref.class_name)?;
-                    self.put_static_field(&field_ref.class_name, &field_ref.field_name, value)?;
-                }
-                Opcode::Getfield => {
-                    let index = thread.current_frame_mut().read_u16()? as usize;
-                    let field_ref = thread.current_frame().load_field_ref(index)?.clone();
-                    let object_ref = thread.current_frame_mut().pop()?.as_reference()?;
-                    let value = match self.heap.lock().unwrap().get(object_ref)? {
-                        HeapValue::Object { fields, .. } => fields
-                            .get(&field_ref.field_name)
-                            .copied()
-                            .ok_or_else(|| VmError::FieldNotFound {
-                                class_name: field_ref.class_name.clone(),
-                                field_name: field_ref.field_name.clone(),
-                            })?,
-                        value => {
-                            return Err(VmError::InvalidHeapValue {
-                                expected: "object",
-                                actual: value.kind_name(),
-                            })
-                        }
-                    };
-                    thread.current_frame_mut().push(value)?;
-                }
-                Opcode::Putfield => {
-                    let index = thread.current_frame_mut().read_u16()? as usize;
-                    let field_ref = thread.current_frame().load_field_ref(index)?.clone();
-                    let value = thread.current_frame_mut().pop()?;
-                    let object_ref = thread.current_frame_mut().pop()?.as_reference()?;
-                    match self.heap.lock().unwrap().get_mut(object_ref)? {
-                        HeapValue::Object { fields, .. } => {
-                            fields.insert(field_ref.field_name, value);
-                        }
-                        value => {
-                            return Err(VmError::InvalidHeapValue {
-                                expected: "object",
-                                actual: value.kind_name(),
-                            })
-                        }
-                    };
-                }
-
-                // --- References: method invocation ---
-
-                Opcode::Invokevirtual => {
-                    let index = thread.current_frame_mut().read_u16()? as usize;
-                    thread.current_frame_mut().increment_call_count(index);
-                    let method_ref = thread.current_frame().load_method_ref(index)?.clone();
-                    let arg_count = parse_arg_count(&method_ref.descriptor)?;
-
-                    let mut args = Vec::with_capacity(arg_count);
-                    for _ in 0..arg_count {
-                        args.push(thread.current_frame_mut().pop()?);
+                };
+                thread.current_frame_mut().push(value)?;
+            }
+            Opcode::Putfield => {
+                let index = thread.current_frame_mut().read_u16()? as usize;
+                let field_ref = thread.current_frame().load_field_ref(index)?.clone();
+                let value = thread.current_frame_mut().pop()?;
+                let object_ref = thread.current_frame_mut().pop()?.as_reference()?;
+                match self.heap.lock().unwrap().get_mut(object_ref)? {
+                    HeapValue::Object { fields, .. } => {
+                        fields.insert(field_ref.field_name, value);
                     }
-                    args.reverse();
-                    let receiver = thread.current_frame_mut().pop()?.as_reference()?;
-
-                    let should_return_false = receiver == Reference::Null
-                        && method_ref.class_name == "java/lang/Class"
-                        && method_ref.method_name == "desiredAssertionStatus"
-                        && method_ref.descriptor == "()Z";
-
-                    if should_return_false {
-                        thread.current_frame_mut().push(Value::Int(0))?;
-                    } else {
-                        let receiver_class = self.get_object_class(receiver)?;
-
-                        if let Some(cached_method) =
-                            thread.current_frame().get_cached_invoke(index, &receiver_class)
-                        {
-                            let mut all_args = vec![Value::Reference(receiver)];
-                            all_args.extend(args);
-                            match cached_method {
-                                ClassMethod::Native => {
-                                    let result = self.invoke_native(
-                                        &receiver_class,
-                                        &method_ref.method_name,
-                                        &method_ref.descriptor,
-                                        &all_args,
-                                    )?;
-                                    if let Some(value) = result {
-                                        thread.current_frame_mut().push(value)?;
-                                    }
-                                }
-                                ClassMethod::Bytecode(bytecode_method) => {
-                                    let callee = bytecode_method
-                                        .clone()
-                                        .with_initial_locals(Vm::args_to_locals(all_args));
-                                    thread.push_frame(Frame::new(callee));
-                                }
-                            }
-                        } else {
-                            let (resolved_class, class_method) = self.resolve_method(
-                                &receiver_class,
-                                &method_ref.method_name,
-                                &method_ref.descriptor,
-                            )?;
-                            thread.current_frame_mut().cache_invoke(
-                                index,
-                                resolved_class.clone(),
-                                class_method.clone(),
-                            );
-                            let mut all_args = vec![Value::Reference(receiver)];
-                            all_args.extend(args);
-                            match class_method {
-                                ClassMethod::Native => {
-                                    let result = self.invoke_native(
-                                        &resolved_class,
-                                        &method_ref.method_name,
-                                        &method_ref.descriptor,
-                                        &all_args,
-                                    )?;
-                                    if let Some(value) = result {
-                                        thread.current_frame_mut().push(value)?;
-                                    }
-                                }
-                                ClassMethod::Bytecode(bytecode_method) => {
-                                    let callee = bytecode_method
-                                        .clone()
-                                        .with_initial_locals(Vm::args_to_locals(all_args));
-                                    thread.push_frame(Frame::new(callee));
-                                }
-                            }
-                        }
+                    value => {
+                        return Err(VmError::InvalidHeapValue {
+                            expected: "object",
+                            actual: value.kind_name(),
+                        });
                     }
+                };
+            }
+
+            // --- References: method invocation ---
+            Opcode::Invokevirtual => {
+                let index = thread.current_frame_mut().read_u16()? as usize;
+                thread.current_frame_mut().increment_call_count(index);
+                let method_ref = thread.current_frame().load_method_ref(index)?.clone();
+                let arg_count = parse_arg_count(&method_ref.descriptor)?;
+
+                let mut args = Vec::with_capacity(arg_count);
+                for _ in 0..arg_count {
+                    args.push(thread.current_frame_mut().pop()?);
                 }
-                Opcode::Invokespecial => {
-                    let index = thread.current_frame_mut().read_u16()? as usize;
-                    thread.current_frame_mut().increment_call_count(index);
-                    let method_ref = thread.current_frame().load_method_ref(index)?.clone();
-                    let arg_count = parse_arg_count(&method_ref.descriptor)?;
+                args.reverse();
+                let receiver = thread.current_frame_mut().pop()?.as_reference()?;
 
-                    let mut args = Vec::with_capacity(arg_count);
-                    for _ in 0..arg_count {
-                        args.push(thread.current_frame_mut().pop()?);
-                    }
-                    args.reverse();
-                    let receiver = thread.current_frame_mut().pop()?.as_reference()?;
+                let should_return_false = receiver == Reference::Null
+                    && method_ref.class_name == "java/lang/Class"
+                    && method_ref.method_name == "desiredAssertionStatus"
+                    && method_ref.descriptor == "()Z";
 
-                    // invokespecial uses the compile-time class, not the runtime class
-                    self.dispatch_instance_method(
-                        &mut thread,
-                        &method_ref.class_name,
-                        &method_ref,
-                        receiver,
-                        args,
-                    )?;
-                }
-                Opcode::Invokestatic => {
-                    let index = thread.current_frame_mut().read_u16()? as usize;
-                    thread.current_frame_mut().increment_call_count(index);
-                    let method_ref = thread.current_frame().load_method_ref(index)?.clone();
-                    let arg_count = parse_arg_count(&method_ref.descriptor)?;
+                if should_return_false {
+                    thread.current_frame_mut().push(Value::Int(0))?;
+                } else {
+                    let receiver_class = self.get_object_class(receiver)?;
 
-                    let mut args = Vec::with_capacity(arg_count);
-                    for _ in 0..arg_count {
-                        args.push(thread.current_frame_mut().pop()?);
-                    }
-                    args.reverse();
-
-                    let class_name = &method_ref.class_name;
-                    self.ensure_class_loaded(class_name)?;
-                    self.ensure_class_initialized(class_name)?;
-
-                    // Shortcut: some JDK static methods drag in heavy
-                    // machinery (Reference handler threads, security,
-                    // reflection). When a native shadow exists, dispatch
-                    // to it rather than running the JDK bytecode.
-                    if self.has_native_override(
-                        class_name,
-                        &method_ref.method_name,
-                        &method_ref.descriptor,
-                    ) {
-                        let result = self.invoke_native(
-                            class_name,
-                            &method_ref.method_name,
-                            &method_ref.descriptor,
-                            &args,
-                        )?;
-                        if let Some(value) = result {
-                            thread.current_frame_mut().push(value)?;
-                        }
-                    } else {
-                        let class = self.get_class(class_name)?;
-                        let class_method = class
-                            .methods
-                            .get(&(
-                                method_ref.method_name.clone(),
-                                method_ref.descriptor.clone(),
-                            ))
-                            .cloned()
-                            .ok_or_else(|| VmError::MethodNotFound {
-                                class_name: class_name.clone(),
-                                method_name: method_ref.method_name.clone(),
-                                descriptor: method_ref.descriptor.clone(),
-                            })?;
-
-                        match class_method {
+                    if let Some(cached_method) = thread
+                        .current_frame()
+                        .get_cached_invoke(index, &receiver_class)
+                    {
+                        let mut all_args = vec![Value::Reference(receiver)];
+                        all_args.extend(args);
+                        match cached_method {
                             ClassMethod::Native => {
                                 let result = self.invoke_native(
-                                    class_name,
+                                    &receiver_class,
                                     &method_ref.method_name,
                                     &method_ref.descriptor,
-                                    &args,
+                                    &all_args,
                                 )?;
                                 if let Some(value) = result {
                                     thread.current_frame_mut().push(value)?;
                                 }
                             }
-                            ClassMethod::Bytecode(method) => {
-                                let callee = method
-                                    .with_initial_locals(Vm::args_to_locals(args));
+                            ClassMethod::Bytecode(bytecode_method) => {
+                                let callee = bytecode_method
+                                    .clone()
+                                    .with_initial_locals(Vm::args_to_locals(all_args));
+                                thread.push_frame(Frame::new(callee));
+                            }
+                        }
+                    } else {
+                        let (resolved_class, class_method) = self.resolve_method(
+                            &receiver_class,
+                            &method_ref.method_name,
+                            &method_ref.descriptor,
+                        )?;
+                        thread.current_frame_mut().cache_invoke(
+                            index,
+                            resolved_class.clone(),
+                            class_method.clone(),
+                        );
+                        let mut all_args = vec![Value::Reference(receiver)];
+                        all_args.extend(args);
+                        match class_method {
+                            ClassMethod::Native => {
+                                let result = self.invoke_native(
+                                    &resolved_class,
+                                    &method_ref.method_name,
+                                    &method_ref.descriptor,
+                                    &all_args,
+                                )?;
+                                if let Some(value) = result {
+                                    thread.current_frame_mut().push(value)?;
+                                }
+                            }
+                            ClassMethod::Bytecode(bytecode_method) => {
+                                let callee = bytecode_method
+                                    .clone()
+                                    .with_initial_locals(Vm::args_to_locals(all_args));
                                 thread.push_frame(Frame::new(callee));
                             }
                         }
                     }
                 }
+            }
+            Opcode::Invokespecial => {
+                let index = thread.current_frame_mut().read_u16()? as usize;
+                thread.current_frame_mut().increment_call_count(index);
+                let method_ref = thread.current_frame().load_method_ref(index)?.clone();
+                let arg_count = parse_arg_count(&method_ref.descriptor)?;
 
-                Opcode::Invokeinterface => {
-                    let index = thread.current_frame_mut().read_u16()? as usize;
-                    thread.current_frame_mut().increment_call_count(index);
-                    let _count = thread.current_frame_mut().read_u8()?;
-                    let _zero = thread.current_frame_mut().read_u8()?;
-                    let method_ref = thread.current_frame().load_method_ref(index)?.clone();
-                    let arg_count = parse_arg_count(&method_ref.descriptor)?;
-
-                    let mut args = Vec::with_capacity(arg_count);
-                    for _ in 0..arg_count {
-                        args.push(thread.current_frame_mut().pop()?);
-                    }
-                    args.reverse();
-                    let receiver = thread.current_frame_mut().pop()?.as_reference()?;
-
-                    let class_name = self.get_object_class(receiver)?;
-                    self.dispatch_instance_method(
-                        &mut thread,
-                        &class_name,
-                        &method_ref,
-                        receiver,
-                        args,
-                    )?;
+                let mut args = Vec::with_capacity(arg_count);
+                for _ in 0..arg_count {
+                    args.push(thread.current_frame_mut().pop()?);
                 }
+                args.reverse();
+                let receiver = thread.current_frame_mut().pop()?.as_reference()?;
 
-                Opcode::Invokedynamic => {
-                    let index = thread.current_frame_mut().read_u16()? as usize;
-                    let _zero1 = thread.current_frame_mut().read_u8()?;
-                    let _zero2 = thread.current_frame_mut().read_u8()?;
+                // invokespecial uses the compile-time class, not the runtime class
+                self.dispatch_instance_method(
+                    &mut thread,
+                    &method_ref.class_name,
+                    &method_ref,
+                    receiver,
+                    args,
+                )?;
+            }
+            Opcode::Invokestatic => {
+                let index = thread.current_frame_mut().read_u16()? as usize;
+                thread.current_frame_mut().increment_call_count(index);
+                let method_ref = thread.current_frame().load_method_ref(index)?.clone();
+                let arg_count = parse_arg_count(&method_ref.descriptor)?;
 
-                    let site = thread
-                        .current_frame()
-                        .invoke_dynamic_sites
-                        .get(index)
-                        .and_then(|s| s.as_ref())
+                let mut args = Vec::with_capacity(arg_count);
+                for _ in 0..arg_count {
+                    args.push(thread.current_frame_mut().pop()?);
+                }
+                args.reverse();
+
+                let class_name = &method_ref.class_name;
+                self.ensure_class_loaded(class_name)?;
+                self.ensure_class_initialized(class_name)?;
+
+                // Shortcut: some JDK static methods drag in heavy
+                // machinery (Reference handler threads, security,
+                // reflection). When a native shadow exists, dispatch
+                // to it rather than running the JDK bytecode.
+                if self.has_native_override(
+                    class_name,
+                    &method_ref.method_name,
+                    &method_ref.descriptor,
+                ) {
+                    let result = self.invoke_native(
+                        class_name,
+                        &method_ref.method_name,
+                        &method_ref.descriptor,
+                        &args,
+                    )?;
+                    if let Some(value) = result {
+                        thread.current_frame_mut().push(value)?;
+                    }
+                } else {
+                    let class = self.get_class(class_name)?;
+                    let class_method = class
+                        .methods
+                        .get(&(
+                            method_ref.method_name.clone(),
+                            method_ref.descriptor.clone(),
+                        ))
                         .cloned()
-                        .ok_or_else(|| VmError::InvalidOpcode {
-                            opcode: 0xba,
-                            pc: opcode_pc,
+                        .ok_or_else(|| VmError::MethodNotFound {
+                            class_name: class_name.clone(),
+                            method_name: method_ref.method_name.clone(),
+                            descriptor: method_ref.descriptor.clone(),
                         })?;
 
-                    let arg_count = parse_arg_count(&site.descriptor)?;
-                    let mut args = Vec::with_capacity(arg_count);
-                    for _ in 0..arg_count {
-                        args.push(thread.current_frame_mut().pop()?);
-                    }
-                    args.reverse();
-
-                    match &site.kind {
-                        InvokeDynamicKind::LambdaProxy {
-                            target_class,
-                            target_method,
-                            target_descriptor,
-                        } => {
-                            // LambdaMetafactory: create a lambda proxy object that stores the
-                            // target method reference and any captured arguments.
-                            let mut fields = HashMap::new();
-                            fields.insert(
-                                "__target_class".to_string(),
-                                Value::Reference(
-                                    self.heap
-                                        .lock()
-                                        .unwrap()
-                                        .allocate_string(target_class.clone()),
-                                ),
-                            );
-                            fields.insert(
-                                "__target_method".to_string(),
-                                Value::Reference(
-                                    self.heap
-                                        .lock()
-                                        .unwrap()
-                                        .allocate_string(target_method.clone()),
-                                ),
-                            );
-                            fields.insert(
-                                "__target_desc".to_string(),
-                                Value::Reference(
-                                    self.heap
-                                        .lock()
-                                        .unwrap()
-                                        .allocate_string(target_descriptor.clone()),
-                                ),
-                            );
-                            for (i, val) in args.into_iter().enumerate() {
-                                fields.insert(format!("__capture_{i}"), val);
-                            }
-
-                            let proxy = self.heap.lock().unwrap().allocate(HeapValue::Object {
-                                class_name: format!("__lambda_proxy_{}", site.name),
-                                fields,
-                            });
-                            thread.current_frame_mut().push(Value::Reference(proxy))?;
-                        }
-                        InvokeDynamicKind::StringConcat { recipe, constants } => {
-                            let concat = self.build_string_concat(
-                                recipe.as_deref(),
-                                constants,
+                    match class_method {
+                        ClassMethod::Native => {
+                            let result = self.invoke_native(
+                                class_name,
+                                &method_ref.method_name,
+                                &method_ref.descriptor,
                                 &args,
-                                &site.descriptor,
                             )?;
-                            thread.current_frame_mut().push(self.new_string(concat))?;
-                        }
-                        InvokeDynamicKind::Unknown => {
-                            // Unknown bootstrap method — push null as placeholder.
-                            thread
-                                .current_frame_mut()
-                                .push(Value::Reference(Reference::Null))?;
-                        }
-                    }
-                }
-
-                // --- Monitors ---
-
-                Opcode::Monitorenter => {
-                    let obj_ref = thread.current_frame_mut().pop()?.as_reference()?;
-                    self.enter_monitor(obj_ref)?;
-                }
-                Opcode::Monitorexit => {
-                    let obj_ref = thread.current_frame_mut().pop()?.as_reference()?;
-                    match self.exit_monitor(obj_ref) {
-                        Ok(()) => {}
-                        Err(VmError::UnhandledException { class_name }) => {
-                            self.throw_new_exception(&mut thread, &class_name)?;
-                            return Ok(None);
-                        }
-                        Err(error) => return Err(error),
-                    }
-                }
-
-                // --- References: object creation ---
-
-                Opcode::New => {
-                    let index = thread.current_frame_mut().read_u16()? as usize;
-                    let class_name =
-                        thread.current_frame().load_reference_class(index)?.to_string();
-                    self.ensure_class_loaded(&class_name)?;
-                    self.ensure_class_initialized(&class_name)?;
-                    let mut all_instance_fields = Vec::new();
-                    let mut current_class = class_name.clone();
-                    loop {
-                        self.ensure_class_loaded(&current_class)?;
-                        let class = self.get_class(&current_class)?;
-                        for (name, desc) in &class.instance_fields {
-                            if !all_instance_fields.iter().any(|(n, _)| n == name) {
-                                all_instance_fields.push((name.clone(), desc.clone()));
+                            if let Some(value) = result {
+                                thread.current_frame_mut().push(value)?;
                             }
                         }
-                        match &class.super_class {
-                            Some(parent) => current_class = parent.clone(),
-                            None => break,
-                        }
-                    }
-                    let mut fields = HashMap::new();
-                    for (name, descriptor) in all_instance_fields {
-                        fields.insert(name, default_value_for_descriptor(&descriptor));
-                    }
-                    let reference = self.heap.lock().unwrap().allocate(HeapValue::Object {
-                        class_name,
-                        fields,
-                    });
-                    thread.current_frame_mut().push(Value::Reference(reference))?;
-                }
-                Opcode::Athrow => {
-                    let exception_ref = thread.current_frame_mut().pop()?.as_reference()?;
-                    if exception_ref == Reference::Null {
-                        return Err(VmError::NullReference);
-                    }
-                    self.throw_exception(&mut thread, exception_ref)?;
-                }
-                Opcode::Multianewarray => {
-                    let index = thread.current_frame_mut().read_u16()? as usize;
-                    let _class_name =
-                        thread.current_frame().load_reference_class(index)?.to_string();
-                    let dimensions = thread.current_frame_mut().read_u8()? as usize;
-                    let mut counts = Vec::with_capacity(dimensions);
-                    for _ in 0..dimensions {
-                        counts.push(thread.current_frame_mut().pop()?.as_int()?);
-                    }
-                    counts.reverse();
-                    let reference =
-                        self.allocate_multi_array(&counts, 0)?;
-                    thread.current_frame_mut().push(Value::Reference(reference))?;
-                }
-                Opcode::Wide => {
-                    let inner_byte = thread.current_frame_mut().read_u8()?;
-                    let inner = Opcode::from_byte(inner_byte).ok_or(VmError::InvalidOpcode {
-                        opcode: inner_byte,
-                        pc: opcode_pc,
-                    })?;
-                    let index = thread.current_frame_mut().read_u16()? as usize;
-                    match inner {
-                        Opcode::Iload | Opcode::Lload | Opcode::Fload
-                        | Opcode::Dload | Opcode::Aload => {
-                            let value = thread.current_frame().load_local(index)?;
-                            thread.current_frame_mut().push(value)?;
-                        }
-                        Opcode::Istore | Opcode::Lstore | Opcode::Fstore
-                        | Opcode::Dstore | Opcode::Astore => {
-                            let value = thread.current_frame_mut().pop()?;
-                            thread.current_frame_mut().store_local(index, value)?;
-                        }
-                        Opcode::Iinc => {
-                            let delta = thread.current_frame_mut().read_i16()? as i32;
-                            let value =
-                                thread.current_frame().load_local(index)?.as_int()?;
-                            thread
-                                .current_frame_mut()
-                                .store_local(index, Value::Int(value + delta))?;
-                        }
-                        Opcode::Ret => {
-                            let target =
-                                thread.current_frame().load_local(index)?.as_return_address()?;
-                            if target >= thread.current_frame().code.len() {
-                                return Err(VmError::InvalidBranchTarget {
-                                    target: target as isize,
-                                    code_len: thread.current_frame().code.len(),
-                                });
+                        ClassMethod::Bytecode(method) => {
+                            let should_jit = self.jit.as_ref().is_some_and(|jit| {
+                                jit.should_compile(thread.current_frame(), Some(index))
+                            });
+
+                            let jit_result = if should_jit {
+                                self.try_execute_jit_method(&method, &args)
+                            } else {
+                                None
+                            };
+
+                            if let Some(result) = jit_result {
+                                if let Some(value) = result {
+                                    thread.current_frame_mut().push(value)?;
+                                }
+                            } else {
+                                let callee = method.with_initial_locals(Vm::args_to_locals(args));
+                                thread.push_frame(Frame::new(callee));
                             }
-                            thread.current_frame_mut().pc = target;
-                        }
-                        _ => {
-                            return Err(VmError::InvalidOpcode {
-                                opcode: inner_byte,
-                                pc: opcode_pc,
-                            });
                         }
                     }
-                }
-                Opcode::Checkcast => {
-                    let index = thread.current_frame_mut().read_u16()? as usize;
-                    let target =
-                        thread.current_frame().load_reference_class(index)?.to_string();
-                    let value = thread.current_frame_mut().pop()?;
-                    let reference = value.as_reference()?;
-                    if reference != Reference::Null {
-                        let obj_class = self.get_object_class(reference)?;
-                        if !self.is_instance_of(&obj_class, &target)? {
-                            return Err(VmError::ClassCastError {
-                                from: obj_class,
-                                to: target,
-                            });
-                        }
-                    }
-                    thread.current_frame_mut().push(value)?;
-                }
-                Opcode::Instanceof => {
-                    let index = thread.current_frame_mut().read_u16()? as usize;
-                    let target =
-                        thread.current_frame().load_reference_class(index)?.to_string();
-                    let reference = thread.current_frame_mut().pop()?.as_reference()?;
-                    let result = if reference == Reference::Null {
-                        0
-                    } else {
-                        let obj_class = self.get_object_class(reference)?;
-                        if self.is_instance_of(&obj_class, &target)? {
-                            1
-                        } else {
-                            0
-                        }
-                    };
-                    thread.current_frame_mut().push(Value::Int(result))?;
-                }
-
-                // --- Control: null checks ---
-
-                Opcode::Ifnull => {
-                    let offset = thread.current_frame_mut().read_i16()?;
-                    let reference = thread.current_frame_mut().pop()?.as_reference()?;
-                    if reference == Reference::Null {
-                        thread.current_frame_mut().branch(opcode_pc, offset.into())?;
-                    }
-                }
-                Opcode::Ifnonnull => {
-                    let offset = thread.current_frame_mut().read_i16()?;
-                    let reference = thread.current_frame_mut().pop()?.as_reference()?;
-                    if reference != Reference::Null {
-                        thread.current_frame_mut().branch(opcode_pc, offset.into())?;
-                    }
-                }
-
-                // --- Control: returns ---
-
-                Opcode::Areturn | Opcode::Ireturn | Opcode::Lreturn
-                | Opcode::Freturn | Opcode::Dreturn => {
-                    return execute_ireturn_full(thread);
-                }
-                Opcode::Return => {
-                    return execute_return_full(thread);
-                }
-
-                Opcode::Arraylength => {
-                    let reference = thread.current_frame_mut().pop()?.as_reference()?;
-                    let length = self.heap.lock().unwrap().array_length(reference)?;
-                    thread.current_frame_mut().push(Value::Int(length as i32))?;
                 }
             }
-            Ok(None)
+
+            Opcode::Invokeinterface => {
+                let index = thread.current_frame_mut().read_u16()? as usize;
+                thread.current_frame_mut().increment_call_count(index);
+                let _count = thread.current_frame_mut().read_u8()?;
+                let _zero = thread.current_frame_mut().read_u8()?;
+                let method_ref = thread.current_frame().load_method_ref(index)?.clone();
+                let arg_count = parse_arg_count(&method_ref.descriptor)?;
+
+                let mut args = Vec::with_capacity(arg_count);
+                for _ in 0..arg_count {
+                    args.push(thread.current_frame_mut().pop()?);
+                }
+                args.reverse();
+                let receiver = thread.current_frame_mut().pop()?.as_reference()?;
+
+                let class_name = self.get_object_class(receiver)?;
+                self.dispatch_instance_method(
+                    &mut thread,
+                    &class_name,
+                    &method_ref,
+                    receiver,
+                    args,
+                )?;
+            }
+
+            Opcode::Invokedynamic => {
+                let index = thread.current_frame_mut().read_u16()? as usize;
+                let _zero1 = thread.current_frame_mut().read_u8()?;
+                let _zero2 = thread.current_frame_mut().read_u8()?;
+
+                let site = thread
+                    .current_frame()
+                    .invoke_dynamic_sites
+                    .get(index)
+                    .and_then(|s| s.as_ref())
+                    .cloned()
+                    .ok_or_else(|| VmError::InvalidOpcode {
+                        opcode: 0xba,
+                        pc: opcode_pc,
+                    })?;
+
+                let arg_count = parse_arg_count(&site.descriptor)?;
+                let mut args = Vec::with_capacity(arg_count);
+                for _ in 0..arg_count {
+                    args.push(thread.current_frame_mut().pop()?);
+                }
+                args.reverse();
+
+                match &site.kind {
+                    InvokeDynamicKind::LambdaProxy {
+                        target_class,
+                        target_method,
+                        target_descriptor,
+                    } => {
+                        // LambdaMetafactory: create a lambda proxy object that stores the
+                        // target method reference and any captured arguments.
+                        let mut fields = HashMap::new();
+                        fields.insert(
+                            "__target_class".to_string(),
+                            Value::Reference(
+                                self.heap
+                                    .lock()
+                                    .unwrap()
+                                    .allocate_string(target_class.clone()),
+                            ),
+                        );
+                        fields.insert(
+                            "__target_method".to_string(),
+                            Value::Reference(
+                                self.heap
+                                    .lock()
+                                    .unwrap()
+                                    .allocate_string(target_method.clone()),
+                            ),
+                        );
+                        fields.insert(
+                            "__target_desc".to_string(),
+                            Value::Reference(
+                                self.heap
+                                    .lock()
+                                    .unwrap()
+                                    .allocate_string(target_descriptor.clone()),
+                            ),
+                        );
+                        for (i, val) in args.into_iter().enumerate() {
+                            fields.insert(format!("__capture_{i}"), val);
+                        }
+
+                        let proxy = self.heap.lock().unwrap().allocate(HeapValue::Object {
+                            class_name: format!("__lambda_proxy_{}", site.name),
+                            fields,
+                        });
+                        thread.current_frame_mut().push(Value::Reference(proxy))?;
+                    }
+                    InvokeDynamicKind::StringConcat { recipe, constants } => {
+                        let concat = self.build_string_concat(
+                            recipe.as_deref(),
+                            constants,
+                            &args,
+                            &site.descriptor,
+                        )?;
+                        thread.current_frame_mut().push(self.new_string(concat))?;
+                    }
+                    InvokeDynamicKind::Unknown => {
+                        // Unknown bootstrap method — push null as placeholder.
+                        thread
+                            .current_frame_mut()
+                            .push(Value::Reference(Reference::Null))?;
+                    }
+                }
+            }
+
+            // --- Monitors ---
+            Opcode::Monitorenter => {
+                let obj_ref = thread.current_frame_mut().pop()?.as_reference()?;
+                self.enter_monitor(obj_ref)?;
+            }
+            Opcode::Monitorexit => {
+                let obj_ref = thread.current_frame_mut().pop()?.as_reference()?;
+                match self.exit_monitor(obj_ref) {
+                    Ok(()) => {}
+                    Err(VmError::UnhandledException { class_name }) => {
+                        self.throw_new_exception(&mut thread, &class_name)?;
+                        return Ok(None);
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+
+            // --- References: object creation ---
+            Opcode::New => {
+                let index = thread.current_frame_mut().read_u16()? as usize;
+                let class_name = thread
+                    .current_frame()
+                    .load_reference_class(index)?
+                    .to_string();
+                self.ensure_class_loaded(&class_name)?;
+                self.ensure_class_initialized(&class_name)?;
+                let mut all_instance_fields = Vec::new();
+                let mut current_class = class_name.clone();
+                loop {
+                    self.ensure_class_loaded(&current_class)?;
+                    let class = self.get_class(&current_class)?;
+                    for (name, desc) in &class.instance_fields {
+                        if !all_instance_fields.iter().any(|(n, _)| n == name) {
+                            all_instance_fields.push((name.clone(), desc.clone()));
+                        }
+                    }
+                    match &class.super_class {
+                        Some(parent) => current_class = parent.clone(),
+                        None => break,
+                    }
+                }
+                let mut fields = HashMap::new();
+                for (name, descriptor) in all_instance_fields {
+                    fields.insert(name, default_value_for_descriptor(&descriptor));
+                }
+                let reference = self
+                    .heap
+                    .lock()
+                    .unwrap()
+                    .allocate(HeapValue::Object { class_name, fields });
+                thread
+                    .current_frame_mut()
+                    .push(Value::Reference(reference))?;
+            }
+            Opcode::Athrow => {
+                let exception_ref = thread.current_frame_mut().pop()?.as_reference()?;
+                if exception_ref == Reference::Null {
+                    return Err(VmError::NullReference);
+                }
+                self.throw_exception(&mut thread, exception_ref)?;
+            }
+            Opcode::Multianewarray => {
+                let index = thread.current_frame_mut().read_u16()? as usize;
+                let _class_name = thread
+                    .current_frame()
+                    .load_reference_class(index)?
+                    .to_string();
+                let dimensions = thread.current_frame_mut().read_u8()? as usize;
+                let mut counts = Vec::with_capacity(dimensions);
+                for _ in 0..dimensions {
+                    counts.push(thread.current_frame_mut().pop()?.as_int()?);
+                }
+                counts.reverse();
+                let reference = self.allocate_multi_array(&counts, 0)?;
+                thread
+                    .current_frame_mut()
+                    .push(Value::Reference(reference))?;
+            }
+            Opcode::Wide => {
+                let inner_byte = thread.current_frame_mut().read_u8()?;
+                let inner = Opcode::from_byte(inner_byte).ok_or(VmError::InvalidOpcode {
+                    opcode: inner_byte,
+                    pc: opcode_pc,
+                })?;
+                let index = thread.current_frame_mut().read_u16()? as usize;
+                match inner {
+                    Opcode::Iload
+                    | Opcode::Lload
+                    | Opcode::Fload
+                    | Opcode::Dload
+                    | Opcode::Aload => {
+                        let value = thread.current_frame().load_local(index)?;
+                        thread.current_frame_mut().push(value)?;
+                    }
+                    Opcode::Istore
+                    | Opcode::Lstore
+                    | Opcode::Fstore
+                    | Opcode::Dstore
+                    | Opcode::Astore => {
+                        let value = thread.current_frame_mut().pop()?;
+                        thread.current_frame_mut().store_local(index, value)?;
+                    }
+                    Opcode::Iinc => {
+                        let delta = thread.current_frame_mut().read_i16()? as i32;
+                        let value = thread.current_frame().load_local(index)?.as_int()?;
+                        thread
+                            .current_frame_mut()
+                            .store_local(index, Value::Int(value + delta))?;
+                    }
+                    Opcode::Ret => {
+                        let target = thread
+                            .current_frame()
+                            .load_local(index)?
+                            .as_return_address()?;
+                        if target >= thread.current_frame().code.len() {
+                            return Err(VmError::InvalidBranchTarget {
+                                target: target as isize,
+                                code_len: thread.current_frame().code.len(),
+                            });
+                        }
+                        thread.current_frame_mut().pc = target;
+                    }
+                    _ => {
+                        return Err(VmError::InvalidOpcode {
+                            opcode: inner_byte,
+                            pc: opcode_pc,
+                        });
+                    }
+                }
+            }
+            Opcode::Checkcast => {
+                let index = thread.current_frame_mut().read_u16()? as usize;
+                let target = thread
+                    .current_frame()
+                    .load_reference_class(index)?
+                    .to_string();
+                let value = thread.current_frame_mut().pop()?;
+                let reference = value.as_reference()?;
+                if reference != Reference::Null {
+                    let obj_class = self.get_object_class(reference)?;
+                    if !self.is_instance_of(&obj_class, &target)? {
+                        return Err(VmError::ClassCastError {
+                            from: obj_class,
+                            to: target,
+                        });
+                    }
+                }
+                thread.current_frame_mut().push(value)?;
+            }
+            Opcode::Instanceof => {
+                let index = thread.current_frame_mut().read_u16()? as usize;
+                let target = thread
+                    .current_frame()
+                    .load_reference_class(index)?
+                    .to_string();
+                let reference = thread.current_frame_mut().pop()?.as_reference()?;
+                let result = if reference == Reference::Null {
+                    0
+                } else {
+                    let obj_class = self.get_object_class(reference)?;
+                    if self.is_instance_of(&obj_class, &target)? {
+                        1
+                    } else {
+                        0
+                    }
+                };
+                thread.current_frame_mut().push(Value::Int(result))?;
+            }
+
+            // --- Control: null checks ---
+            Opcode::Ifnull => {
+                let offset = thread.current_frame_mut().read_i16()?;
+                let reference = thread.current_frame_mut().pop()?.as_reference()?;
+                if reference == Reference::Null {
+                    thread
+                        .current_frame_mut()
+                        .branch(opcode_pc, offset.into())?;
+                }
+            }
+            Opcode::Ifnonnull => {
+                let offset = thread.current_frame_mut().read_i16()?;
+                let reference = thread.current_frame_mut().pop()?.as_reference()?;
+                if reference != Reference::Null {
+                    thread
+                        .current_frame_mut()
+                        .branch(opcode_pc, offset.into())?;
+                }
+            }
+
+            // --- Control: returns ---
+            Opcode::Areturn
+            | Opcode::Ireturn
+            | Opcode::Lreturn
+            | Opcode::Freturn
+            | Opcode::Dreturn => {
+                return execute_ireturn_full(thread);
+            }
+            Opcode::Return => {
+                return execute_return_full(thread);
+            }
+
+            Opcode::Arraylength => {
+                let reference = thread.current_frame_mut().pop()?.as_reference()?;
+                let length = self.heap.lock().unwrap().array_length(reference)?;
+                thread.current_frame_mut().push(Value::Int(length as i32))?;
+            }
+        }
+        Ok(None)
     }
 
     /// Recursively allocate a multi-dimensional array.
@@ -2404,11 +2922,7 @@ Opcode::Pop => execute_pop(thread)?,
     /// `dimensions` (≥ 1 per JVMS) from bytecode and builds `counts` with
     /// exactly that many entries.  The recursion terminates at
     /// `depth + 1 == counts.len()`.
-    fn allocate_multi_array(
-        &mut self,
-        counts: &[i32],
-        depth: usize,
-    ) -> Result<Reference, VmError> {
+    fn allocate_multi_array(&mut self, counts: &[i32], depth: usize) -> Result<Reference, VmError> {
         let count = counts[depth];
         if count < 0 {
             return Err(VmError::NegativeArraySize { size: count });
@@ -2610,11 +3124,7 @@ Opcode::Pop => execute_pop(thread)?,
         // Class-wide native shadows (e.g., every method on Unsafe) skip
         // method-table lookup so we don't have to enumerate every JDK
         // method name up front.
-        if self.has_native_override(
-            class_name,
-            &method_ref.method_name,
-            &method_ref.descriptor,
-        ) {
+        if self.has_native_override(class_name, &method_ref.method_name, &method_ref.descriptor) {
             let mut all_args = vec![Value::Reference(receiver)];
             all_args.extend(args);
             let result = self.invoke_native(
@@ -2695,8 +3205,7 @@ Opcode::Pop => execute_pop(thread)?,
 
         self.ensure_class_loaded(&target_class)?;
 
-        let (_, class_method) =
-            self.resolve_method(&target_class, &target_method, &target_desc)?;
+        let (_, class_method) = self.resolve_method(&target_class, &target_method, &target_desc)?;
 
         match class_method {
             ClassMethod::Native => {
@@ -2736,14 +3245,14 @@ Opcode::Pop => execute_pop(thread)?,
 /// Return the JVM default zero-value for a field descriptor.
 #[cfg(test)]
 mod tests {
-use std::collections::HashMap;
+    use std::collections::HashMap;
     use std::sync::atomic::Ordering;
     use std::sync::mpsc;
     use std::time::Duration;
 
     use super::{
-        ExecutionResult, FieldRef, HeapValue, Method, MethodRef, Reference, RuntimeClass, Value,
-        Vm, VmError, NEXT_THREAD_ID,
+        ExecutionResult, FieldRef, HeapValue, Method, MethodRef, NEXT_THREAD_ID, Reference,
+        RuntimeClass, Value, Vm, VmError,
     };
 
     #[test]
@@ -2763,7 +3272,10 @@ use std::collections::HashMap;
             2,
         );
 
-        let result = Vm::new().expect("failed to create VM").execute(method).unwrap();
+        let result = Vm::new()
+            .expect("failed to create VM")
+            .execute(method)
+            .unwrap();
         assert_eq!(result, ExecutionResult::Value(Value::Int(25)));
     }
 
@@ -2782,7 +3294,10 @@ use std::collections::HashMap;
             3,
         );
 
-        let result = Vm::new().expect("failed to create VM").execute(method).unwrap();
+        let result = Vm::new()
+            .expect("failed to create VM")
+            .execute(method)
+            .unwrap();
         assert_eq!(result, ExecutionResult::Value(Value::Int(14)));
     }
 
@@ -2801,7 +3316,10 @@ use std::collections::HashMap;
             3,
         );
 
-        let result = Vm::new().expect("failed to create VM").execute(method).unwrap();
+        let result = Vm::new()
+            .expect("failed to create VM")
+            .execute(method)
+            .unwrap();
         assert_eq!(result, ExecutionResult::Value(Value::Int(5)));
     }
 
@@ -2821,7 +3339,10 @@ use std::collections::HashMap;
             4,
         );
 
-        let result = Vm::new().expect("failed to create VM").execute(method).unwrap();
+        let result = Vm::new()
+            .expect("failed to create VM")
+            .execute(method)
+            .unwrap();
         assert_eq!(result, ExecutionResult::Value(Value::Int(6)));
     }
 
@@ -2839,7 +3360,10 @@ use std::collections::HashMap;
             2,
         );
 
-        let result = Vm::new().expect("failed to create VM").execute(method).unwrap();
+        let result = Vm::new()
+            .expect("failed to create VM")
+            .execute(method)
+            .unwrap();
         assert_eq!(result, ExecutionResult::Value(Value::Int(-2)));
     }
 
@@ -2876,7 +3400,10 @@ use std::collections::HashMap;
             1,
         );
 
-        let result = Vm::new().expect("failed to create VM").execute(method).unwrap();
+        let result = Vm::new()
+            .expect("failed to create VM")
+            .execute(method)
+            .unwrap();
         assert_eq!(result, ExecutionResult::Void);
     }
 
@@ -2892,7 +3419,10 @@ use std::collections::HashMap;
             1,
         );
 
-        let error = Vm::new().expect("failed to create VM").execute(method).unwrap_err();
+        let error = Vm::new()
+            .expect("failed to create VM")
+            .execute(method)
+            .unwrap_err();
         assert_eq!(
             error,
             VmError::UnhandledException {
@@ -2972,7 +3502,10 @@ use std::collections::HashMap;
             3,
         );
 
-        let result = Vm::new().expect("failed to create VM").execute(method).unwrap();
+        let result = Vm::new()
+            .expect("failed to create VM")
+            .execute(method)
+            .unwrap();
         assert_eq!(result, ExecutionResult::Value(Value::Int(126)));
     }
 
@@ -3018,7 +3551,10 @@ use std::collections::HashMap;
 
         let result = vm.execute(method).unwrap();
         assert_eq!(result, ExecutionResult::Void);
-        assert_eq!(vm.take_output(), vec!["42".to_string(), "hello".to_string()]);
+        assert_eq!(
+            vm.take_output(),
+            vec!["42".to_string(), "hello".to_string()]
+        );
     }
 
     #[test]
@@ -3036,7 +3572,10 @@ use std::collections::HashMap;
             1,
         );
 
-        let result = Vm::new().expect("failed to create VM").execute(method).unwrap();
+        let result = Vm::new()
+            .expect("failed to create VM")
+            .execute(method)
+            .unwrap();
         assert_eq!(result, ExecutionResult::Value(Value::Int(42)));
 
         let mut vm = Vm::new().expect("failed to create VM");
@@ -3141,7 +3680,10 @@ use std::collections::HashMap;
         )
         .with_reference_classes(vec![None, Some("java/lang/String".to_string())]);
 
-        let result = Vm::new().expect("failed to create VM").execute(method).unwrap();
+        let result = Vm::new()
+            .expect("failed to create VM")
+            .execute(method)
+            .unwrap();
         assert_eq!(result, ExecutionResult::Value(Value::Int(2)));
     }
 
@@ -3158,7 +3700,10 @@ use std::collections::HashMap;
         )
         .with_reference_classes(vec![None, Some("java/lang/String".to_string())]);
 
-        let error = Vm::new().expect("failed to create VM").execute(method).unwrap_err();
+        let error = Vm::new()
+            .expect("failed to create VM")
+            .execute(method)
+            .unwrap_err();
         assert_eq!(
             error,
             VmError::UnhandledException {
@@ -3180,7 +3725,10 @@ use std::collections::HashMap;
         )
         .with_reference_classes(vec![None, Some("java/lang/String".to_string())]);
 
-        let error = Vm::new().expect("failed to create VM").execute(method).unwrap_err();
+        let error = Vm::new()
+            .expect("failed to create VM")
+            .execute(method)
+            .unwrap_err();
         assert_eq!(
             error,
             VmError::InvalidClassConstantIndex {
@@ -3202,7 +3750,10 @@ use std::collections::HashMap;
             1,
         );
 
-        let error = Vm::new().expect("failed to create VM").execute(method).unwrap_err();
+        let error = Vm::new()
+            .expect("failed to create VM")
+            .execute(method)
+            .unwrap_err();
         assert_eq!(error, VmError::UnsupportedNewArrayType { atype: 3 });
     }
 
@@ -3219,7 +3770,10 @@ use std::collections::HashMap;
             2,
         );
 
-        let error = Vm::new().expect("failed to create VM").execute(method).unwrap_err();
+        let error = Vm::new()
+            .expect("failed to create VM")
+            .execute(method)
+            .unwrap_err();
         assert_eq!(
             error,
             VmError::UnhandledException {
@@ -3243,7 +3797,10 @@ use std::collections::HashMap;
             [Value::Int(7)],
         );
 
-        let result = Vm::new().expect("failed to create VM").execute(method).unwrap();
+        let result = Vm::new()
+            .expect("failed to create VM")
+            .execute(method)
+            .unwrap();
         assert_eq!(result, ExecutionResult::Value(Value::Int(-307)));
     }
 
@@ -3260,7 +3817,10 @@ use std::collections::HashMap;
             2,
         );
 
-        let result = Vm::new().expect("failed to create VM").execute(method).unwrap();
+        let result = Vm::new()
+            .expect("failed to create VM")
+            .execute(method)
+            .unwrap();
         assert_eq!(result, ExecutionResult::Value(Value::Int(2)));
     }
 
@@ -3279,7 +3839,10 @@ use std::collections::HashMap;
             2,
         );
 
-        let result = Vm::new().expect("failed to create VM").execute(method).unwrap();
+        let result = Vm::new()
+            .expect("failed to create VM")
+            .execute(method)
+            .unwrap();
         assert_eq!(result, ExecutionResult::Value(Value::Int(42)));
     }
 
@@ -3300,7 +3863,10 @@ use std::collections::HashMap;
             1,
         );
 
-        let result = Vm::new().expect("failed to create VM").execute(method).unwrap();
+        let result = Vm::new()
+            .expect("failed to create VM")
+            .execute(method)
+            .unwrap();
         assert_eq!(result, ExecutionResult::Value(Value::Int(6)));
     }
 
@@ -3402,7 +3968,10 @@ use std::collections::HashMap;
             1,
         );
 
-        let result = Vm::new().expect("failed to create VM").execute(method).unwrap();
+        let result = Vm::new()
+            .expect("failed to create VM")
+            .execute(method)
+            .unwrap();
         assert_eq!(result, ExecutionResult::Value(Value::Int(12)));
     }
 
@@ -3426,7 +3995,10 @@ use std::collections::HashMap;
             2,
         );
 
-        let result = Vm::new().expect("failed to create VM").execute(method).unwrap();
+        let result = Vm::new()
+            .expect("failed to create VM")
+            .execute(method)
+            .unwrap();
         assert_eq!(result, ExecutionResult::Value(Value::Int(88)));
     }
 
@@ -3459,7 +4031,10 @@ use std::collections::HashMap;
             1,
         );
 
-        let result = Vm::new().expect("failed to create VM").execute(method).unwrap();
+        let result = Vm::new()
+            .expect("failed to create VM")
+            .execute(method)
+            .unwrap();
         assert_eq!(result, ExecutionResult::Value(Value::Int(44)));
     }
 
@@ -3479,7 +4054,10 @@ use std::collections::HashMap;
             2,
         );
 
-        let result = Vm::new().expect("failed to create VM").execute(method).unwrap();
+        let result = Vm::new()
+            .expect("failed to create VM")
+            .execute(method)
+            .unwrap();
         assert_eq!(result, ExecutionResult::Value(Value::Int(33)));
     }
 
@@ -3516,7 +4094,10 @@ use std::collections::HashMap;
             2,
         );
 
-        let result = Vm::new().expect("failed to create VM").execute(method).unwrap();
+        let result = Vm::new()
+            .expect("failed to create VM")
+            .execute(method)
+            .unwrap();
         assert_eq!(result, ExecutionResult::Value(Value::Int(77)));
     }
 
@@ -3532,7 +4113,10 @@ use std::collections::HashMap;
             [Value::Int(1)],
         );
 
-        let error = Vm::new().expect("failed to create VM").execute(method).unwrap_err();
+        let error = Vm::new()
+            .expect("failed to create VM")
+            .execute(method)
+            .unwrap_err();
         assert_eq!(
             error,
             VmError::InvalidConstantIndex {
@@ -3552,7 +4136,10 @@ use std::collections::HashMap;
             0,
         );
 
-        let error = Vm::new().expect("failed to create VM").execute(method).unwrap_err();
+        let error = Vm::new()
+            .expect("failed to create VM")
+            .execute(method)
+            .unwrap_err();
         assert_eq!(
             error,
             VmError::InvalidBranchTarget {

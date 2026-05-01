@@ -14,12 +14,13 @@ pub(super) fn invoke_nio(
             let cap = {
                 let heap = vm.heap.lock().unwrap();
                 match heap.get(obj_ref)? {
-                    HeapValue::Object { fields, .. } => {
-                        fields.get("__capacity").and_then(|v| match v {
+                    HeapValue::Object { fields, .. } => fields
+                        .get("__capacity")
+                        .and_then(|v| match v {
                             Value::Int(i) => Some(*i),
                             _ => None,
-                        }).unwrap_or(0)
-                    }
+                        })
+                        .unwrap_or(0),
                     _ => 0,
                 }
             };
@@ -30,12 +31,13 @@ pub(super) fn invoke_nio(
             let pos = {
                 let heap = vm.heap.lock().unwrap();
                 match heap.get(obj_ref)? {
-                    HeapValue::Object { fields, .. } => {
-                        fields.get("__position").and_then(|v| match v {
+                    HeapValue::Object { fields, .. } => fields
+                        .get("__position")
+                        .and_then(|v| match v {
                             Value::Int(i) => Some(*i),
                             _ => None,
-                        }).unwrap_or(0)
-                    }
+                        })
+                        .unwrap_or(0),
                     _ => 0,
                 }
             };
@@ -57,12 +59,13 @@ pub(super) fn invoke_nio(
             let lim = {
                 let heap = vm.heap.lock().unwrap();
                 match heap.get(obj_ref)? {
-                    HeapValue::Object { fields, .. } => {
-                        fields.get("__limit").and_then(|v| match v {
+                    HeapValue::Object { fields, .. } => fields
+                        .get("__limit")
+                        .and_then(|v| match v {
                             Value::Int(i) => Some(*i),
                             _ => None,
-                        }).unwrap_or(0)
-                    }
+                        })
+                        .unwrap_or(0),
                     _ => 0,
                 }
             };
@@ -79,8 +82,12 @@ pub(super) fn invoke_nio(
             }
             Ok(Some(Value::Reference(obj_ref)))
         }
-        ("java/nio/Buffer", "mark", "()Ljava/nio/Buffer;") => Ok(Some(Value::Reference(args[0].as_reference()?))),
-        ("java/nio/Buffer", "reset", "()Ljava/nio/Buffer;") => Ok(Some(Value::Reference(args[0].as_reference()?))),
+        ("java/nio/Buffer", "mark", "()Ljava/nio/Buffer;") => {
+            Ok(Some(Value::Reference(args[0].as_reference()?)))
+        }
+        ("java/nio/Buffer", "reset", "()Ljava/nio/Buffer;") => {
+            Ok(Some(Value::Reference(args[0].as_reference()?)))
+        }
         ("java/nio/Buffer", "clear", "()Ljava/nio/Buffer;") => {
             let obj_ref = args[0].as_reference()?;
             {
@@ -121,14 +128,20 @@ pub(super) fn invoke_nio(
                 let heap = vm.heap.lock().unwrap();
                 match heap.get(obj_ref)? {
                     HeapValue::Object { fields, .. } => {
-                        let pos = fields.get("__position").and_then(|v| match v {
-                            Value::Int(i) => Some(*i),
-                            _ => None,
-                        }).unwrap_or(0);
-                        let lim = fields.get("__limit").and_then(|v| match v {
-                            Value::Int(i) => Some(*i),
-                            _ => None,
-                        }).unwrap_or(0);
+                        let pos = fields
+                            .get("__position")
+                            .and_then(|v| match v {
+                                Value::Int(i) => Some(*i),
+                                _ => None,
+                            })
+                            .unwrap_or(0);
+                        let lim = fields
+                            .get("__limit")
+                            .and_then(|v| match v {
+                                Value::Int(i) => Some(*i),
+                                _ => None,
+                            })
+                            .unwrap_or(0);
                         (pos, lim)
                     }
                     _ => (0, 0),
@@ -142,14 +155,20 @@ pub(super) fn invoke_nio(
                 let heap = vm.heap.lock().unwrap();
                 match heap.get(obj_ref)? {
                     HeapValue::Object { fields, .. } => {
-                        let pos = fields.get("__position").and_then(|v| match v {
-                            Value::Int(i) => Some(*i),
-                            _ => None,
-                        }).unwrap_or(0);
-                        let lim = fields.get("__limit").and_then(|v| match v {
-                            Value::Int(i) => Some(*i),
-                            _ => None,
-                        }).unwrap_or(0);
+                        let pos = fields
+                            .get("__position")
+                            .and_then(|v| match v {
+                                Value::Int(i) => Some(*i),
+                                _ => None,
+                            })
+                            .unwrap_or(0);
+                        let lim = fields
+                            .get("__limit")
+                            .and_then(|v| match v {
+                                Value::Int(i) => Some(*i),
+                                _ => None,
+                            })
+                            .unwrap_or(0);
                         pos < lim
                     }
                     _ => false,
@@ -183,7 +202,9 @@ pub(super) fn invoke_nio(
         | ("java/nio/ByteBuffer", "wrap", "([BII)Ljava/nio/ByteBuffer;") => {
             let array_ref = args[0].as_reference()?;
             let offset = if args.len() > 2 { args[1].as_int()? } else { 0 };
-            let length = if args.len() > 3 { args[2].as_int()? } else {
+            let length = if args.len() > 3 {
+                args[2].as_int()?
+            } else {
                 let heap = vm.heap.lock().unwrap();
                 match heap.get(array_ref)? {
                     HeapValue::IntArray { values } => values.len() as i32,
@@ -211,12 +232,13 @@ pub(super) fn invoke_nio(
             let cap = {
                 let heap = vm.heap.lock().unwrap();
                 match heap.get(obj_ref)? {
-                    HeapValue::Object { fields, .. } => {
-                        fields.get("__capacity").and_then(|v| match v {
+                    HeapValue::Object { fields, .. } => fields
+                        .get("__capacity")
+                        .and_then(|v| match v {
                             Value::Int(i) => Some(*i),
                             _ => None,
-                        }).unwrap_or(0)
-                    }
+                        })
+                        .unwrap_or(0),
                     _ => 0,
                 }
             };
@@ -227,12 +249,13 @@ pub(super) fn invoke_nio(
             let pos = {
                 let heap = vm.heap.lock().unwrap();
                 match heap.get(obj_ref)? {
-                    HeapValue::Object { fields, .. } => {
-                        fields.get("__position").and_then(|v| match v {
+                    HeapValue::Object { fields, .. } => fields
+                        .get("__position")
+                        .and_then(|v| match v {
                             Value::Int(i) => Some(*i),
                             _ => None,
-                        }).unwrap_or(0)
-                    }
+                        })
+                        .unwrap_or(0),
                     _ => 0,
                 }
             };
@@ -254,12 +277,13 @@ pub(super) fn invoke_nio(
             let lim = {
                 let heap = vm.heap.lock().unwrap();
                 match heap.get(obj_ref)? {
-                    HeapValue::Object { fields, .. } => {
-                        fields.get("__limit").and_then(|v| match v {
+                    HeapValue::Object { fields, .. } => fields
+                        .get("__limit")
+                        .and_then(|v| match v {
                             Value::Int(i) => Some(*i),
                             _ => None,
-                        }).unwrap_or(0)
-                    }
+                        })
+                        .unwrap_or(0),
                     _ => 0,
                 }
             };
@@ -276,8 +300,12 @@ pub(super) fn invoke_nio(
             }
             Ok(Some(Value::Reference(obj_ref)))
         }
-        ("java/nio/ByteBuffer", "mark", "()Ljava/nio/Buffer;") => Ok(Some(Value::Reference(args[0].as_reference()?))),
-        ("java/nio/ByteBuffer", "reset", "()Ljava/nio/Buffer;") => Ok(Some(Value::Reference(args[0].as_reference()?))),
+        ("java/nio/ByteBuffer", "mark", "()Ljava/nio/Buffer;") => {
+            Ok(Some(Value::Reference(args[0].as_reference()?)))
+        }
+        ("java/nio/ByteBuffer", "reset", "()Ljava/nio/Buffer;") => {
+            Ok(Some(Value::Reference(args[0].as_reference()?)))
+        }
         ("java/nio/ByteBuffer", "clear", "()Ljava/nio/Buffer;") => {
             let obj_ref = args[0].as_reference()?;
             {
@@ -318,14 +346,20 @@ pub(super) fn invoke_nio(
                 let heap = vm.heap.lock().unwrap();
                 match heap.get(obj_ref)? {
                     HeapValue::Object { fields, .. } => {
-                        let pos = fields.get("__position").and_then(|v| match v {
-                            Value::Int(i) => Some(*i),
-                            _ => None,
-                        }).unwrap_or(0);
-                        let lim = fields.get("__limit").and_then(|v| match v {
-                            Value::Int(i) => Some(*i),
-                            _ => None,
-                        }).unwrap_or(0);
+                        let pos = fields
+                            .get("__position")
+                            .and_then(|v| match v {
+                                Value::Int(i) => Some(*i),
+                                _ => None,
+                            })
+                            .unwrap_or(0);
+                        let lim = fields
+                            .get("__limit")
+                            .and_then(|v| match v {
+                                Value::Int(i) => Some(*i),
+                                _ => None,
+                            })
+                            .unwrap_or(0);
                         (pos, lim)
                     }
                     _ => (0, 0),
@@ -339,14 +373,20 @@ pub(super) fn invoke_nio(
                 let heap = vm.heap.lock().unwrap();
                 match heap.get(obj_ref)? {
                     HeapValue::Object { fields, .. } => {
-                        let pos = fields.get("__position").and_then(|v| match v {
-                            Value::Int(i) => Some(*i),
-                            _ => None,
-                        }).unwrap_or(0);
-                        let lim = fields.get("__limit").and_then(|v| match v {
-                            Value::Int(i) => Some(*i),
-                            _ => None,
-                        }).unwrap_or(0);
+                        let pos = fields
+                            .get("__position")
+                            .and_then(|v| match v {
+                                Value::Int(i) => Some(*i),
+                                _ => None,
+                            })
+                            .unwrap_or(0);
+                        let lim = fields
+                            .get("__limit")
+                            .and_then(|v| match v {
+                                Value::Int(i) => Some(*i),
+                                _ => None,
+                            })
+                            .unwrap_or(0);
                         pos < lim
                     }
                     _ => false,
@@ -364,14 +404,20 @@ pub(super) fn invoke_nio(
                             Value::Reference(r) => Some(*r),
                             _ => None,
                         });
-                        let offset = fields.get("__offset").and_then(|v| match v {
-                            Value::Int(i) => Some(*i),
-                            _ => None,
-                        }).unwrap_or(0);
-                        let pos = fields.get("__position").and_then(|v| match v {
-                            Value::Int(i) => Some(*i),
-                            _ => None,
-                        }).unwrap_or(0);
+                        let offset = fields
+                            .get("__offset")
+                            .and_then(|v| match v {
+                                Value::Int(i) => Some(*i),
+                                _ => None,
+                            })
+                            .unwrap_or(0);
+                        let pos = fields
+                            .get("__position")
+                            .and_then(|v| match v {
+                                Value::Int(i) => Some(*i),
+                                _ => None,
+                            })
+                            .unwrap_or(0);
                         (backing, offset, pos)
                     }
                     _ => (None, 0, 0),
@@ -392,10 +438,13 @@ pub(super) fn invoke_nio(
             {
                 let mut heap = vm.heap.lock().unwrap();
                 if let HeapValue::Object { fields, .. } = heap.get_mut(obj_ref)? {
-                    let pos = fields.get("__position").and_then(|v| match v {
-                        Value::Int(i) => Some(*i),
-                        _ => None,
-                    }).unwrap_or(0);
+                    let pos = fields
+                        .get("__position")
+                        .and_then(|v| match v {
+                            Value::Int(i) => Some(*i),
+                            _ => None,
+                        })
+                        .unwrap_or(0);
                     fields.insert("__position".to_string(), Value::Int(pos + 1));
                 }
             }
@@ -412,10 +461,13 @@ pub(super) fn invoke_nio(
                             Value::Reference(r) => Some(*r),
                             _ => None,
                         });
-                        let offset = fields.get("__offset").and_then(|v| match v {
-                            Value::Int(i) => Some(*i),
-                            _ => None,
-                        }).unwrap_or(0);
+                        let offset = fields
+                            .get("__offset")
+                            .and_then(|v| match v {
+                                Value::Int(i) => Some(*i),
+                                _ => None,
+                            })
+                            .unwrap_or(0);
                         if let Some(backing) = backing {
                             if let HeapValue::IntArray { values } = heap.get(backing)? {
                                 let idx = (offset + index) as usize;
@@ -443,14 +495,20 @@ pub(super) fn invoke_nio(
                             Value::Reference(r) => Some(*r),
                             _ => None,
                         });
-                        let offset = fields.get("__offset").and_then(|v| match v {
-                            Value::Int(i) => Some(*i),
-                            _ => None,
-                        }).unwrap_or(0);
-                        let pos = fields.get("__position").and_then(|v| match v {
-                            Value::Int(i) => Some(*i),
-                            _ => None,
-                        }).unwrap_or(0);
+                        let offset = fields
+                            .get("__offset")
+                            .and_then(|v| match v {
+                                Value::Int(i) => Some(*i),
+                                _ => None,
+                            })
+                            .unwrap_or(0);
+                        let pos = fields
+                            .get("__position")
+                            .and_then(|v| match v {
+                                Value::Int(i) => Some(*i),
+                                _ => None,
+                            })
+                            .unwrap_or(0);
                         (backing, offset, pos)
                     }
                     _ => (None, 0, 0),
@@ -484,10 +542,13 @@ pub(super) fn invoke_nio(
                         Value::Reference(r) => Some(*r),
                         _ => None,
                     });
-                    let offset = fields.get("__offset").and_then(|v| match v {
-                        Value::Int(i) => Some(*i),
-                        _ => None,
-                    }).unwrap_or(0);
+                    let offset = fields
+                        .get("__offset")
+                        .and_then(|v| match v {
+                            Value::Int(i) => Some(*i),
+                            _ => None,
+                        })
+                        .unwrap_or(0);
                     if let Some(backing) = backing {
                         if let HeapValue::IntArray { values } = heap.get_mut(backing)? {
                             let idx = (offset + index) as usize;
@@ -514,7 +575,11 @@ pub(super) fn invoke_nio(
                     _ => None,
                 }
             };
-            Ok(Some(backing.map(Value::Reference).unwrap_or(Value::Reference(Reference::Null))))
+            Ok(Some(
+                backing
+                    .map(Value::Reference)
+                    .unwrap_or(Value::Reference(Reference::Null)),
+            ))
         }
         ("java/nio/ByteBuffer", "isDirect", "()Z") => Ok(Some(Value::Int(0))),
         // --- CharBuffer stubs ---
@@ -543,7 +608,9 @@ pub(super) fn invoke_nio(
         | ("java/nio/CharBuffer", "wrap", "([CII)Ljava/nio/CharBuffer;") => {
             let array_ref = args[0].as_reference()?;
             let offset = if args.len() > 2 { args[1].as_int()? } else { 0 };
-            let length = if args.len() > 3 { args[2].as_int()? } else {
+            let length = if args.len() > 3 {
+                args[2].as_int()?
+            } else {
                 let heap = vm.heap.lock().unwrap();
                 match heap.get(array_ref)? {
                     HeapValue::IntArray { values } => values.len() as i32,
@@ -571,12 +638,13 @@ pub(super) fn invoke_nio(
             let cap = {
                 let heap = vm.heap.lock().unwrap();
                 match heap.get(obj_ref)? {
-                    HeapValue::Object { fields, .. } => {
-                        fields.get("__capacity").and_then(|v| match v {
+                    HeapValue::Object { fields, .. } => fields
+                        .get("__capacity")
+                        .and_then(|v| match v {
                             Value::Int(i) => Some(*i),
                             _ => None,
-                        }).unwrap_or(0)
-                    }
+                        })
+                        .unwrap_or(0),
                     _ => 0,
                 }
             };
@@ -587,12 +655,13 @@ pub(super) fn invoke_nio(
             let pos = {
                 let heap = vm.heap.lock().unwrap();
                 match heap.get(obj_ref)? {
-                    HeapValue::Object { fields, .. } => {
-                        fields.get("__position").and_then(|v| match v {
+                    HeapValue::Object { fields, .. } => fields
+                        .get("__position")
+                        .and_then(|v| match v {
                             Value::Int(i) => Some(*i),
                             _ => None,
-                        }).unwrap_or(0)
-                    }
+                        })
+                        .unwrap_or(0),
                     _ => 0,
                 }
             };
@@ -614,12 +683,13 @@ pub(super) fn invoke_nio(
             let lim = {
                 let heap = vm.heap.lock().unwrap();
                 match heap.get(obj_ref)? {
-                    HeapValue::Object { fields, .. } => {
-                        fields.get("__limit").and_then(|v| match v {
+                    HeapValue::Object { fields, .. } => fields
+                        .get("__limit")
+                        .and_then(|v| match v {
                             Value::Int(i) => Some(*i),
                             _ => None,
-                        }).unwrap_or(0)
-                    }
+                        })
+                        .unwrap_or(0),
                     _ => 0,
                 }
             };
@@ -636,8 +706,12 @@ pub(super) fn invoke_nio(
             }
             Ok(Some(Value::Reference(obj_ref)))
         }
-        ("java/nio/CharBuffer", "mark", "()Ljava/nio/Buffer;") => Ok(Some(Value::Reference(args[0].as_reference()?))),
-        ("java/nio/CharBuffer", "reset", "()Ljava/nio/Buffer;") => Ok(Some(Value::Reference(args[0].as_reference()?))),
+        ("java/nio/CharBuffer", "mark", "()Ljava/nio/Buffer;") => {
+            Ok(Some(Value::Reference(args[0].as_reference()?)))
+        }
+        ("java/nio/CharBuffer", "reset", "()Ljava/nio/Buffer;") => {
+            Ok(Some(Value::Reference(args[0].as_reference()?)))
+        }
         ("java/nio/CharBuffer", "clear", "()Ljava/nio/Buffer;") => {
             let obj_ref = args[0].as_reference()?;
             {
@@ -678,14 +752,20 @@ pub(super) fn invoke_nio(
                 let heap = vm.heap.lock().unwrap();
                 match heap.get(obj_ref)? {
                     HeapValue::Object { fields, .. } => {
-                        let pos = fields.get("__position").and_then(|v| match v {
-                            Value::Int(i) => Some(*i),
-                            _ => None,
-                        }).unwrap_or(0);
-                        let lim = fields.get("__limit").and_then(|v| match v {
-                            Value::Int(i) => Some(*i),
-                            _ => None,
-                        }).unwrap_or(0);
+                        let pos = fields
+                            .get("__position")
+                            .and_then(|v| match v {
+                                Value::Int(i) => Some(*i),
+                                _ => None,
+                            })
+                            .unwrap_or(0);
+                        let lim = fields
+                            .get("__limit")
+                            .and_then(|v| match v {
+                                Value::Int(i) => Some(*i),
+                                _ => None,
+                            })
+                            .unwrap_or(0);
                         (pos, lim)
                     }
                     _ => (0, 0),
@@ -699,14 +779,20 @@ pub(super) fn invoke_nio(
                 let heap = vm.heap.lock().unwrap();
                 match heap.get(obj_ref)? {
                     HeapValue::Object { fields, .. } => {
-                        let pos = fields.get("__position").and_then(|v| match v {
-                            Value::Int(i) => Some(*i),
-                            _ => None,
-                        }).unwrap_or(0);
-                        let lim = fields.get("__limit").and_then(|v| match v {
-                            Value::Int(i) => Some(*i),
-                            _ => None,
-                        }).unwrap_or(0);
+                        let pos = fields
+                            .get("__position")
+                            .and_then(|v| match v {
+                                Value::Int(i) => Some(*i),
+                                _ => None,
+                            })
+                            .unwrap_or(0);
+                        let lim = fields
+                            .get("__limit")
+                            .and_then(|v| match v {
+                                Value::Int(i) => Some(*i),
+                                _ => None,
+                            })
+                            .unwrap_or(0);
                         pos < lim
                     }
                     _ => false,
@@ -724,14 +810,20 @@ pub(super) fn invoke_nio(
                             Value::Reference(r) => Some(*r),
                             _ => None,
                         });
-                        let offset = fields.get("__offset").and_then(|v| match v {
-                            Value::Int(i) => Some(*i),
-                            _ => None,
-                        }).unwrap_or(0);
-                        let pos = fields.get("__position").and_then(|v| match v {
-                            Value::Int(i) => Some(*i),
-                            _ => None,
-                        }).unwrap_or(0);
+                        let offset = fields
+                            .get("__offset")
+                            .and_then(|v| match v {
+                                Value::Int(i) => Some(*i),
+                                _ => None,
+                            })
+                            .unwrap_or(0);
+                        let pos = fields
+                            .get("__position")
+                            .and_then(|v| match v {
+                                Value::Int(i) => Some(*i),
+                                _ => None,
+                            })
+                            .unwrap_or(0);
                         (backing, offset, pos)
                     }
                     _ => (None, 0, 0),
@@ -752,10 +844,13 @@ pub(super) fn invoke_nio(
             {
                 let mut heap = vm.heap.lock().unwrap();
                 if let HeapValue::Object { fields, .. } = heap.get_mut(obj_ref)? {
-                    let pos = fields.get("__position").and_then(|v| match v {
-                        Value::Int(i) => Some(*i),
-                        _ => None,
-                    }).unwrap_or(0);
+                    let pos = fields
+                        .get("__position")
+                        .and_then(|v| match v {
+                            Value::Int(i) => Some(*i),
+                            _ => None,
+                        })
+                        .unwrap_or(0);
                     fields.insert("__position".to_string(), Value::Int(pos + 1));
                 }
             }
@@ -772,10 +867,13 @@ pub(super) fn invoke_nio(
                             Value::Reference(r) => Some(*r),
                             _ => None,
                         });
-                        let offset = fields.get("__offset").and_then(|v| match v {
-                            Value::Int(i) => Some(*i),
-                            _ => None,
-                        }).unwrap_or(0);
+                        let offset = fields
+                            .get("__offset")
+                            .and_then(|v| match v {
+                                Value::Int(i) => Some(*i),
+                                _ => None,
+                            })
+                            .unwrap_or(0);
                         if let Some(backing) = backing {
                             if let HeapValue::IntArray { values } = heap.get(backing)? {
                                 let idx = (offset + index) as usize;
@@ -803,14 +901,20 @@ pub(super) fn invoke_nio(
                             Value::Reference(r) => Some(*r),
                             _ => None,
                         });
-                        let offset = fields.get("__offset").and_then(|v| match v {
-                            Value::Int(i) => Some(*i),
-                            _ => None,
-                        }).unwrap_or(0);
-                        let pos = fields.get("__position").and_then(|v| match v {
-                            Value::Int(i) => Some(*i),
-                            _ => None,
-                        }).unwrap_or(0);
+                        let offset = fields
+                            .get("__offset")
+                            .and_then(|v| match v {
+                                Value::Int(i) => Some(*i),
+                                _ => None,
+                            })
+                            .unwrap_or(0);
+                        let pos = fields
+                            .get("__position")
+                            .and_then(|v| match v {
+                                Value::Int(i) => Some(*i),
+                                _ => None,
+                            })
+                            .unwrap_or(0);
                         (backing, offset, pos)
                     }
                     _ => (None, 0, 0),
@@ -844,10 +948,13 @@ pub(super) fn invoke_nio(
                         Value::Reference(r) => Some(*r),
                         _ => None,
                     });
-                    let offset = fields.get("__offset").and_then(|v| match v {
-                        Value::Int(i) => Some(*i),
-                        _ => None,
-                    }).unwrap_or(0);
+                    let offset = fields
+                        .get("__offset")
+                        .and_then(|v| match v {
+                            Value::Int(i) => Some(*i),
+                            _ => None,
+                        })
+                        .unwrap_or(0);
                     if let Some(backing) = backing {
                         if let HeapValue::IntArray { values } = heap.get_mut(backing)? {
                             let idx = (offset + index) as usize;
@@ -874,19 +981,24 @@ pub(super) fn invoke_nio(
                     _ => None,
                 }
             };
-            Ok(Some(backing.map(Value::Reference).unwrap_or(Value::Reference(Reference::Null))))
+            Ok(Some(
+                backing
+                    .map(Value::Reference)
+                    .unwrap_or(Value::Reference(Reference::Null)),
+            ))
         }
         ("java/nio/CharBuffer", "length", "()I") => {
             let obj_ref = args[0].as_reference()?;
             let len = {
                 let heap = vm.heap.lock().unwrap();
                 match heap.get(obj_ref)? {
-                    HeapValue::Object { fields, .. } => {
-                        fields.get("__capacity").and_then(|v| match v {
+                    HeapValue::Object { fields, .. } => fields
+                        .get("__capacity")
+                        .and_then(|v| match v {
                             Value::Int(i) => Some(*i),
                             _ => None,
-                        }).unwrap_or(0)
-                    }
+                        })
+                        .unwrap_or(0),
                     _ => 0,
                 }
             };
@@ -916,15 +1028,25 @@ pub(super) fn invoke_nio(
                     _ => None,
                 }
             };
-            let name = name.and_then(|s| s.rsplit('/').next().map(|s| s.to_string())).unwrap_or_default();
+            let name = name
+                .and_then(|s| s.rsplit('/').next().map(|s| s.to_string()))
+                .unwrap_or_default();
             Ok(Some(vm.new_string(name)))
         }
-        ("java/nio/file/Path", "getParent", "()Ljava/nio/file/Path;") => Ok(Some(Value::Reference(Reference::Null))),
-        ("java/nio/file/Path", "getRoot", "()Ljava/nio/file/Path;") => Ok(Some(Value::Reference(Reference::Null))),
+        ("java/nio/file/Path", "getParent", "()Ljava/nio/file/Path;") => {
+            Ok(Some(Value::Reference(Reference::Null)))
+        }
+        ("java/nio/file/Path", "getRoot", "()Ljava/nio/file/Path;") => {
+            Ok(Some(Value::Reference(Reference::Null)))
+        }
         ("java/nio/file/Path", "isAbsolute", "()Z") => Ok(Some(Value::Int(0))),
         ("java/nio/file/Path", "getNameCount", "()I") => Ok(Some(Value::Int(0))),
-        ("java/nio/file/Path", "getName", "(I)Ljava/lang/String;") => Ok(Some(Value::Reference(Reference::Null))),
-        ("java/nio/file/Path", "subpath", "(II)Ljava/nio/file/Path;") => Ok(Some(Value::Reference(Reference::Null))),
+        ("java/nio/file/Path", "getName", "(I)Ljava/lang/String;") => {
+            Ok(Some(Value::Reference(Reference::Null)))
+        }
+        ("java/nio/file/Path", "subpath", "(II)Ljava/nio/file/Path;") => {
+            Ok(Some(Value::Reference(Reference::Null)))
+        }
         ("java/nio/file/Path", "toString", "()Ljava/lang/String;") => {
             let obj_ref = args[0].as_reference()?;
             let path_str = {
@@ -953,14 +1075,26 @@ pub(super) fn invoke_nio(
                 None => Some(Value::Reference(Reference::Null)),
             })
         }
-        ("java/nio/file/Path", "toUri", "()Ljava/net/URI;") => Ok(Some(Value::Reference(Reference::Null))),
-        ("java/nio/file/Path", "toAbsolutePath", "()Ljava/nio/file/Path;") => Ok(Some(Value::Reference(args[0].as_reference()?))),
-        ("java/nio/file/Path", "normalize", "()Ljava/nio/file/Path;") => Ok(Some(Value::Reference(args[0].as_reference()?))),
-        ("java/nio/file/Path", "resolve", "(Ljava/lang/String;)Ljava/nio/file/Path;") => Ok(Some(Value::Reference(args[0].as_reference()?))),
+        ("java/nio/file/Path", "toUri", "()Ljava/net/URI;") => {
+            Ok(Some(Value::Reference(Reference::Null)))
+        }
+        ("java/nio/file/Path", "toAbsolutePath", "()Ljava/nio/file/Path;") => {
+            Ok(Some(Value::Reference(args[0].as_reference()?)))
+        }
+        ("java/nio/file/Path", "normalize", "()Ljava/nio/file/Path;") => {
+            Ok(Some(Value::Reference(args[0].as_reference()?)))
+        }
+        ("java/nio/file/Path", "resolve", "(Ljava/lang/String;)Ljava/nio/file/Path;") => {
+            Ok(Some(Value::Reference(args[0].as_reference()?)))
+        }
         ("java/nio/file/Path", "startsWith", "(Ljava/lang/String;)Z") => Ok(Some(Value::Int(0))),
         ("java/nio/file/Path", "endsWith", "(Ljava/lang/String;)Z") => Ok(Some(Value::Int(0))),
         // --- Paths stubs ---
-        ("java/nio/file/Paths", "get", "(Ljava/lang/String;[Ljava/lang/String;)Ljava/nio/file/Path;") => {
+        (
+            "java/nio/file/Paths",
+            "get",
+            "(Ljava/lang/String;[Ljava/lang/String;)Ljava/nio/file/Path;",
+        ) => {
             let path_str = args[0].as_reference()?;
             let path_ref = vm.heap.lock().unwrap().allocate(HeapValue::Object {
                 class_name: "java/nio/file/Path".to_string(),
@@ -975,39 +1109,119 @@ pub(super) fn invoke_nio(
             Ok(Some(Value::Reference(path_ref)))
         }
         // --- Files stubs ---
-        ("java/nio/file/Files", "exists", "(Ljava/nio/file/Path;[Ljava/nio/file/attribute/FileAttribute;)Z") => Ok(Some(Value::Int(0))),
-        ("java/nio/file/Files", "isRegularFile", "(Ljava/nio/file/Path;)Z") => Ok(Some(Value::Int(0))),
-        ("java/nio/file/Files", "isDirectory", "(Ljava/nio/file/Path;)Z") => Ok(Some(Value::Int(0))),
-        ("java/nio/file/Files", "createFile", "(Ljava/nio/file/Path;[Ljava/nio/file/attribute/FileAttribute;)Ljava/nio/file/Path;") => Ok(Some(Value::Reference(args[0].as_reference()?))),
+        (
+            "java/nio/file/Files",
+            "exists",
+            "(Ljava/nio/file/Path;[Ljava/nio/file/attribute/FileAttribute;)Z",
+        ) => Ok(Some(Value::Int(0))),
+        ("java/nio/file/Files", "isRegularFile", "(Ljava/nio/file/Path;)Z") => {
+            Ok(Some(Value::Int(0)))
+        }
+        ("java/nio/file/Files", "isDirectory", "(Ljava/nio/file/Path;)Z") => {
+            Ok(Some(Value::Int(0)))
+        }
+        (
+            "java/nio/file/Files",
+            "createFile",
+            "(Ljava/nio/file/Path;[Ljava/nio/file/attribute/FileAttribute;)Ljava/nio/file/Path;",
+        ) => Ok(Some(Value::Reference(args[0].as_reference()?))),
         ("java/nio/file/Files", "delete", "(Ljava/nio/file/Path;)V") => Ok(None),
-        ("java/nio/file/Files", "copy", "(Ljava/nio/file/Path;Ljava/nio/file/Path;[Ljava/nio/file/CopyOption;)Ljava/nio/file/Path;") => Ok(Some(Value::Reference(Reference::Null))),
-        ("java/nio/file/Files", "move", "(Ljava/nio/file/Path;Ljava/nio/file/Path;[Ljava/nio/file/CopyOption;)Ljava/nio/file/Path;") => Ok(Some(Value::Reference(Reference::Null))),
-        ("java/nio/file/Files", "readString", "(Ljava/nio/file/Path;)Ljava/lang/String;") => Ok(Some(Value::Reference(Reference::Null))),
-        ("java/nio/file/Files", "writeString", "(Ljava/nio/file/Path;Ljava/lang/CharSequence;[Ljava/nio/file/OpenOption;[Ljava/nio/file/attribute/FileAttribute;)Ljava/nio/file/Path;") => Ok(Some(Value::Reference(args[0].as_reference()?))),
+        (
+            "java/nio/file/Files",
+            "copy",
+            "(Ljava/nio/file/Path;Ljava/nio/file/Path;[Ljava/nio/file/CopyOption;)Ljava/nio/file/Path;",
+        ) => Ok(Some(Value::Reference(Reference::Null))),
+        (
+            "java/nio/file/Files",
+            "move",
+            "(Ljava/nio/file/Path;Ljava/nio/file/Path;[Ljava/nio/file/CopyOption;)Ljava/nio/file/Path;",
+        ) => Ok(Some(Value::Reference(Reference::Null))),
+        ("java/nio/file/Files", "readString", "(Ljava/nio/file/Path;)Ljava/lang/String;") => {
+            Ok(Some(Value::Reference(Reference::Null)))
+        }
+        (
+            "java/nio/file/Files",
+            "writeString",
+            "(Ljava/nio/file/Path;Ljava/lang/CharSequence;[Ljava/nio/file/OpenOption;[Ljava/nio/file/attribute/FileAttribute;)Ljava/nio/file/Path;",
+        ) => Ok(Some(Value::Reference(args[0].as_reference()?))),
         ("java/nio/file/Files", "size", "(Ljava/nio/file/Path;)J") => Ok(Some(Value::Long(0))),
         ("java/nio/file/Files", "isHidden", "(Ljava/nio/file/Path;)Z") => Ok(Some(Value::Int(0))),
-        ("java/nio/file/Files", "getFileStore", "(Ljava/nio/file/Path;)Ljava/nio/file/FileStore;") => Ok(Some(Value::Reference(Reference::Null))),
-        ("java/nio/file/Files", "newInputStream", "(Ljava/nio/file/Path;[Ljava/nio/file/OpenOption;)Ljava/io/InputStream;") => Ok(Some(Value::Reference(Reference::Null))),
-        ("java/nio/file/Files", "newOutputStream", "(Ljava/nio/file/Path;[Ljava/nio/file/OpenOption;)Ljava/io/OutputStream;") => Ok(Some(Value::Reference(Reference::Null))),
-        ("java/nio/file/Files", "newBufferedReader", "(Ljava/nio/file/Path;)Ljava/io/BufferedReader;") => Ok(Some(Value::Reference(Reference::Null))),
-        ("java/nio/file/Files", "newBufferedWriter", "(Ljava/nio/file/Path;[Ljava/nio/file/OpenOption;)Ljava/io/BufferedWriter;") => Ok(Some(Value::Reference(Reference::Null))),
+        (
+            "java/nio/file/Files",
+            "getFileStore",
+            "(Ljava/nio/file/Path;)Ljava/nio/file/FileStore;",
+        ) => Ok(Some(Value::Reference(Reference::Null))),
+        (
+            "java/nio/file/Files",
+            "newInputStream",
+            "(Ljava/nio/file/Path;[Ljava/nio/file/OpenOption;)Ljava/io/InputStream;",
+        ) => Ok(Some(Value::Reference(Reference::Null))),
+        (
+            "java/nio/file/Files",
+            "newOutputStream",
+            "(Ljava/nio/file/Path;[Ljava/nio/file/OpenOption;)Ljava/io/OutputStream;",
+        ) => Ok(Some(Value::Reference(Reference::Null))),
+        (
+            "java/nio/file/Files",
+            "newBufferedReader",
+            "(Ljava/nio/file/Path;)Ljava/io/BufferedReader;",
+        ) => Ok(Some(Value::Reference(Reference::Null))),
+        (
+            "java/nio/file/Files",
+            "newBufferedWriter",
+            "(Ljava/nio/file/Path;[Ljava/nio/file/OpenOption;)Ljava/io/BufferedWriter;",
+        ) => Ok(Some(Value::Reference(Reference::Null))),
         // --- FileStore stubs ---
-        ("java/nio/file/FileStore", "name", "()Ljava/lang/String;") => Ok(Some(Value::Reference(Reference::Null))),
-        ("java/nio/file/FileStore", "type", "()Ljava/lang/String;") => Ok(Some(Value::Reference(Reference::Null))),
+        ("java/nio/file/FileStore", "name", "()Ljava/lang/String;") => {
+            Ok(Some(Value::Reference(Reference::Null)))
+        }
+        ("java/nio/file/FileStore", "type", "()Ljava/lang/String;") => {
+            Ok(Some(Value::Reference(Reference::Null)))
+        }
         ("java/nio/file/FileStore", "getTotalSpace", "()J") => Ok(Some(Value::Long(0))),
         ("java/nio/file/FileStore", "getUsableSpace", "()J") => Ok(Some(Value::Long(0))),
         ("java/nio/file/FileStore", "getUnallocatedSpace", "()J") => Ok(Some(Value::Long(0))),
         ("java/nio/file/FileStore", "isReadOnly", "()Z") => Ok(Some(Value::Int(0))),
         // --- Channels stubs ---
-        ("java/nio/channels/Channels", "newInputStream", "(Ljava/nio/channels/ReadableByteChannel;)Ljava/io/InputStream;") => Ok(Some(Value::Reference(Reference::Null))),
-        ("java/nio/channels/Channels", "newOutputStream", "(Ljava/nio/channels/WritableByteChannel;)Ljava/io/OutputStream;") => Ok(Some(Value::Reference(Reference::Null))),
-        ("java/nio/channels/Channels", "newChannel", "(Ljava/io/InputStream;)Ljava/nio/channels/ReadableByteChannel;") => Ok(Some(Value::Reference(Reference::Null))),
-        ("java/nio/channels/Channels", "newChannel", "(Ljava/io/OutputStream;)Ljava/nio/channels/WritableByteChannel;") => Ok(Some(Value::Reference(Reference::Null))),
+        (
+            "java/nio/channels/Channels",
+            "newInputStream",
+            "(Ljava/nio/channels/ReadableByteChannel;)Ljava/io/InputStream;",
+        ) => Ok(Some(Value::Reference(Reference::Null))),
+        (
+            "java/nio/channels/Channels",
+            "newOutputStream",
+            "(Ljava/nio/channels/WritableByteChannel;)Ljava/io/OutputStream;",
+        ) => Ok(Some(Value::Reference(Reference::Null))),
+        (
+            "java/nio/channels/Channels",
+            "newChannel",
+            "(Ljava/io/InputStream;)Ljava/nio/channels/ReadableByteChannel;",
+        ) => Ok(Some(Value::Reference(Reference::Null))),
+        (
+            "java/nio/channels/Channels",
+            "newChannel",
+            "(Ljava/io/OutputStream;)Ljava/nio/channels/WritableByteChannel;",
+        ) => Ok(Some(Value::Reference(Reference::Null))),
         // --- Console stubs ---
-        ("java/io/Console", "readLine", "()Ljava/lang/String;") => Ok(Some(Value::Reference(Reference::Null))),
-        ("java/io/Console", "readLine", "(Ljava/lang/String;;[Ljava/lang/Object;)Ljava/lang/String;") => Ok(Some(Value::Reference(Reference::Null))),
-        ("java/io/Console", "printf", "(Ljava/lang/String;[Ljava/lang/Object;)Ljava/io/Console;") => Ok(Some(Value::Reference(Reference::Null))),
-        ("java/io/Console", "format", "(Ljava/lang/String;[Ljava/lang/Object;)Ljava/io/Console;") => Ok(Some(Value::Reference(Reference::Null))),
+        ("java/io/Console", "readLine", "()Ljava/lang/String;") => {
+            Ok(Some(Value::Reference(Reference::Null)))
+        }
+        (
+            "java/io/Console",
+            "readLine",
+            "(Ljava/lang/String;;[Ljava/lang/Object;)Ljava/lang/String;",
+        ) => Ok(Some(Value::Reference(Reference::Null))),
+        (
+            "java/io/Console",
+            "printf",
+            "(Ljava/lang/String;[Ljava/lang/Object;)Ljava/io/Console;",
+        ) => Ok(Some(Value::Reference(Reference::Null))),
+        (
+            "java/io/Console",
+            "format",
+            "(Ljava/lang/String;[Ljava/lang/Object;)Ljava/io/Console;",
+        ) => Ok(Some(Value::Reference(Reference::Null))),
         ("java/io/Console", "flush", "()V") => Ok(None),
         // --- StandardOpenOption stubs ---
         ("java/nio/file/StandardOpenOption", "name", "()Ljava/lang/String;") => {
@@ -1015,12 +1229,10 @@ pub(super) fn invoke_nio(
             let name = {
                 let heap = vm.heap.lock().unwrap();
                 match heap.get(obj_ref)? {
-                    HeapValue::Object { fields, .. } => {
-                        fields.get("name").and_then(|v| match v {
-                            Value::Reference(r) => Some(*r),
-                            _ => None,
-                        })
-                    }
+                    HeapValue::Object { fields, .. } => fields.get("name").and_then(|v| match v {
+                        Value::Reference(r) => Some(*r),
+                        _ => None,
+                    }),
                     _ => None,
                 }
             };
@@ -1031,12 +1243,13 @@ pub(super) fn invoke_nio(
             let ordinal = {
                 let heap = vm.heap.lock().unwrap();
                 match heap.get(obj_ref)? {
-                    HeapValue::Object { fields, .. } => {
-                        fields.get("ordinal").and_then(|v| match v {
+                    HeapValue::Object { fields, .. } => fields
+                        .get("ordinal")
+                        .and_then(|v| match v {
                             Value::Int(i) => Some(*i),
                             _ => None,
-                        }).unwrap_or(0)
-                    }
+                        })
+                        .unwrap_or(0),
                     _ => 0,
                 }
             };

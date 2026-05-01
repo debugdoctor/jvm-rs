@@ -147,7 +147,7 @@ Goal: beat HotSpot on cold-start and match-within-2x on steady state, via a simp
 Core Infrastructure:
 - [x] Cranelift integration with x86-64 ISA
 - [x] Function signature generation from method descriptors (int/long/float/double/reference params)
-- [x] Local variable type-aware declaration and initialization
+- [x] Local variable type-aware declaration and initialization, including JVM wide local slots for `long`/`double` parameters
 - [x] Machine code compilation via Context.compile()
 - [x] JIT entry creation via mmap(PROT_READ|PROT_WRITE|PROT_EXEC)
 - [x] Panic recovery (fallback to interpreter on compilation failure)
@@ -157,48 +157,141 @@ Core Infrastructure:
 - [x] JitRuntimeHelpers infrastructure with stub functions (emit deoptimization trap)
 - [x] JitContext with profile-guided compilation triggering
 
-**Missing JIT Opcodes (implemented via JitRuntimeHelpers stubs):**
+**JIT Implementation Status (as of 2026-05-01):**
+
+Core Infrastructure:
+- [x] Cranelift integration with x86-64 ISA
+- [x] Function signature generation from method descriptors (int/long/float/double/reference params)
+- [x] Local variable type-aware declaration and initialization
+- [x] Machine code compilation via Context.compile()
+- [x] JIT entry creation via mmap(PROT_READ|PROT_WRITE|PROT_EXEC)
+- [x] Panic recovery (fallback to interpreter on compilation failure)
+- [x] Adaptive compilation threshold (invocation_threshold=1000, backedge_threshold=2000)
+- [x] Execution via x86-64 SysV ABI (context pointer as first param)
+- [x] macOS Hardened Runtime blocks mmap(PROT_EXEC) — fallback to interpreter on macOS
+- [x] JitRuntimeHelpers infrastructure with stub functions (emit deoptimization trap)
+- [x] JitContext with profile-guided compilation triggering
+- [x] Branch target collection for CFG construction
+- [x] Block-based lowering with proper Cranelift block management
+- [x] Interpreter `invokestatic` dispatch can execute pure bytecode callees via compiled machine code when the call-site threshold is reached
+- [x] JIT-compiled `invokestatic` can call static VM targets through a runtime helper with arbitrary descriptor-decoded primitive/reference args and int/long/float/double/reference/void returns
+- [x] JIT-compiled `invokevirtual`, `invokespecial`, and `invokeinterface` can call VM instance targets through runtime helpers with descriptor-decoded primitive/reference args and int/long/float/double/reference/void returns
+- [x] JIT-compiled field access can call VM field helpers for descriptor-decoded int/long/float/double/reference/array static and instance fields
+- [x] Top-level JIT tier activation deoptimizes cleanly to the interpreter for runtime-dependent methods instead of silently skipping JIT
+- [x] Removed the fixed `code.len() > 200` gate from JIT tiering; compilation support is decided by the compiler/deopt path
+
+**JIT Opcodes — Fully Lowered (Cranelift IR generation + executable output):**
+
+Arithmetic — Int:
+- [x] `iadd`, `isub`, `imul`, `idiv`, `irem`, `ineg`
 
 Arithmetic — Long:
-- [x] `lsub`, `lmul`, `ldiv`, `lrem`
+- [x] `ladd`, `lsub`, `lmul`, `ldiv`, `lrem`, `lneg`
 
 Arithmetic — Float:
-- [x] `fsub`, `fmul`, `fdiv`, `frem`
+- [x] `fadd`, `fsub`, `fmul`, `fdiv`, `frem`, `fneg`
 
 Arithmetic — Double:
-- [x] `dsub`, `dmul`, `ddiv`, `drem`
+- [x] `dadd`, `dsub`, `dmul`, `ddiv`, `drem`, `dneg`
+
+Bitwise — Int:
+- [x] `iand`, `ior`, `ixor`
 
 Bitwise — Long:
 - [x] `land`, `lor`, `lxor`
 
+Shifts — Int:
+- [x] `ishl`, `ishr`, `iushr`
+
 Shifts — Long:
 - [x] `lshl`, `lshr`, `lushr`
 
-Negation:
-- [x] `lneg`, `fneg`, `dneg`
+Conversions:
+- [x] `i2l`, `i2f`, `i2d`, `l2i`, `l2f`, `l2d`, `f2i`, `f2l`, `f2d`, `d2i`, `d2l`, `d2f`, `i2b`, `i2c`, `i2s`
 
-Method Invocation (stubs - emit deoptimization trap):
-- [ ] `invokevirtual` — stub emits UnreachableCodeReached
-- [ ] `invokespecial` — stub emits UnreachableCodeReached
-- [ ] `invokestatic` — stub emits UnreachableCodeReached
-- [ ] `invokeinterface` — stub emits UnreachableCodeReached
-- [ ] `invokedynamic` — stub emits UnreachableCodeReached
-- [ ] `invokenative` — stub returns 0
+Loads & Stores:
+- [x] `iload/lload/fload/dload/aload` (+ `_n` shortforms)
+- [x] `istore/lstore/fstore/dstore/astore` (+ `_n` shortforms)
+- [x] `iaload/laload/faload/daload/aaload/baload/caload/saload`
+- [x] `iastore/lastore/fastore/dastore/aastore/bastore/castore/sastore`
+- [x] `arraylength`
 
-Field Access (stubs - emit deoptimization trap):
-- [ ] `getstatic` — stub emits UnreachableCodeReached
-- [ ] `getfield` — stub emits UnreachableCodeReached
-- [ ] `putfield` — stub emits UnreachableCodeReached
+Stack Operations:
+- [x] `pop`, `pop2`, `dup`, `dup_x1`, `dup_x2`, `dup2`, `dup2_x1`, `dup2_x2`, `swap`
 
-Object/Array Allocation (stubs - emit deoptimization trap):
+Control Flow:
+- [x] `if_icmpeq/ne/lt/ge/gt/le` and `if_acmpeq/ne`
+- [x] `ifnull`, `ifnonnull`
+- [x] `goto` (all variants)
+- [x] `tableswitch`, `lookupswitch`
+- [x] All `*return` opcodes
+
+Comparisons:
+- [x] `lcmp`, `fcmpl`, `fcmpg`, `dcmpl`, `dcmpg`
+- [x] `instanceof`
+
+Constants:
+- [x] `aconst_null`, `iconst_*`, `lconst_*`, `fconst_*`, `dconst_*`, `bipush`, `sipush`
+- [x] `ldc`, `ldc_w`, `ldc2_w`
+
+**JIT Opcodes — Runtime Stubs (emit deoptimization trap, fall back to interpreter):**
+
+Note: these remain unchecked unless their supported helper-backed subset is
+called out explicitly. They are not fully lowered when they appear inside
+JIT-compiled bytecode.
+
+Method Invocation:
+- [x] `invokevirtual` — helper-backed for receiver + descriptor-decoded primitive/reference args and int/long/float/double/reference/void returns
+- [x] `invokespecial` — helper-backed for receiver + descriptor-decoded primitive/reference args and int/long/float/double/reference/void returns
+- [x] `invokestatic` — helper-backed for descriptor-decoded primitive/reference args and int/long/float/double/reference/void returns
+- [x] `invokeinterface` — helper-backed for receiver + descriptor-decoded primitive/reference args and int/long/float/double/reference/void returns
+- [x] `invokedynamic` — helper-backed via the VM's resolved call-site handling (`LambdaProxy`, string concat, and existing unknown-site fallback)
+- [x] `invokenative` — helper-backed through the VM native registry instead of returning a fixed stub value
+
+Field Access:
+- [x] `getstatic` — helper-backed through VM class load/init + static field lookup
+- [x] `putstatic` — helper-backed through VM class load/init + descriptor-decoded static field store
+- [x] `getfield` — helper-backed through VM object field lookup
+- [x] `putfield` — helper-backed through VM descriptor-decoded object field store
+
+Object/Array Allocation:
 - [ ] `new` — stub emits UnreachableCodeReached
 - [ ] `newarray` — stub emits UnreachableCodeReached
 - [ ] `anewarray` — stub emits UnreachableCodeReached
 
-Other:
+Synchronization & Exceptions:
 - [ ] `athrow` — stub emits UnreachableCodeReached
 - [ ] `monitorenter` — stub emits UnreachableCodeReached
 - [ ] `monitorexit` — stub emits UnreachableCodeReached
+
+Type Checks:
+- [ ] `checkcast` — stub emits UnreachableCodeReached
+
+**JIT Integration Tests (22 passing):**
+- [x] `jit_pure_int_arithmetic_matches_interpreter` — iconst/iadd/imul/ireturn
+- [x] `jit_long_arithmetic_matches_interpreter` — ladd/lmul
+- [x] `jit_invokestatic_matches_interpreter` — static method call ABI
+- [x] `jit_invokestatic_pure_callee_executes_machine_code` — interpreter `main` invokes pure static callees through real JIT machine-code entries
+- [x] `jit_compiled_method_can_invoke_static_helper` — JIT-compiled bytecode containing `invokestatic` calls through the runtime helper
+- [x] `jit_compiled_method_can_invoke_virtual_helper` — JIT-compiled bytecode containing `invokevirtual` calls through the runtime helper
+- [x] `jit_compiled_method_can_invoke_special_helper` — JIT-compiled bytecode containing `invokespecial` calls through the runtime helper
+- [x] `jit_compiled_method_can_invoke_interface_helper` — JIT-compiled bytecode containing `invokeinterface` calls through the runtime helper
+- [x] `jit_static_field_helpers_execute_machine_code` — JIT-compiled bytecode containing `getstatic`/`putstatic` helper calls
+- [x] `jit_instance_field_helpers_support_descriptor_types` — JIT-compiled bytecode containing `getfield`/`putfield` for int/long/float/double/reference/array descriptors
+- [x] `jit_user_static_field_matches_interpreter` — getstatic user field
+- [x] `jit_new_object_with_fields_matches_interpreter` — new/putfield/getfield
+- [x] `jit_invokevirtual_matches_interpreter` — virtual dispatch
+- [x] `jit_synchronized_matches_interpreter` — monitorenter/monitorexit
+- [x] `jit_athrow_matches_interpreter` — exception throwing/catching
+- [x] `jit_dijkstra_matches_interpreter` — 2D arrays, nested loops, method calls (Dijkstra)
+- [x] `jit_kmp_matches_interpreter` — arrays, while loops, charAt (KMP string search)
+- [x] `jit_bubble_sort_matches_interpreter` — array swap, nested conditionals
+- [x] `jit_matrix_multiply_matches_interpreter` — 2D arrays, triple nested loops
+- [x] `jit_quicksort_matches_interpreter` — recursive partition algorithm
+
+Latest validation (2026-05-01):
+- [x] `cargo test --test jit_integration` — 22 passed
+- [x] `cargo test` — 66 unit tests + 60 integration tests + 22 JIT integration tests + doc tests passed
 
 ### 13.3 Memory Layout
 - [ ] Compressed object references (32-bit indices on a ≤4 GB heap) — already mostly the case via `Reference::Heap(u32)`; formalize and document
@@ -316,9 +409,10 @@ Goal: lower RSS than HotSpot at matched throughput. HotSpot's Metaspace + code c
 - [x] Multiple classpath entries, on-demand class loading
 - [x] Execution tracing (`-Xtrace`), improved error diagnostics
 
-## 10. Testing — 109 tests
-- [x] 61 unit tests (opcodes, VM behavior, GC API)
-- [x] 48 integration tests (compile Java + execute): core language, built-ins, modern `javac` output, regressions, ArrayList/HashMap/LinkedList/LinkedHashMap/TreeMap/TreeSet/HashSet, Iterator/enhanced-for through real JDK bytecode, Collections.sort/reverse (Integer and String keys), HashMap.entrySet iteration, Arrays.hashCode/equals/stream, java.util.function (Function/Predicate/Consumer/Supplier), Optional
+## 10. Testing — 143 tests
+- [x] 66 unit tests (opcodes, VM behavior, GC API)
+- [x] 60 integration tests (compile Java + execute): core language, built-ins, modern `javac` output, regressions, ArrayList/HashMap/LinkedList/LinkedHashMap/TreeMap/TreeSet/HashSet, Iterator/enhanced-for through real JDK bytecode, Collections.sort/reverse (Integer and String keys), HashMap.entrySet iteration, Arrays.hashCode/equals/stream, java.util.function (Function/Predicate/Consumer/Supplier), Optional
+- [x] 22 JIT integration tests (differential: interpreter vs JIT output match): pure int arithmetic, long arithmetic, invokestatic, compiled invoke helpers, field helpers, user static field, new object, invokevirtual, synchronized, athrow, Dijkstra, KMP, bubble sort, matrix multiply, quicksort
 
 ## 11. Remaining TODOs
 

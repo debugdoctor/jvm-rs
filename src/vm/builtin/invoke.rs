@@ -162,11 +162,9 @@ pub(super) fn invoke_lang(
                 Reference::Heap(i) => i as i32,
             })))
         }
-        ("java/lang/Object", "equals", "(Ljava/lang/Object;)Z") => {
-            Ok(Some(Value::Int(i32::from(
-                args[0].as_reference()? == args[1].as_reference()?,
-            ))))
-        }
+        ("java/lang/Object", "equals", "(Ljava/lang/Object;)Z") => Ok(Some(Value::Int(i32::from(
+            args[0].as_reference()? == args[1].as_reference()?,
+        )))),
         ("java/lang/Object", "toString", "()Ljava/lang/String;") => {
             let r = args[0].as_reference()?;
             let (cls, id) = match r {
@@ -179,7 +177,11 @@ pub(super) fn invoke_lang(
                     (name, i)
                 }
             };
-            Ok(Some(vm.new_string(format!("{}@{:x}", cls.replace('/', "."), id))))
+            Ok(Some(vm.new_string(format!(
+                "{}@{:x}",
+                cls.replace('/', "."),
+                id
+            ))))
         }
         ("java/lang/Object", "getClass", "()Ljava/lang/Class;") => {
             let r = args[0].as_reference()?;
@@ -253,7 +255,8 @@ pub(super) fn invoke_lang(
             Ok(Some(Value::Reference(args[0].as_reference()?)))
         }
         ("java/lang/String", "concat", "(Ljava/lang/String;)Ljava/lang/String;") => {
-            let mut a = crate::vm::builtin::helpers::stringify_reference(vm, args[0].as_reference()?)?;
+            let mut a =
+                crate::vm::builtin::helpers::stringify_reference(vm, args[0].as_reference()?)?;
             let b = crate::vm::builtin::helpers::stringify_reference(vm, args[1].as_reference()?)?;
             a.push_str(&b);
             Ok(Some(vm.new_string(a)))
@@ -294,7 +297,8 @@ pub(super) fn invoke_lang(
         }
         ("java/lang/String", "indexOf", "(Ljava/lang/String;)I") => {
             let s = crate::vm::builtin::helpers::stringify_reference(vm, args[0].as_reference()?)?;
-            let needle = crate::vm::builtin::helpers::stringify_reference(vm, args[1].as_reference()?)?;
+            let needle =
+                crate::vm::builtin::helpers::stringify_reference(vm, args[1].as_reference()?)?;
             let pos = match s.find(&needle) {
                 Some(byte_pos) => s[..byte_pos].chars().count() as i32,
                 None => -1,
@@ -303,17 +307,20 @@ pub(super) fn invoke_lang(
         }
         ("java/lang/String", "startsWith", "(Ljava/lang/String;)Z") => {
             let s = crate::vm::builtin::helpers::stringify_reference(vm, args[0].as_reference()?)?;
-            let prefix = crate::vm::builtin::helpers::stringify_reference(vm, args[1].as_reference()?)?;
+            let prefix =
+                crate::vm::builtin::helpers::stringify_reference(vm, args[1].as_reference()?)?;
             Ok(Some(Value::Int(if s.starts_with(&prefix) { 1 } else { 0 })))
         }
         ("java/lang/String", "endsWith", "(Ljava/lang/String;)Z") => {
             let s = crate::vm::builtin::helpers::stringify_reference(vm, args[0].as_reference()?)?;
-            let suffix = crate::vm::builtin::helpers::stringify_reference(vm, args[1].as_reference()?)?;
+            let suffix =
+                crate::vm::builtin::helpers::stringify_reference(vm, args[1].as_reference()?)?;
             Ok(Some(Value::Int(if s.ends_with(&suffix) { 1 } else { 0 })))
         }
         ("java/lang/String", "contains", "(Ljava/lang/CharSequence;)Z") => {
             let s = crate::vm::builtin::helpers::stringify_reference(vm, args[0].as_reference()?)?;
-            let needle = crate::vm::builtin::helpers::stringify_reference(vm, args[1].as_reference()?)?;
+            let needle =
+                crate::vm::builtin::helpers::stringify_reference(vm, args[1].as_reference()?)?;
             Ok(Some(Value::Int(if s.contains(&needle) { 1 } else { 0 })))
         }
         ("java/lang/String", "replace", "(CC)Ljava/lang/String;") => {
@@ -352,19 +359,23 @@ pub(super) fn invoke_lang(
             Ok(Some(vm.new_string(args[0].as_long()?.to_string())))
         }
         ("java/lang/String", "valueOf", "(Z)Ljava/lang/String;") => {
-            let s = if args[0].as_int()? != 0 { "true" } else { "false" };
+            let s = if args[0].as_int()? != 0 {
+                "true"
+            } else {
+                "false"
+            };
             Ok(Some(vm.new_string(s.to_string())))
         }
         ("java/lang/String", "valueOf", "(C)Ljava/lang/String;") => {
             let ch = char::from_u32(args[0].as_int()? as u32).unwrap_or('\0');
             Ok(Some(vm.new_string(ch.to_string())))
         }
-        ("java/lang/String", "valueOf", "(D)Ljava/lang/String;") => {
-            Ok(Some(vm.new_string(crate::vm::builtin::format::format_float(args[0].as_double()?))))
-        }
-        ("java/lang/String", "valueOf", "(F)Ljava/lang/String;") => {
-            Ok(Some(vm.new_string(crate::vm::builtin::format::format_float(args[0].as_float()? as f64))))
-        }
+        ("java/lang/String", "valueOf", "(D)Ljava/lang/String;") => Ok(Some(vm.new_string(
+            crate::vm::builtin::format::format_float(args[0].as_double()?),
+        ))),
+        ("java/lang/String", "valueOf", "(F)Ljava/lang/String;") => Ok(Some(vm.new_string(
+            crate::vm::builtin::format::format_float(args[0].as_float()? as f64),
+        ))),
         ("java/lang/Integer", "numberOfLeadingZeros", "(I)I") => {
             Ok(Some(Value::Int(args[0].as_int()?.leading_zeros() as i32)))
         }
@@ -392,17 +403,12 @@ pub(super) fn invoke_lang(
             let v = args[0].as_int()?;
             Ok(Some(Value::Int(v & v.wrapping_neg())))
         }
-        ("java/lang/Integer", "signum", "(I)I") => {
-            Ok(Some(Value::Int(args[0].as_int()?.signum())))
-        }
+        ("java/lang/Integer", "signum", "(I)I") => Ok(Some(Value::Int(args[0].as_int()?.signum()))),
         ("java/lang/Integer", "intValue", "()I") => {
             let obj_ref = args[0].as_reference()?;
             match vm.heap.lock().unwrap().get(obj_ref)? {
                 HeapValue::Object { fields, .. } => {
-                    let value = fields
-                        .get("value")
-                        .copied()
-                        .unwrap_or(Value::Int(0));
+                    let value = fields.get("value").copied().unwrap_or(Value::Int(0));
                     Ok(Some(value))
                 }
                 _ => Ok(Some(Value::Int(0))),
@@ -428,11 +434,10 @@ pub(super) fn invoke_lang(
         ("java/lang/Integer", "parseInt", "(Ljava/lang/String;I)I") => {
             let s = crate::vm::builtin::helpers::stringify_reference(vm, args[0].as_reference()?)?;
             let radix = args[1].as_int()? as u32;
-            let value = i32::from_str_radix(&s, radix).map_err(|_| {
-                VmError::UnhandledException {
+            let value =
+                i32::from_str_radix(&s, radix).map_err(|_| VmError::UnhandledException {
                     class_name: "java/lang/NumberFormatException".to_string(),
-                }
-            })?;
+                })?;
             Ok(Some(Value::Int(value)))
         }
         ("java/lang/Integer", "toString", "(I)Ljava/lang/String;") => {
@@ -449,21 +454,27 @@ pub(super) fn invoke_lang(
                 _ => value.to_string(),
             };
             let s = if value < 0 && radix != 10 {
-                format!("-{}", crate::vm::builtin::format::format_unsigned_radix(value.unsigned_abs() as u64, radix))
+                format!(
+                    "-{}",
+                    crate::vm::builtin::format::format_unsigned_radix(
+                        value.unsigned_abs() as u64,
+                        radix
+                    )
+                )
             } else {
                 s
             };
             Ok(Some(vm.new_string(s)))
         }
-        ("java/lang/Integer", "toBinaryString", "(I)Ljava/lang/String;") => {
-            Ok(Some(vm.new_string(format!("{:b}", args[0].as_int()? as u32))))
-        }
-        ("java/lang/Integer", "toHexString", "(I)Ljava/lang/String;") => {
-            Ok(Some(vm.new_string(format!("{:x}", args[0].as_int()? as u32))))
-        }
-        ("java/lang/Integer", "toOctalString", "(I)Ljava/lang/String;") => {
-            Ok(Some(vm.new_string(format!("{:o}", args[0].as_int()? as u32))))
-        }
+        ("java/lang/Integer", "toBinaryString", "(I)Ljava/lang/String;") => Ok(Some(
+            vm.new_string(format!("{:b}", args[0].as_int()? as u32)),
+        )),
+        ("java/lang/Integer", "toHexString", "(I)Ljava/lang/String;") => Ok(Some(
+            vm.new_string(format!("{:x}", args[0].as_int()? as u32)),
+        )),
+        ("java/lang/Integer", "toOctalString", "(I)Ljava/lang/String;") => Ok(Some(
+            vm.new_string(format!("{:o}", args[0].as_int()? as u32)),
+        )),
         ("java/lang/Integer", "compare", "(II)I") => {
             let a = args[0].as_int()?;
             let b = args[1].as_int()?;
@@ -494,9 +505,9 @@ pub(super) fn invoke_lang(
         ("java/lang/Long", "longValue", "()J") => {
             let obj_ref = args[0].as_reference()?;
             match vm.heap.lock().unwrap().get(obj_ref)? {
-                HeapValue::Object { fields, .. } => Ok(Some(
-                    fields.get("value").copied().unwrap_or(Value::Long(0)),
-                )),
+                HeapValue::Object { fields, .. } => {
+                    Ok(Some(fields.get("value").copied().unwrap_or(Value::Long(0))))
+                }
                 _ => Ok(Some(Value::Long(0))),
             }
         }
@@ -563,15 +574,21 @@ pub(super) fn invoke_lang(
             let ch = char::from_u32(args[0].as_int()? as u32).unwrap_or('\0');
             Ok(Some(vm.new_string(ch.to_string())))
         }
-        ("java/lang/Boolean", "getBoolean", "(Ljava/lang/String;)Z") => {
-            Ok(Some(Value::Int(0)))
-        }
+        ("java/lang/Boolean", "getBoolean", "(Ljava/lang/String;)Z") => Ok(Some(Value::Int(0))),
         ("java/lang/Boolean", "parseBoolean", "(Ljava/lang/String;)Z") => {
             let s = crate::vm::builtin::helpers::stringify_reference(vm, args[0].as_reference()?)?;
-            Ok(Some(Value::Int(if s.eq_ignore_ascii_case("true") { 1 } else { 0 })))
+            Ok(Some(Value::Int(if s.eq_ignore_ascii_case("true") {
+                1
+            } else {
+                0
+            })))
         }
         ("java/lang/Boolean", "toString", "(Z)Ljava/lang/String;") => {
-            let s = if args[0].as_int()? != 0 { "true" } else { "false" };
+            let s = if args[0].as_int()? != 0 {
+                "true"
+            } else {
+                "false"
+            };
             Ok(Some(vm.new_string(s.to_string())))
         }
         ("java/lang/Boolean", "valueOf", "(Z)Ljava/lang/Boolean;") => {
@@ -587,18 +604,16 @@ pub(super) fn invoke_lang(
         ("java/lang/Boolean", "booleanValue", "()Z") => {
             let obj_ref = args[0].as_reference()?;
             match vm.heap.lock().unwrap().get(obj_ref)? {
-                HeapValue::Object { fields, .. } => Ok(Some(
-                    fields.get("value").copied().unwrap_or(Value::Int(0)),
-                )),
+                HeapValue::Object { fields, .. } => {
+                    Ok(Some(fields.get("value").copied().unwrap_or(Value::Int(0))))
+                }
                 _ => Ok(Some(Value::Int(0))),
             }
         }
         ("java/lang/Math", "floor", "(D)D") => {
             Ok(Some(Value::Double(args[0].as_double()?.floor())))
         }
-        ("java/lang/Math", "ceil", "(D)D") => {
-            Ok(Some(Value::Double(args[0].as_double()?.ceil())))
-        }
+        ("java/lang/Math", "ceil", "(D)D") => Ok(Some(Value::Double(args[0].as_double()?.ceil()))),
         ("java/lang/Math", "round", "(D)J") => {
             let v = args[0].as_double()?;
             let r = (v + 0.5).floor() as i64;
@@ -624,31 +639,25 @@ pub(super) fn invoke_lang(
             let v = bits as f64 / ((1u64 << 53) as f64);
             Ok(Some(Value::Double(v)))
         }
-        ("java/lang/Math", "log", "(D)D") => {
-            Ok(Some(Value::Double(args[0].as_double()?.ln())))
-        }
+        ("java/lang/Math", "log", "(D)D") => Ok(Some(Value::Double(args[0].as_double()?.ln()))),
         ("java/lang/Math", "log10", "(D)D") => {
             Ok(Some(Value::Double(args[0].as_double()?.log10())))
         }
-        ("java/lang/Math", "exp", "(D)D") => {
-            Ok(Some(Value::Double(args[0].as_double()?.exp())))
-        }
-        ("java/lang/Math", "sin", "(D)D") => {
-            Ok(Some(Value::Double(args[0].as_double()?.sin())))
-        }
-        ("java/lang/Math", "cos", "(D)D") => {
-            Ok(Some(Value::Double(args[0].as_double()?.cos())))
-        }
-        ("java/lang/Math", "tan", "(D)D") => {
-            Ok(Some(Value::Double(args[0].as_double()?.tan())))
-        }
+        ("java/lang/Math", "exp", "(D)D") => Ok(Some(Value::Double(args[0].as_double()?.exp()))),
+        ("java/lang/Math", "sin", "(D)D") => Ok(Some(Value::Double(args[0].as_double()?.sin()))),
+        ("java/lang/Math", "cos", "(D)D") => Ok(Some(Value::Double(args[0].as_double()?.cos()))),
+        ("java/lang/Math", "tan", "(D)D") => Ok(Some(Value::Double(args[0].as_double()?.tan()))),
         ("java/lang/Math", "floorDiv", "(II)I") => {
             let (x, y) = (args[0].as_int()?, args[1].as_int()?);
             if y == 0 {
                 return Err(VmError::DivisionByZero);
             }
             Ok(Some(Value::Int(x.div_euclid(y).wrapping_add(
-                if (x % y != 0) && ((x ^ y) < 0) { -1 + 1 } else { 0 },
+                if (x % y != 0) && ((x ^ y) < 0) {
+                    -1 + 1
+                } else {
+                    0
+                },
             ))))
         }
         ("java/lang/Math", "floorDiv", "(JJ)J") => {
@@ -657,7 +666,11 @@ pub(super) fn invoke_lang(
                 return Err(VmError::DivisionByZero);
             }
             let q = x / y;
-            let q = if (x % y != 0) && ((x ^ y) < 0) { q - 1 } else { q };
+            let q = if (x % y != 0) && ((x ^ y) < 0) {
+                q - 1
+            } else {
+                q
+            };
             Ok(Some(Value::Long(q)))
         }
         ("java/lang/Math", "floorMod", "(II)I") => {
@@ -666,7 +679,11 @@ pub(super) fn invoke_lang(
                 return Err(VmError::DivisionByZero);
             }
             let r = x % y;
-            Ok(Some(Value::Int(if (r != 0) && ((r ^ y) < 0) { r + y } else { r })))
+            Ok(Some(Value::Int(if (r != 0) && ((r ^ y) < 0) {
+                r + y
+            } else {
+                r
+            })))
         }
         ("java/lang/Math", "floorMod", "(JJ)J") => {
             let (x, y) = (args[0].as_long()?, args[1].as_long()?);
@@ -674,7 +691,11 @@ pub(super) fn invoke_lang(
                 return Err(VmError::DivisionByZero);
             }
             let r = x % y;
-            Ok(Some(Value::Long(if (r != 0) && ((r ^ y) < 0) { r + y } else { r })))
+            Ok(Some(Value::Long(if (r != 0) && ((r ^ y) < 0) {
+                r + y
+            } else {
+                r
+            })))
         }
         ("java/lang/Math", "addExact", "(II)I") => {
             let (a, b) = (args[0].as_int()?, args[1].as_int()?);
@@ -706,42 +727,34 @@ pub(super) fn invoke_lang(
                 .map(|v| Some(Value::Long(v)))
                 .ok_or(VmError::DivisionByZero)
         }
-        ("java/lang/Math", "signum", "(I)I") => {
-            Ok(Some(Value::Int(args[0].as_int()?.signum())))
-        }
+        ("java/lang/Math", "signum", "(I)I") => Ok(Some(Value::Int(args[0].as_int()?.signum()))),
         ("java/lang/Math", "max", "(II)I") => {
             Ok(Some(Value::Int(args[0].as_int()?.max(args[1].as_int()?))))
         }
         ("java/lang/Math", "min", "(II)I") => {
             Ok(Some(Value::Int(args[0].as_int()?.min(args[1].as_int()?))))
         }
-        ("java/lang/Math", "abs", "(I)I") => {
-            Ok(Some(Value::Int(args[0].as_int()?.wrapping_abs())))
-        }
-        ("java/lang/Math", "max", "(JJ)J") => {
-            Ok(Some(Value::Long(args[0].as_long()?.max(args[1].as_long()?))))
-        }
-        ("java/lang/Math", "min", "(JJ)J") => {
-            Ok(Some(Value::Long(args[0].as_long()?.min(args[1].as_long()?))))
-        }
+        ("java/lang/Math", "abs", "(I)I") => Ok(Some(Value::Int(args[0].as_int()?.wrapping_abs()))),
+        ("java/lang/Math", "max", "(JJ)J") => Ok(Some(Value::Long(
+            args[0].as_long()?.max(args[1].as_long()?),
+        ))),
+        ("java/lang/Math", "min", "(JJ)J") => Ok(Some(Value::Long(
+            args[0].as_long()?.min(args[1].as_long()?),
+        ))),
         ("java/lang/Math", "abs", "(J)J") => {
             Ok(Some(Value::Long(args[0].as_long()?.wrapping_abs())))
         }
-        ("java/lang/Math", "max", "(DD)D") => {
-            Ok(Some(Value::Double(args[0].as_double()?.max(args[1].as_double()?))))
-        }
-        ("java/lang/Math", "min", "(DD)D") => {
-            Ok(Some(Value::Double(args[0].as_double()?.min(args[1].as_double()?))))
-        }
-        ("java/lang/Math", "abs", "(D)D") => {
-            Ok(Some(Value::Double(args[0].as_double()?.abs())))
-        }
-        ("java/lang/Math", "sqrt", "(D)D") => {
-            Ok(Some(Value::Double(args[0].as_double()?.sqrt())))
-        }
-        ("java/lang/Math", "pow", "(DD)D") => {
-            Ok(Some(Value::Double(args[0].as_double()?.powf(args[1].as_double()?))))
-        }
+        ("java/lang/Math", "max", "(DD)D") => Ok(Some(Value::Double(
+            args[0].as_double()?.max(args[1].as_double()?),
+        ))),
+        ("java/lang/Math", "min", "(DD)D") => Ok(Some(Value::Double(
+            args[0].as_double()?.min(args[1].as_double()?),
+        ))),
+        ("java/lang/Math", "abs", "(D)D") => Ok(Some(Value::Double(args[0].as_double()?.abs()))),
+        ("java/lang/Math", "sqrt", "(D)D") => Ok(Some(Value::Double(args[0].as_double()?.sqrt()))),
+        ("java/lang/Math", "pow", "(DD)D") => Ok(Some(Value::Double(
+            args[0].as_double()?.powf(args[1].as_double()?),
+        ))),
         ("java/lang/StringBuilder", "<init>", "()V") => {
             let obj_ref = args[0].as_reference()?;
             *vm.heap.lock().unwrap().get_mut(obj_ref)? =
@@ -756,7 +769,8 @@ pub(super) fn invoke_lang(
         }
         ("java/lang/StringBuilder", "append", _) => {
             let obj_ref = args[0].as_reference()?;
-            let text = crate::vm::builtin::helpers::format_value_for_append(vm, descriptor, &args[1..])?;
+            let text =
+                crate::vm::builtin::helpers::format_value_for_append(vm, descriptor, &args[1..])?;
             if let HeapValue::StringBuilder(buf) = vm.heap.lock().unwrap().get_mut(obj_ref)? {
                 buf.push_str(&text);
             }
@@ -783,12 +797,11 @@ pub(super) fn invoke_lang(
             let index = args[1].as_int()?;
             let ch = match vm.heap.lock().unwrap().get(obj_ref)? {
                 HeapValue::StringBuilder(buf) => {
-                    buf.chars().nth(index as usize).ok_or_else(|| {
-                        VmError::UnhandledException {
-                            class_name: "java/lang/StringIndexOutOfBoundsException"
-                                .to_string(),
-                        }
-                    })?
+                    buf.chars()
+                        .nth(index as usize)
+                        .ok_or_else(|| VmError::UnhandledException {
+                            class_name: "java/lang/StringIndexOutOfBoundsException".to_string(),
+                        })?
                 }
                 _ => '\0',
             };
@@ -802,9 +815,7 @@ pub(super) fn invoke_lang(
                     class_name: "java/lang/StringIndexOutOfBoundsException".to_string(),
                 });
             }
-            if let HeapValue::StringBuilder(buf) =
-                vm.heap.lock().unwrap().get_mut(obj_ref)?
-            {
+            if let HeapValue::StringBuilder(buf) = vm.heap.lock().unwrap().get_mut(obj_ref)? {
                 let current: Vec<char> = buf.chars().collect();
                 let n = new_len as usize;
                 if n <= current.len() {
@@ -820,14 +831,11 @@ pub(super) fn invoke_lang(
         ("java/lang/StringBuilder", "deleteCharAt", "(I)Ljava/lang/StringBuilder;") => {
             let obj_ref = args[0].as_reference()?;
             let index = args[1].as_int()?;
-            if let HeapValue::StringBuilder(buf) =
-                vm.heap.lock().unwrap().get_mut(obj_ref)?
-            {
+            if let HeapValue::StringBuilder(buf) = vm.heap.lock().unwrap().get_mut(obj_ref)? {
                 let mut chars: Vec<char> = buf.chars().collect();
                 if index < 0 || (index as usize) >= chars.len() {
                     return Err(VmError::UnhandledException {
-                        class_name: "java/lang/StringIndexOutOfBoundsException"
-                            .to_string(),
+                        class_name: "java/lang/StringIndexOutOfBoundsException".to_string(),
                     });
                 }
                 chars.remove(index as usize);
@@ -839,14 +847,11 @@ pub(super) fn invoke_lang(
             let obj_ref = args[0].as_reference()?;
             let index = args[1].as_int()?;
             let ch = char::from_u32(args[2].as_int()? as u32).unwrap_or('\0');
-            if let HeapValue::StringBuilder(buf) =
-                vm.heap.lock().unwrap().get_mut(obj_ref)?
-            {
+            if let HeapValue::StringBuilder(buf) = vm.heap.lock().unwrap().get_mut(obj_ref)? {
                 let mut chars: Vec<char> = buf.chars().collect();
                 if index < 0 || (index as usize) >= chars.len() {
                     return Err(VmError::UnhandledException {
-                        class_name: "java/lang/StringIndexOutOfBoundsException"
-                            .to_string(),
+                        class_name: "java/lang/StringIndexOutOfBoundsException".to_string(),
                     });
                 }
                 chars[index as usize] = ch;
@@ -856,9 +861,7 @@ pub(super) fn invoke_lang(
         }
         ("java/lang/StringBuilder", "reverse", "()Ljava/lang/StringBuilder;") => {
             let obj_ref = args[0].as_reference()?;
-            if let HeapValue::StringBuilder(buf) =
-                vm.heap.lock().unwrap().get_mut(obj_ref)?
-            {
+            if let HeapValue::StringBuilder(buf) = vm.heap.lock().unwrap().get_mut(obj_ref)? {
                 *buf = buf.chars().rev().collect();
             }
             Ok(Some(Value::Reference(obj_ref)))
@@ -867,15 +870,12 @@ pub(super) fn invoke_lang(
             let obj_ref = args[0].as_reference()?;
             let index = args[1].as_int()?;
             let s = crate::vm::builtin::helpers::stringify_reference(vm, args[2].as_reference()?)?;
-            if let HeapValue::StringBuilder(buf) =
-                vm.heap.lock().unwrap().get_mut(obj_ref)?
-            {
+            if let HeapValue::StringBuilder(buf) = vm.heap.lock().unwrap().get_mut(obj_ref)? {
                 let mut chars: Vec<char> = buf.chars().collect();
                 let n = chars.len() as i32;
                 if index < 0 || index > n {
                     return Err(VmError::UnhandledException {
-                        class_name: "java/lang/StringIndexOutOfBoundsException"
-                            .to_string(),
+                        class_name: "java/lang/StringIndexOutOfBoundsException".to_string(),
                     });
                 }
                 let insert_chars: Vec<char> = s.chars().collect();
@@ -889,14 +889,7 @@ pub(super) fn invoke_lang(
         }
         ("java/lang/Thread", "currentThread", "()Ljava/lang/Thread;") => {
             const KEY: &str = "__current_thread";
-            if let Some(r) = vm
-                .runtime
-                .lock()
-                .unwrap()
-                .class_objects
-                .get(KEY)
-                .copied()
-            {
+            if let Some(r) = vm.runtime.lock().unwrap().class_objects.get(KEY).copied() {
                 return Ok(Some(Value::Reference(r)));
             }
             let reference = vm.heap.lock().unwrap().allocate(HeapValue::Object {
@@ -978,26 +971,38 @@ pub(super) fn invoke_lang(
         }
         ("java/lang/Class", "desiredAssertionStatus", "()Z") => Ok(Some(Value::Int(0))),
         ("java/lang/Class", "isArray", "()Z") => {
-            let name = crate::vm::builtin::helpers::class_internal_name(vm, args[0].as_reference()?)?;
+            let name =
+                crate::vm::builtin::helpers::class_internal_name(vm, args[0].as_reference()?)?;
             Ok(Some(Value::Int(i32::from(name.starts_with('[')))))
         }
         ("java/lang/Class", "isPrimitive", "()Z") => {
-            let name = crate::vm::builtin::helpers::class_internal_name(vm, args[0].as_reference()?)?;
+            let name =
+                crate::vm::builtin::helpers::class_internal_name(vm, args[0].as_reference()?)?;
             let primitive = matches!(
                 name.as_str(),
-                "boolean" | "byte" | "char" | "short" | "int" | "long" | "float" | "double" | "void"
+                "boolean"
+                    | "byte"
+                    | "char"
+                    | "short"
+                    | "int"
+                    | "long"
+                    | "float"
+                    | "double"
+                    | "void"
             );
             Ok(Some(Value::Int(i32::from(primitive))))
         }
         ("java/lang/Class", "isInterface", "()Z") => Ok(Some(Value::Int(0))),
         ("java/lang/Class", "getName", "()Ljava/lang/String;")
         | ("java/lang/Class", "toString", "()Ljava/lang/String;") => {
-            let internal = crate::vm::builtin::helpers::class_internal_name(vm, args[0].as_reference()?)?;
+            let internal =
+                crate::vm::builtin::helpers::class_internal_name(vm, args[0].as_reference()?)?;
             let dotted = internal.replace('/', ".");
             Ok(Some(vm.new_string(dotted)))
         }
         ("java/lang/Class", "getSimpleName", "()Ljava/lang/String;") => {
-            let internal = crate::vm::builtin::helpers::class_internal_name(vm, args[0].as_reference()?)?;
+            let internal =
+                crate::vm::builtin::helpers::class_internal_name(vm, args[0].as_reference()?)?;
             let simple = internal
                 .rsplit_once('/')
                 .map(|(_, s)| s)
@@ -1020,9 +1025,7 @@ pub(super) fn invoke_lang(
         }
         ("java/lang/Runtime", "freeMemory", "()J")
         | ("java/lang/Runtime", "totalMemory", "()J")
-        | ("java/lang/Runtime", "maxMemory", "()J") => {
-            Ok(Some(Value::Long(256 * 1024 * 1024)))
-        }
+        | ("java/lang/Runtime", "maxMemory", "()J") => Ok(Some(Value::Long(256 * 1024 * 1024))),
         ("java/lang/Runtime", "gc", "()V") => {
             vm.request_gc();
             Ok(None)
@@ -1106,7 +1109,11 @@ pub(super) fn invoke_lang(
                 }
             };
             let offset = if args.len() > 2 { args[2].as_int()? } else { 0 };
-            let len = if args.len() > 3 { args[3].as_int()? } else { src_count };
+            let len = if args.len() > 3 {
+                args[3].as_int()?
+            } else {
+                src_count
+            };
             let offset = offset.max(0);
             let len = len.max(0).min(src_count.saturating_sub(offset));
             let (target_buf, current_count) = {
@@ -1166,12 +1173,11 @@ pub(super) fn invoke_lang(
                 let chars: String = {
                     let heap = vm.heap.lock().unwrap();
                     match heap.get(buf_ref)? {
-                        HeapValue::IntArray { values } => {
-                            values.iter()
-                                .take(count as usize)
-                                .map(|&v| v as u8 as char)
-                                .collect()
-                        }
+                        HeapValue::IntArray { values } => values
+                            .iter()
+                            .take(count as usize)
+                            .map(|&v| v as u8 as char)
+                            .collect(),
                         _ => String::new(),
                     }
                 };
@@ -1209,7 +1215,11 @@ pub(super) fn invoke_lang(
                         _ => vec![],
                     }
                 };
-                let arr_ref = vm.heap.lock().unwrap().allocate(HeapValue::IntArray { values: bytes });
+                let arr_ref = vm
+                    .heap
+                    .lock()
+                    .unwrap()
+                    .allocate(HeapValue::IntArray { values: bytes });
                 Ok(Some(Value::Reference(arr_ref)))
             } else {
                 Ok(Some(Value::Reference(Reference::Null)))
@@ -1220,12 +1230,10 @@ pub(super) fn invoke_lang(
             let count = {
                 let heap = vm.heap.lock().unwrap();
                 match heap.get(obj_ref)? {
-                    HeapValue::Object { fields, .. } => {
-                        fields.get("count").and_then(|v| match v {
-                            Value::Int(i) => Some(*i),
-                            _ => None,
-                        })
-                    }
+                    HeapValue::Object { fields, .. } => fields.get("count").and_then(|v| match v {
+                        Value::Int(i) => Some(*i),
+                        _ => None,
+                    }),
                     _ => None,
                 }
             };
@@ -1263,7 +1271,12 @@ pub(super) fn invoke_lang(
             Ok(None)
         }
         ("java/io/PrintWriter", "println", "(Z)V") => {
-            let line = if args[1].as_int()? != 0 { "true" } else { "false" }.to_string();
+            let line = if args[1].as_int()? != 0 {
+                "true"
+            } else {
+                "false"
+            }
+            .to_string();
             println!("{line}");
             vm.output.lock().unwrap().push(line);
             Ok(None)
@@ -1318,7 +1331,12 @@ pub(super) fn invoke_lang(
             Ok(None)
         }
         ("java/io/PrintWriter", "print", "(Z)V") => {
-            let text = if args[1].as_int()? != 0 { "true" } else { "false" }.to_string();
+            let text = if args[1].as_int()? != 0 {
+                "true"
+            } else {
+                "false"
+            }
+            .to_string();
             print!("{text}");
             Ok(None)
         }
@@ -1442,7 +1460,11 @@ pub(super) fn invoke_lang(
                     _ => None,
                 }
             };
-            Ok(Some(path_ref.map(Value::Reference).unwrap_or(Value::Reference(Reference::Null))))
+            Ok(Some(
+                path_ref
+                    .map(Value::Reference)
+                    .unwrap_or(Value::Reference(Reference::Null)),
+            ))
         }
         ("java/io/File", "getName", "()Ljava/lang/String;") => {
             let obj_ref = args[0].as_reference()?;
@@ -1467,7 +1489,9 @@ pub(super) fn invoke_lang(
                     _ => None,
                 }
             };
-            let name = name.and_then(|s| s.rsplit('/').next().map(|s| s.to_string())).unwrap_or_default();
+            let name = name
+                .and_then(|s| s.rsplit('/').next().map(|s| s.to_string()))
+                .unwrap_or_default();
             Ok(Some(vm.new_string(name)))
         }
         ("java/io/File", "getParent", "()Ljava/lang/String;") => {
@@ -1479,8 +1503,12 @@ pub(super) fn invoke_lang(
         ("java/io/File", "mkdir", "()Z") => Ok(Some(Value::Int(0))),
         ("java/io/File", "createNewFile", "()Z") => Ok(Some(Value::Int(0))),
         ("java/io/File", "delete", "()Z") => Ok(Some(Value::Int(0))),
-        ("java/io/File", "list", "()[Ljava/lang/String;") => Ok(Some(Value::Reference(Reference::Null))),
-        ("java/io/File", "listFiles", "()[Ljava/io/File;") => Ok(Some(Value::Reference(Reference::Null))),
+        ("java/io/File", "list", "()[Ljava/lang/String;") => {
+            Ok(Some(Value::Reference(Reference::Null)))
+        }
+        ("java/io/File", "listFiles", "()[Ljava/io/File;") => {
+            Ok(Some(Value::Reference(Reference::Null)))
+        }
         _ => Err(VmError::UnhandledException {
             class_name: "".to_string(),
         }),

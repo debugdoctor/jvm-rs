@@ -1,4 +1,4 @@
-use crate::vm::{VmError, Value};
+use crate::vm::{Value, VmError};
 
 pub(super) fn format_unsigned_radix(mut value: u64, radix: u32) -> String {
     if value == 0 {
@@ -18,7 +18,11 @@ pub(super) fn format_float(v: f64) -> String {
     if v.is_nan() {
         "NaN".to_string()
     } else if v.is_infinite() {
-        if v > 0.0 { "Infinity".to_string() } else { "-Infinity".to_string() }
+        if v > 0.0 {
+            "Infinity".to_string()
+        } else {
+            "-Infinity".to_string()
+        }
     } else if v == 0.0 && v.is_sign_negative() {
         "-0.0".to_string()
     } else {

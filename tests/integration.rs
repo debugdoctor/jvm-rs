@@ -46,21 +46,13 @@ fn compile_and_run_with_javac_args(
 
     // Derive main class from the first file name (e.g., "demo/Main.java" -> "demo.Main")
     let main_file = files[0].0;
-    let main_class = main_file
-        .trim_end_matches(".java")
-        .replace('/', ".");
+    let main_class = main_file.trim_end_matches(".java").replace('/', ".");
 
     let options = LaunchOptions::new(&root, &main_class, vec![]);
     let mut vm = jvm_rs::vm::Vm::new().expect("failed to create VM");
     vm.set_class_path(options.class_path.clone());
     let source = jvm_rs::launcher::resolve_class_path(&options.class_path, &main_class).unwrap();
-    let method = jvm_rs::launcher::load_main_method(
-        &source,
-        &main_class,
-        &[],
-        &mut vm,
-    )
-    .unwrap();
+    let method = jvm_rs::launcher::load_main_method(&source, &main_class, &[], &mut vm).unwrap();
     let result = vm.execute(method).unwrap();
     let output = vm.take_output();
     (result, output)
@@ -74,14 +66,17 @@ fn compile_and_run(test_name: &str, files: &[(&str, &str)]) -> (ExecutionResult,
 fn hello_world() {
     let (result, output) = compile_and_run(
         "hello_world",
-        &[("demo/Main.java", r#"
+        &[(
+            "demo/Main.java",
+            r#"
 package demo;
 public class Main {
     public static void main(String[] args) {
         System.out.println("Hello, World!");
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["Hello, World!"]);
@@ -91,7 +86,9 @@ public class Main {
 fn fibonacci() {
     let (result, output) = compile_and_run(
         "fibonacci",
-        &[("demo/Fib.java", r#"
+        &[(
+            "demo/Fib.java",
+            r#"
 package demo;
 public class Fib {
     public static int fib(int n) {
@@ -102,7 +99,8 @@ public class Fib {
         System.out.println(fib(10));
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["55"]);
@@ -112,7 +110,9 @@ public class Fib {
 fn string_concatenation() {
     let (_, output) = compile_and_run(
         "string_concat",
-        &[("demo/Concat.java", r#"
+        &[(
+            "demo/Concat.java",
+            r#"
 package demo;
 public class Concat {
     public static void main(String[] args) {
@@ -122,7 +122,8 @@ public class Concat {
         System.out.println("n=" + n);
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(output, vec!["Hello, World!", "n=42"]);
 }
@@ -132,7 +133,9 @@ fn polymorphism() {
     let (_, output) = compile_and_run(
         "polymorphism",
         &[
-            ("demo/Zoo.java", r#"
+            (
+                "demo/Zoo.java",
+                r#"
 package demo;
 public class Zoo {
     public static void main(String[] args) {
@@ -144,25 +147,35 @@ public class Zoo {
         System.out.println(b instanceof Dog);
     }
 }
-"#),
-            ("demo/Animal.java", r#"
+"#,
+            ),
+            (
+                "demo/Animal.java",
+                r#"
 package demo;
 public class Animal {
     public String speak() { return "..."; }
 }
-"#),
-            ("demo/Dog.java", r#"
+"#,
+            ),
+            (
+                "demo/Dog.java",
+                r#"
 package demo;
 public class Dog extends Animal {
     public String speak() { return "Woof"; }
 }
-"#),
-            ("demo/Cat.java", r#"
+"#,
+            ),
+            (
+                "demo/Cat.java",
+                r#"
 package demo;
 public class Cat extends Animal {
     public String speak() { return "Meow"; }
 }
-"#),
+"#,
+            ),
         ],
     );
     assert_eq!(output, vec!["Woof", "Meow", "true", "false"]);
@@ -172,7 +185,9 @@ public class Cat extends Animal {
 fn exception_handling() {
     let (_, output) = compile_and_run(
         "exceptions",
-        &[("demo/Exc.java", r#"
+        &[(
+            "demo/Exc.java",
+            r#"
 package demo;
 public class Exc {
     public static void main(String[] args) {
@@ -193,7 +208,8 @@ public class Exc {
         System.out.println("done");
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(
         output,
@@ -205,7 +221,9 @@ public class Exc {
 fn static_initializer() {
     let (_, output) = compile_and_run(
         "clinit",
-        &[("demo/Config.java", r#"
+        &[(
+            "demo/Config.java",
+            r#"
 package demo;
 public class Config {
     static int VERSION;
@@ -216,7 +234,8 @@ public class Config {
         System.out.println("v" + VERSION);
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(output, vec!["v42"]);
 }
@@ -225,7 +244,9 @@ public class Config {
 fn array_operations() {
     let (_, output) = compile_and_run(
         "arrays",
-        &[("demo/Arr.java", r#"
+        &[(
+            "demo/Arr.java",
+            r#"
 package demo;
 public class Arr {
     public static void main(String[] args) {
@@ -242,7 +263,8 @@ public class Arr {
         System.out.println(longs[0] + longs[1]);
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(output, vec!["60", "300"]);
 }
@@ -251,7 +273,9 @@ public class Arr {
 fn switch_statement() {
     let (_, output) = compile_and_run(
         "switch",
-        &[("demo/Switch.java", r#"
+        &[(
+            "demo/Switch.java",
+            r#"
 package demo;
 public class Switch {
     public static String day(int n) {
@@ -268,7 +292,8 @@ public class Switch {
         System.out.println(day(99));
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(output, vec!["Mon", "Tue", "?"]);
 }
@@ -277,7 +302,9 @@ public class Switch {
 fn thread_start_and_join() {
     let (_, output) = compile_and_run(
         "thread_start_and_join",
-        &[("demo/ThreadDemo.java", r#"
+        &[(
+            "demo/ThreadDemo.java",
+            r#"
 package demo;
 
 public class ThreadDemo {
@@ -294,7 +321,8 @@ public class ThreadDemo {
         System.out.println("done");
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(output, vec!["worker", "done"]);
 }
@@ -303,7 +331,9 @@ public class ThreadDemo {
 fn object_wait_and_notify() {
     let (_, output) = compile_and_run(
         "object_wait_and_notify",
-        &[("demo/WaitNotifyDemo.java", r#"
+        &[(
+            "demo/WaitNotifyDemo.java",
+            r#"
 package demo;
 
 public class WaitNotifyDemo {
@@ -329,7 +359,8 @@ public class WaitNotifyDemo {
         System.out.println("done");
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(output, vec!["worker-ready", "main-resumed", "done"]);
 }
@@ -339,7 +370,9 @@ fn modern_string_concat_factory() {
     let (_, output) = compile_and_run_with_javac_args(
         "modern_string_concat_factory",
         &[],
-        &[("demo/ModernConcat.java", r#"
+        &[(
+            "demo/ModernConcat.java",
+            r#"
 package demo;
 
 public class ModernConcat {
@@ -349,7 +382,8 @@ public class ModernConcat {
         System.out.println("count=" + n + ", label=" + label);
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(output, vec!["count=42, label=items"]);
 }
@@ -359,7 +393,9 @@ fn lambda_metafactory() {
     let (_, output) = compile_and_run_with_javac_args(
         "lambda_metafactory",
         &["--release", "8"],
-        &[("demo/LambdaDemo.java", r#"
+        &[(
+            "demo/LambdaDemo.java",
+            r#"
 package demo;
 
 public class LambdaDemo {
@@ -372,7 +408,8 @@ public class LambdaDemo {
         System.out.println(greeter.greet("JVM"));
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(output, vec!["Hello, JVM"]);
 }
@@ -383,7 +420,9 @@ public class LambdaDemo {
 fn string_utility_methods() {
     let (_, output) = compile_and_run(
         "string_utility_methods",
-        &[("demo/Strings.java", r#"
+        &[(
+            "demo/Strings.java",
+            r#"
 package demo;
 public class Strings {
     public static void main(String[] args) {
@@ -405,7 +444,8 @@ public class Strings {
         System.out.println(String.valueOf(true));
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(
         output,
@@ -433,7 +473,9 @@ public class Strings {
 fn integer_long_character_boolean_utilities() {
     let (_, output) = compile_and_run(
         "integer_long_character_boolean_utilities",
-        &[("demo/Utils.java", r#"
+        &[(
+            "demo/Utils.java",
+            r#"
 package demo;
 public class Utils {
     public static void main(String[] args) {
@@ -450,11 +492,24 @@ public class Utils {
         System.out.println(Boolean.toString(false));
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(
         output,
-        vec!["123", "42", "1010", "ff", "9999999999", "-7", "true", "true", "Q", "true", "false"]
+        vec![
+            "123",
+            "42",
+            "1010",
+            "ff",
+            "9999999999",
+            "-7",
+            "true",
+            "true",
+            "Q",
+            "true",
+            "false"
+        ]
     );
 }
 
@@ -462,7 +517,9 @@ public class Utils {
 fn math_extended_functions() {
     let (_, output) = compile_and_run(
         "math_extended_functions",
-        &[("demo/MathDemo.java", r#"
+        &[(
+            "demo/MathDemo.java",
+            r#"
 package demo;
 public class MathDemo {
     public static void main(String[] args) {
@@ -474,7 +531,8 @@ public class MathDemo {
         System.out.println(r >= 0.0 && r < 1.0);
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(output, vec!["3.0", "4.0", "3", "3", "true"]);
 }
@@ -483,7 +541,9 @@ public class MathDemo {
 fn system_arraycopy_and_properties() {
     let (_, output) = compile_and_run(
         "system_arraycopy_and_properties",
-        &[("demo/SysDemo.java", r#"
+        &[(
+            "demo/SysDemo.java",
+            r#"
 package demo;
 public class SysDemo {
     public static void main(String[] args) {
@@ -502,7 +562,8 @@ public class SysDemo {
         System.out.println(t2 >= t1);
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(output, vec!["2,3,4,0,0", "true"]);
 }
@@ -511,7 +572,9 @@ public class SysDemo {
 fn objects_utility_methods() {
     let (_, output) = compile_and_run(
         "objects_utility_methods",
-        &[("demo/ObjDemo.java", r#"
+        &[(
+            "demo/ObjDemo.java",
+            r#"
 package demo;
 import java.util.Objects;
 public class ObjDemo {
@@ -531,7 +594,8 @@ public class ObjDemo {
         }
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(
         output,
@@ -546,7 +610,9 @@ fn modern_javac_enhanced_for_and_var() {
     let (_, output) = compile_and_run_with_javac_args(
         "modern_javac_enhanced_for_and_var",
         &[],
-        &[("demo/Modern.java", r#"
+        &[(
+            "demo/Modern.java",
+            r#"
 package demo;
 public class Modern {
     public static void main(String[] args) {
@@ -558,7 +624,8 @@ public class Modern {
         System.out.println(sum);
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(output, vec!["10"]);
 }
@@ -571,7 +638,9 @@ fn modern_javac_try_with_resources_like_pattern() {
     let (_, output) = compile_and_run_with_javac_args(
         "modern_javac_finally_unwind",
         &[],
-        &[("demo/Finally.java", r#"
+        &[(
+            "demo/Finally.java",
+            r#"
 package demo;
 public class Finally {
     static int run() {
@@ -594,7 +663,8 @@ public class Finally {
         }
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(
         output,
@@ -607,7 +677,9 @@ fn modern_javac_nested_lambdas_and_concat() {
     let (_, output) = compile_and_run_with_javac_args(
         "modern_javac_nested_lambdas",
         &[],
-        &[("demo/Nested.java", r#"
+        &[(
+            "demo/Nested.java",
+            r#"
 package demo;
 
 public class Nested {
@@ -622,7 +694,8 @@ public class Nested {
         System.out.println("result=" + result);
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(output, vec!["result=12"]);
 }
@@ -632,7 +705,9 @@ fn modern_javac_interface_default_dispatch() {
     let (_, output) = compile_and_run_with_javac_args(
         "modern_javac_interface_default",
         &[],
-        &[("demo/Defaults.java", r#"
+        &[(
+            "demo/Defaults.java",
+            r#"
 package demo;
 public class Defaults {
     interface Named {
@@ -647,7 +722,8 @@ public class Defaults {
         System.out.println(n.describe());
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(output, vec!["Named:A"]);
 }
@@ -658,7 +734,9 @@ public class Defaults {
 fn regression_deeply_nested_exceptions() {
     let (_, output) = compile_and_run(
         "regression_nested_exceptions",
-        &[("demo/Nested.java", r#"
+        &[(
+            "demo/Nested.java",
+            r#"
 package demo;
 public class Nested {
     static int compute(int x) {
@@ -678,7 +756,8 @@ public class Nested {
         System.out.println(compute(0));
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(output, vec!["20", "-2"]);
 }
@@ -687,7 +766,9 @@ public class Nested {
 fn regression_tableswitch_boundaries() {
     let (_, output) = compile_and_run(
         "regression_tableswitch",
-        &[("demo/Table.java", r#"
+        &[(
+            "demo/Table.java",
+            r#"
 package demo;
 public class Table {
     static String label(int n) {
@@ -706,7 +787,8 @@ public class Table {
         System.out.println(label(100));
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(output, vec!["other", "zero", "three", "other"]);
 }
@@ -715,7 +797,9 @@ public class Table {
 fn regression_lookupswitch_sparse_keys() {
     let (_, output) = compile_and_run(
         "regression_lookupswitch",
-        &[("demo/Lookup.java", r#"
+        &[(
+            "demo/Lookup.java",
+            r#"
 package demo;
 public class Lookup {
     static String sparse(int n) {
@@ -733,7 +817,8 @@ public class Lookup {
         System.out.println(sparse(50));
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(output, vec!["a", "b", "c", "?"]);
 }
@@ -742,7 +827,9 @@ public class Lookup {
 fn regression_multidim_array_allocation() {
     let (_, output) = compile_and_run(
         "regression_multidim_array",
-        &[("demo/Multi.java", r#"
+        &[(
+            "demo/Multi.java",
+            r#"
 package demo;
 public class Multi {
     public static void main(String[] args) {
@@ -759,7 +846,8 @@ public class Multi {
         System.out.println(sum);
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(output, vec!["21"]);
 }
@@ -768,7 +856,9 @@ public class Multi {
 fn regression_long_arithmetic_and_shifts() {
     let (_, output) = compile_and_run(
         "regression_long_arithmetic",
-        &[("demo/Longs.java", r#"
+        &[(
+            "demo/Longs.java",
+            r#"
 package demo;
 public class Longs {
     public static void main(String[] args) {
@@ -783,18 +873,19 @@ public class Longs {
         System.out.println(a | 0xF000L);
     }
 }
-"#)],
+"#,
+        )],
     );
     // Constants below are computed against the same arithmetic a real JVM
     // would perform, so they pin down shift/logic behavior for longs.
     assert_eq!(
         output,
         vec![
-            "20015998341291",           // a >> 16
-            "2541551403008843504",      // a << 4
-            "true",                     // a >>> 1 > 0
-            "239",                      // a & 0xFF
-            "1311768467294911983",      // a | 0xF000
+            "20015998341291",      // a >> 16
+            "2541551403008843504", // a << 4
+            "true",                // a >>> 1 > 0
+            "239",                 // a & 0xFF
+            "1311768467294911983", // a | 0xF000
         ]
     );
 }
@@ -803,7 +894,9 @@ public class Longs {
 fn regression_string_builder_reverse_and_insert() {
     let (_, output) = compile_and_run(
         "regression_stringbuilder_reverse_and_insert",
-        &[("demo/SB.java", r#"
+        &[(
+            "demo/SB.java",
+            r#"
 package demo;
 public class SB {
     public static void main(String[] args) {
@@ -816,19 +909,19 @@ public class SB {
         System.out.println(sb.toString());
     }
 }
-"#)],
+"#,
+        )],
     );
-    assert_eq!(
-        output,
-        vec!["hello, world", "dlrow ,olleh", "lrow ,olleh"]
-    );
+    assert_eq!(output, vec!["hello, world", "dlrow ,olleh", "lrow ,olleh"]);
 }
 
 #[test]
 fn java_util_arraylist_from_jdk() {
     let (result, output) = compile_and_run(
         "java_util_arraylist",
-        &[("demo/TestArrayList.java", r#"
+        &[(
+            "demo/TestArrayList.java",
+            r#"
 package demo;
 import java.util.ArrayList;
 public class TestArrayList {
@@ -839,7 +932,8 @@ public class TestArrayList {
         System.out.println(list.size());
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["2"]);
@@ -849,7 +943,9 @@ public class TestArrayList {
 fn java_util_arraylist_get_from_jdk() {
     let (result, output) = compile_and_run(
         "java_util_arraylist_get",
-        &[("demo/TestArrayListGet.java", r#"
+        &[(
+            "demo/TestArrayListGet.java",
+            r#"
 package demo;
 import java.util.ArrayList;
 public class TestArrayListGet {
@@ -861,7 +957,8 @@ public class TestArrayListGet {
         System.out.println(list.get(1));
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["hello", "world"]);
@@ -871,7 +968,9 @@ public class TestArrayListGet {
 fn java_util_hashmap_basic() {
     let (result, output) = compile_and_run(
         "java_util_hashmap",
-        &[("demo/TestHashMap.java", r#"
+        &[(
+            "demo/TestHashMap.java",
+            r#"
 package demo;
 import java.util.HashMap;
 public class TestHashMap {
@@ -884,7 +983,8 @@ public class TestHashMap {
         System.out.println(map.size());
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["1", "2", "2"]);
@@ -894,7 +994,9 @@ public class TestHashMap {
 fn java_util_function_basic() {
     let (result, output) = compile_and_run(
         "java_util_function",
-        &[("demo/TestFunction.java", r#"
+        &[(
+            "demo/TestFunction.java",
+            r#"
 package demo;
 import java.util.function.Function;
 public class TestFunction {
@@ -903,7 +1005,8 @@ public class TestFunction {
         System.out.println(len.apply("hello"));
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["5"]);
@@ -913,7 +1016,9 @@ public class TestFunction {
 fn java_util_consumer_basic() {
     let (result, output) = compile_and_run(
         "java_util_consumer",
-        &[("demo/TestConsumer.java", r#"
+        &[(
+            "demo/TestConsumer.java",
+            r#"
 package demo;
 import java.util.function.Consumer;
 public class TestConsumer {
@@ -923,7 +1028,8 @@ public class TestConsumer {
         printer.accept("world");
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["hello", "world"]);
@@ -933,7 +1039,9 @@ public class TestConsumer {
 fn java_util_supplier_basic() {
     let (result, output) = compile_and_run(
         "java_util_supplier",
-        &[("demo/TestSupplier.java", r#"
+        &[(
+            "demo/TestSupplier.java",
+            r#"
 package demo;
 import java.util.function.Supplier;
 public class TestSupplier {
@@ -942,9 +1050,10 @@ public class TestSupplier {
         System.out.println(supplier.get());
     }
 }
-"#)],
+"#,
+        )],
     );
-assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["produced"]);
 }
 
@@ -952,7 +1061,9 @@ assert_eq!(result, ExecutionResult::Void);
 fn java_util_optional_basic() {
     let (result, output) = compile_and_run(
         "java_util_optional",
-        &[("demo/TestOptional.java", r#"
+        &[(
+            "demo/TestOptional.java",
+            r#"
 package demo;
 import java.util.Optional;
 public class TestOptional {
@@ -962,7 +1073,8 @@ public class TestOptional {
         System.out.println(opt.get());
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["true", "hello"]);
@@ -972,7 +1084,9 @@ public class TestOptional {
 fn java_util_linked_list() {
     let (result, output) = compile_and_run(
         "java_util_linked_list",
-        &[("demo/TestLinkedList.java", r#"
+        &[(
+            "demo/TestLinkedList.java",
+            r#"
 package demo;
 import java.util.LinkedList;
 public class TestLinkedList {
@@ -985,7 +1099,8 @@ public class TestLinkedList {
         System.out.println(list.size());
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["hello", "world", "2"]);
@@ -995,7 +1110,9 @@ public class TestLinkedList {
 fn java_util_hash_map() {
     let (result, output) = compile_and_run(
         "java_util_hash_map",
-        &[("demo/TestHashMap.java", r#"
+        &[(
+            "demo/TestHashMap.java",
+            r#"
 package demo;
 import java.util.HashMap;
 public class TestHashMap {
@@ -1008,7 +1125,8 @@ public class TestHashMap {
         System.out.println(map.size());
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["1", "2", "2"]);
@@ -1018,7 +1136,9 @@ public class TestHashMap {
 fn java_util_tree_map() {
     let (result, output) = compile_and_run(
         "java_util_tree_map",
-        &[("demo/TestTreeMap.java", r#"
+        &[(
+            "demo/TestTreeMap.java",
+            r#"
 package demo;
 import java.util.TreeMap;
 public class TestTreeMap {
@@ -1030,7 +1150,8 @@ public class TestTreeMap {
         System.out.println(tm.size());
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["1", "2"]);
@@ -1040,7 +1161,9 @@ public class TestTreeMap {
 fn java_util_tree_set() {
     let (result, output) = compile_and_run(
         "java_util_tree_set",
-        &[("demo/TestTreeSet.java", r#"
+        &[(
+            "demo/TestTreeSet.java",
+            r#"
 package demo;
 import java.util.TreeSet;
 public class TestTreeSet {
@@ -1052,7 +1175,8 @@ public class TestTreeSet {
         System.out.println(ts.size());
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["apple", "2"]);
@@ -1062,7 +1186,9 @@ public class TestTreeSet {
 fn java_util_hash_set() {
     let (result, output) = compile_and_run(
         "java_util_hash_set",
-        &[("demo/TestHashSet.java", r#"
+        &[(
+            "demo/TestHashSet.java",
+            r#"
 package demo;
 import java.util.HashSet;
 public class TestHashSet {
@@ -1074,7 +1200,8 @@ public class TestHashSet {
         System.out.println(hs.size());
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["true", "2"]);
@@ -1084,7 +1211,9 @@ public class TestHashSet {
 fn java_util_linked_hash_map() {
     let (result, output) = compile_and_run(
         "java_util_linked_hash_map",
-        &[("demo/TestLinkedHashMap.java", r#"
+        &[(
+            "demo/TestLinkedHashMap.java",
+            r#"
 package demo;
 import java.util.LinkedHashMap;
 public class TestLinkedHashMap {
@@ -1096,7 +1225,8 @@ public class TestLinkedHashMap {
         System.out.println(lhm.size());
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["v1", "2"]);
@@ -1109,7 +1239,9 @@ fn java_util_arraylist_iterator() {
     // while loop dispatches through hasNext/next on that iterator.
     let (result, output) = compile_and_run(
         "java_util_arraylist_iterator",
-        &[("demo/TestIter.java", r#"
+        &[(
+            "demo/TestIter.java",
+            r#"
 package demo;
 import java.util.ArrayList;
 import java.util.Iterator;
@@ -1125,7 +1257,8 @@ public class TestIter {
         }
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["a", "b", "c"]);
@@ -1138,7 +1271,9 @@ fn java_util_arraylist_enhanced_for() {
     // bytecode, not just for primitive-array enhanced-for.
     let (result, output) = compile_and_run(
         "java_util_arraylist_enhanced_for",
-        &[("demo/TestForEach.java", r#"
+        &[(
+            "demo/TestForEach.java",
+            r#"
 package demo;
 import java.util.ArrayList;
 public class TestForEach {
@@ -1152,7 +1287,8 @@ public class TestForEach {
         }
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["x", "y", "z"]);
@@ -1165,7 +1301,9 @@ fn java_util_collections_sort_integers() {
     // through normal virtual dispatch.
     let (result, output) = compile_and_run(
         "java_util_collections_sort_integers",
-        &[("demo/TestSort.java", r#"
+        &[(
+            "demo/TestSort.java",
+            r#"
 package demo;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -1183,7 +1321,8 @@ public class TestSort {
         }
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["1", "1", "3", "4", "5"]);
@@ -1193,7 +1332,9 @@ public class TestSort {
 fn java_util_collections_sort_strings() {
     let (result, output) = compile_and_run(
         "java_util_collections_sort_strings",
-        &[("demo/TestSortS.java", r#"
+        &[(
+            "demo/TestSortS.java",
+            r#"
 package demo;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -1209,7 +1350,8 @@ public class TestSortS {
         }
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["apple", "banana", "cherry"]);
@@ -1219,7 +1361,9 @@ public class TestSortS {
 fn java_util_collections_reverse() {
     let (result, output) = compile_and_run(
         "java_util_collections_reverse",
-        &[("demo/TestRev.java", r#"
+        &[(
+            "demo/TestRev.java",
+            r#"
 package demo;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -1235,7 +1379,8 @@ public class TestRev {
         }
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["3", "2", "1"]);
@@ -1249,7 +1394,9 @@ fn java_util_arrays_hashcode_and_equals() {
     // end-to-end.
     let (result, output) = compile_and_run(
         "java_util_arrays_hashcode_equals",
-        &[("demo/TestArrEq.java", r#"
+        &[(
+            "demo/TestArrEq.java",
+            r#"
 package demo;
 import java.util.Arrays;
 public class TestArrEq {
@@ -1262,7 +1409,8 @@ public class TestArrEq {
         System.out.println(Arrays.equals(a, c));
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["955331", "true", "false"]);
@@ -1277,7 +1425,9 @@ fn java_util_arrays_stream_sum() {
     // NativeIntStream class.
     let (result, output) = compile_and_run(
         "java_util_arrays_stream_sum",
-        &[("demo/TestArrStream.java", r#"
+        &[(
+            "demo/TestArrStream.java",
+            r#"
 package demo;
 import java.util.Arrays;
 import java.util.stream.IntStream;
@@ -1289,7 +1439,8 @@ public class TestArrStream {
         System.out.println(Arrays.stream(a).count());
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["15", "5"]);
@@ -1302,7 +1453,9 @@ fn java_util_hashmap_iterator() {
     // ArrayList-specific.
     let (result, output) = compile_and_run(
         "java_util_hashmap_iterator",
-        &[("demo/TestMapIter.java", r#"
+        &[(
+            "demo/TestMapIter.java",
+            r#"
 package demo;
 import java.util.HashMap;
 import java.util.Map;
@@ -1318,7 +1471,8 @@ public class TestMapIter {
         System.out.println(total);
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["3"]);
@@ -1328,7 +1482,9 @@ public class TestMapIter {
 fn java_util_arrays_stream_long() {
     let (result, output) = compile_and_run(
         "java_util_arrays_stream_long",
-        &[("demo/TestLongStream.java", r#"
+        &[(
+            "demo/TestLongStream.java",
+            r#"
 package demo;
 import java.util.Arrays;
 import java.util.stream.LongStream;
@@ -1340,7 +1496,8 @@ public class TestLongStream {
         System.out.println(Arrays.stream(a).count());
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["15", "5"]);
@@ -1350,7 +1507,9 @@ public class TestLongStream {
 fn java_util_arrays_stream_double() {
     let (result, output) = compile_and_run(
         "java_util_arrays_stream_double",
-        &[("demo/TestDoubleStream.java", r#"
+        &[(
+            "demo/TestDoubleStream.java",
+            r#"
 package demo;
 import java.util.Arrays;
 import java.util.stream.DoubleStream;
@@ -1362,7 +1521,8 @@ public class TestDoubleStream {
         System.out.println(Arrays.stream(a).count());
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["15.0", "5"]);
@@ -1372,7 +1532,9 @@ public class TestDoubleStream {
 fn java_util_stream_optional_min_max() {
     let (result, output) = compile_and_run(
         "java_util_stream_optional_min_max",
-        &[("demo/TestOptMinMax.java", r#"
+        &[(
+            "demo/TestOptMinMax.java",
+            r#"
 package demo;
 import java.util.OptionalInt;
 import java.util.OptionalDouble;
@@ -1392,7 +1554,8 @@ public class TestOptMinMax {
         System.out.println(avg.getAsDouble());
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["true", "1", "true", "5", "true", "3.0"]);
@@ -1402,7 +1565,9 @@ public class TestOptMinMax {
 fn java_util_hash_map_iteration_and_remove() {
     let (result, output) = compile_and_run(
         "java_util_hashmap_iter_remove",
-        &[("demo/TestHashMapIterRemove.java", r#"
+        &[(
+            "demo/TestHashMapIterRemove.java",
+            r#"
 package demo;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -1426,7 +1591,8 @@ public class TestHashMapIterRemove {
         System.out.println(map.containsKey("a"));
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["6", "2", "false", "true"]);
@@ -1436,7 +1602,9 @@ public class TestHashMapIterRemove {
 fn java_util_linked_list_operations() {
     let (result, output) = compile_and_run(
         "java_util_linked_list_ops",
-        &[("demo/TestLinkedListOps.java", r#"
+        &[(
+            "demo/TestLinkedListOps.java",
+            r#"
 package demo;
 import java.util.LinkedList;
 public class TestLinkedListOps {
@@ -1452,7 +1620,8 @@ public class TestLinkedListOps {
         System.out.println(list.getFirst());
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["first", "third", "first", "2", "second"]);
@@ -1462,7 +1631,9 @@ public class TestLinkedListOps {
 fn java_util_hash_set_operations() {
     let (result, output) = compile_and_run(
         "java_util_hash_set_ops",
-        &[("demo/TestHashSetOps.java", r#"
+        &[(
+            "demo/TestHashSetOps.java",
+            r#"
 package demo;
 import java.util.HashSet;
 public class TestHashSetOps {
@@ -1478,7 +1649,8 @@ public class TestHashSetOps {
         System.out.println(hs.contains("grape"));
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["3", "true", "false"]);
@@ -1488,7 +1660,9 @@ public class TestHashSetOps {
 fn byte_array_output_stream_basic() {
     let (result, output) = compile_and_run(
         "baos_basic",
-        &[("demo/TestBAOS.java", r#"
+        &[(
+            "demo/TestBAOS.java",
+            r#"
 package demo;
 import java.io.ByteArrayOutputStream;
 public class TestBAOS {
@@ -1501,7 +1675,8 @@ public class TestBAOS {
         System.out.println(baos.toString());
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["3", "Hi!"]);
@@ -1511,7 +1686,9 @@ public class TestBAOS {
 fn byte_array_output_stream_write_bytes() {
     let (result, output) = compile_and_run(
         "baos_write_bytes",
-        &[("demo/TestBAOS2.java", r#"
+        &[(
+            "demo/TestBAOS2.java",
+            r#"
 package demo;
 import java.io.ByteArrayOutputStream;
 public class TestBAOS2 {
@@ -1523,7 +1700,8 @@ public class TestBAOS2 {
         System.out.println(baos.toString());
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["2", "BC"]);
@@ -1533,7 +1711,9 @@ public class TestBAOS2 {
 fn byte_array_output_stream_reset() {
     let (result, output) = compile_and_run(
         "baos_reset",
-        &[("demo/TestBAOS3.java", r#"
+        &[(
+            "demo/TestBAOS3.java",
+            r#"
 package demo;
 import java.io.ByteArrayOutputStream;
 public class TestBAOS3 {
@@ -1549,7 +1729,8 @@ public class TestBAOS3 {
         System.out.println(baos.toString());
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["2", "0", "1", "C"]);
@@ -1559,7 +1740,9 @@ public class TestBAOS3 {
 fn input_stream_stubs() {
     let (result, output) = compile_and_run(
         "input_stream_stubs",
-        &[("demo/TestIS.java", r#"
+        &[(
+            "demo/TestIS.java",
+            r#"
 package demo;
 import java.io.InputStream;
 public class TestIS {
@@ -1568,7 +1751,8 @@ public class TestIS {
         System.out.println(is == null ? 0 : 1);
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["0"]);
@@ -1578,7 +1762,9 @@ public class TestIS {
 fn buffered_reader_stubs() {
     let (result, output) = compile_and_run(
         "buffered_reader_stubs",
-        &[("demo/TestBR.java", r#"
+        &[(
+            "demo/TestBR.java",
+            r#"
 package demo;
 import java.io.BufferedReader;
 import java.io.StringReader;
@@ -1589,7 +1775,8 @@ public class TestBR {
         System.out.println(line == null ? "null" : line);
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["null"]);
@@ -1599,7 +1786,9 @@ public class TestBR {
 fn print_writer_system_out() {
     let (result, output) = compile_and_run(
         "print_writer_system_out",
-        &[("demo/TestPW.java", r#"
+        &[(
+            "demo/TestPW.java",
+            r#"
 package demo;
 import java.io.PrintWriter;
 public class TestPW {
@@ -1610,7 +1799,8 @@ public class TestPW {
         System.out.println(1);
     }
 }
-"#)],
+"#,
+        )],
     );
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["42", "1"]);

@@ -25,9 +25,10 @@ pub(super) struct RuntimeState {
     /// name (e.g., `java/util/HashMap`, `I`, `[Ljava/lang/String;`). Populated
     /// on demand when `ldc` or native reflection produces a Class constant.
     pub(super) class_objects: HashMap<String, crate::vm::types::Reference>,
-    /// Counter incremented each time `Vm::execute` returns via the JIT entry
-    /// path. Used by tests to assert the JIT actually ran, not that it
-    /// silently fell back to the interpreter.
+    /// Counter incremented each time `Vm::execute` reaches the JIT tier. If the
+    /// backend cannot lower the method yet, the VM records the activation and
+    /// deoptimizes back to the interpreter instead of silently ignoring the JIT
+    /// threshold.
     pub(super) jit_executions: u64,
 }
 
@@ -57,7 +58,7 @@ impl fmt::Debug for SharedThreads {
 }
 
 #[derive(Debug)]
-pub(super) struct Thread {
+pub(crate) struct Thread {
     pub(super) frames: SmallVec<[Frame; 8]>,
 }
 
@@ -69,7 +70,9 @@ impl Thread {
     }
 
     pub(super) fn dummy() -> Self {
-        Self { frames: SmallVec::new() }
+        Self {
+            frames: SmallVec::new(),
+        }
     }
 
     pub(super) fn current_frame(&self) -> &Frame {

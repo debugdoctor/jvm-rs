@@ -888,3 +888,805 @@ public class Main {
         )],
     );
 }
+
+// ---- Tier 13: merge sort (divide and conquer + arrays). ----
+
+#[test]
+fn jit_merge_sort_matches_interpreter() {
+    assert_jit_matches_interpreter(
+        "merge_sort",
+        &[(
+            "demo/Main.java",
+            r#"
+package demo;
+public class Main {
+    static void merge(int[] arr, int l, int m, int r) {
+        int n1 = m - l + 1;
+        int n2 = r - m;
+        int[] left = new int[n1];
+        int[] right = new int[n2];
+        for (int i = 0; i < n1; i++) left[i] = arr[l + i];
+        for (int j = 0; j < n2; j++) right[j] = arr[m + 1 + j];
+        int i = 0, j = 0, k = l;
+        while (i < n1 && j < n2) {
+            if (left[i] <= right[j]) { arr[k] = left[i]; i++; }
+            else { arr[k] = right[j]; j++; }
+            k++;
+        }
+        while (i < n1) { arr[k] = left[i]; i++; k++; }
+        while (j < n2) { arr[k] = right[j]; j++; k++; }
+    }
+    static void sort(int[] arr, int l, int r) {
+        if (l < r) {
+            int m = l + (r - l) / 2;
+            sort(arr, l, m);
+            sort(arr, m + 1, r);
+            merge(arr, l, m, r);
+        }
+    }
+    public static void main(String[] args) {
+        int[] data = {38, 27, 43, 3, 9, 82, 10};
+        sort(data, 0, data.length - 1);
+        for (int i = 0; i < data.length; i++) {
+            System.out.println(data[i]);
+        }
+    }
+}
+"#,
+        )],
+    );
+}
+
+// ---- Tier 14: binary search (iterative + method calls). ----
+
+#[test]
+fn jit_binary_search_matches_interpreter() {
+    assert_jit_matches_interpreter(
+        "binary_search",
+        &[(
+            "demo/Main.java",
+            r#"
+package demo;
+public class Main {
+    static int binarySearch(int[] arr, int target) {
+        int left = 0, right = arr.length - 1;
+        while (left <= right) {
+            int mid = left + (right - left) / 2;
+            if (arr[mid] == target) return mid;
+            if (arr[mid] < target) left = mid + 1;
+            else right = mid - 1;
+        }
+        return -1;
+    }
+    public static void main(String[] args) {
+        int[] arr = {2, 3, 4, 10, 40, 50, 60, 70};
+        System.out.println(binarySearch(arr, 10));
+        System.out.println(binarySearch(arr, 5));
+    }
+}
+"#,
+        )],
+    );
+}
+
+// ---- Tier 15: longest common subsequence (dynamic programming). ----
+
+#[test]
+fn jit_lcs_matches_interpreter() {
+    assert_jit_matches_interpreter(
+        "lcs",
+        &[(
+            "demo/Main.java",
+            r#"
+package demo;
+public class Main {
+    static int lcs(String s1, String s2) {
+        int m = s1.length(), n = s2.length();
+        int[][] dp = new int[m + 1][n + 1];
+        for (int i = 1; i <= m; i++) {
+            for (int j = 1; j <= n; j++) {
+                if (s1.charAt(i - 1) == s2.charAt(j - 1)) {
+                    dp[i][j] = dp[i - 1][j - 1] + 1;
+                } else {
+                    dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+                }
+            }
+        }
+        return dp[m][n];
+    }
+    public static void main(String[] args) {
+        String s1 = "AGGTAB";
+        String s2 = "GXTXAYB";
+        System.out.println(lcs(s1, s2));
+    }
+}
+"#,
+        )],
+    );
+}
+
+// ---- Tier 16: 0/1 knapsack (dynamic programming). ----
+
+#[test]
+fn jit_knapsack_matches_interpreter() {
+    assert_jit_matches_interpreter(
+        "knapsack",
+        &[(
+            "demo/Main.java",
+            r#"
+package demo;
+public class Main {
+    static int knapsack(int W, int[] wt, int[] val, int n) {
+        int[][] dp = new int[n + 1][W + 1];
+        for (int i = 1; i <= n; i++) {
+            for (int w = 0; w <= W; w++) {
+                if (wt[i - 1] <= w) {
+                    dp[i][w] = Math.max(val[i - 1] + dp[i - 1][w - wt[i - 1]], dp[i - 1][w]);
+                } else {
+                    dp[i][w] = dp[i - 1][w];
+                }
+            }
+        }
+        return dp[n][W];
+    }
+    public static void main(String[] args) {
+        int[] val = {60, 100, 120};
+        int[] wt = {10, 20, 30};
+        int W = 50;
+        System.out.println(knapsack(W, wt, val, 3));
+    }
+}
+"#,
+        )],
+    );
+}
+
+// ---- Tier 17: BFS graph traversal. ----
+
+#[test]
+fn jit_bfs_matches_interpreter() {
+    assert_jit_matches_interpreter(
+        "bfs",
+        &[(
+            "demo/Main.java",
+            r#"
+package demo;
+import java.util.*;
+public class Main {
+    static void bfs(int[][] graph, int start) {
+        int n = graph.length;
+        boolean[] visited = new boolean[n];
+        Queue<Integer> queue = new LinkedList<>();
+        visited[start] = true;
+        queue.offer(start);
+        while (!queue.isEmpty()) {
+            int v = queue.poll();
+            System.out.println(v);
+            for (int i = 0; i < n; i++) {
+                if (graph[v][i] == 1 && !visited[i]) {
+                    visited[i] = true;
+                    queue.offer(i);
+                }
+            }
+        }
+    }
+    public static void main(String[] args) {
+        int[][] graph = {
+            {0, 1, 1, 0, 0},
+            {1, 0, 0, 1, 1},
+            {1, 0, 0, 0, 1},
+            {0, 1, 0, 0, 0},
+            {0, 1, 1, 0, 0}
+        };
+        bfs(graph, 0);
+    }
+}
+"#,
+        )],
+    );
+}
+
+// ---- Tier 18: DFS graph traversal (recursive). ----
+
+#[test]
+fn jit_dfs_matches_interpreter() {
+    assert_jit_matches_interpreter(
+        "dfs",
+        &[(
+            "demo/Main.java",
+            r#"
+package demo;
+public class Main {
+    static void dfs(int[][] graph, int v, boolean[] visited) {
+        visited[v] = true;
+        System.out.println(v);
+        for (int i = 0; i < graph.length; i++) {
+            if (graph[v][i] == 1 && !visited[i]) {
+                dfs(graph, i, visited);
+            }
+        }
+    }
+    public static void main(String[] args) {
+        int[][] graph = {
+            {0, 1, 1, 0, 0},
+            {1, 0, 0, 1, 1},
+            {1, 0, 0, 0, 1},
+            {0, 1, 0, 0, 0},
+            {0, 1, 1, 0, 0}
+        };
+        boolean[] visited = new boolean[5];
+        dfs(graph, 0, visited);
+    }
+}
+"#,
+        )],
+    );
+}
+
+// ---- Tier 19: Sieve of Eratosthenes (prime numbers). ----
+
+#[test]
+fn jit_sieve_eratosthenes_matches_interpreter() {
+    assert_jit_matches_interpreter(
+        "sieve",
+        &[(
+            "demo/Main.java",
+            r#"
+package demo;
+public class Main {
+    static void sieve(int n) {
+        boolean[] isPrime = new boolean[n + 1];
+        for (int i = 2; i <= n; i++) isPrime[i] = true;
+        for (int p = 2; p * p <= n; p++) {
+            if (isPrime[p]) {
+                for (int i = p * p; i <= n; i += p) {
+                    isPrime[i] = false;
+                }
+            }
+        }
+        for (int i = 2; i <= n; i++) {
+            if (isPrime[i]) {
+                System.out.println(i);
+            }
+        }
+    }
+    public static void main(String[] args) {
+        sieve(30);
+    }
+}
+"#,
+        )],
+    );
+}
+
+// ---- Tier 20: Fibonacci (iterative with array). ----
+
+#[test]
+fn jit_fibonacci_iterative_matches_interpreter() {
+    assert_jit_matches_interpreter(
+        "fibonacci_iterative",
+        &[(
+            "demo/Main.java",
+            r#"
+package demo;
+public class Main {
+    static int[] fibonacci(int n) {
+        int[] fib = new int[n + 1];
+        fib[0] = 0;
+        fib[1] = 1;
+        for (int i = 2; i <= n; i++) {
+            fib[i] = fib[i - 1] + fib[i - 2];
+        }
+        return fib;
+    }
+    public static void main(String[] args) {
+        int[] fib = fibonacci(10);
+        for (int i = 0; i < fib.length; i++) {
+            System.out.println(fib[i]);
+        }
+    }
+}
+"#,
+        )],
+    );
+}
+
+// ---- Tier 21: Tower of Hanoi (recursive). ----
+
+#[test]
+fn jit_tower_of_hanoi_matches_interpreter() {
+    assert_jit_matches_interpreter(
+        "tower_of_hanoi",
+        &[(
+            "demo/Main.java",
+            r#"
+package demo;
+public class Main {
+    static void towerOfHanoi(int n, char from, char to, char aux) {
+        if (n == 1) {
+            System.out.println("Move disk 1 from " + from + " to " + to);
+            return;
+        }
+        towerOfHanoi(n - 1, from, aux, to);
+        System.out.println("Move disk " + n + " from " + from + " to " + to);
+        towerOfHanoi(n - 1, aux, to, from);
+    }
+    public static void main(String[] args) {
+        towerOfHanoi(4, 'A', 'C', 'B');
+    }
+}
+"#,
+        )],
+    );
+}
+
+// ---- Tier 22: Floyd-Warshall all-pairs shortest path. ----
+
+#[test]
+fn jit_floyd_warshall_matches_interpreter() {
+    assert_jit_matches_interpreter(
+        "floyd_warshall",
+        &[(
+            "demo/Main.java",
+            r#"
+package demo;
+public class Main {
+    static final int INF = 99999;
+    static void floydWarshall(int[][] graph, int n) {
+        int[][] dist = new int[n][n];
+        for (int i = 0; i < n; i++) {
+            for (int j = 0; j < n; j++) {
+                dist[i][j] = graph[i][j];
+            }
+        }
+        for (int k = 0; k < n; k++) {
+            for (int i = 0; i < n; i++) {
+                for (int j = 0; j < n; j++) {
+                    if (dist[i][k] + dist[k][j] < dist[i][j]) {
+                        dist[i][j] = dist[i][k] + dist[k][j];
+                    }
+                }
+            }
+        }
+        for (int i = 0; i < n; i++) {
+            for (int j = 0; j < n; j++) {
+                if (dist[i][j] == INF) {
+                    System.out.print("INF ");
+                } else {
+                    System.out.print(dist[i][j] + " ");
+                }
+            }
+            System.out.println();
+        }
+    }
+    public static void main(String[] args) {
+        int[][] graph = {
+            {0, 5, INF, 10},
+            {INF, 0, 3, INF},
+            {INF, INF, 0, 1},
+            {INF, INF, INF, 0}
+        };
+        floydWarshall(graph, 4);
+    }
+}
+"#,
+        )],
+    );
+}
+
+// ---- Tier 23: Selection sort (nested loops + swaps). ----
+
+#[test]
+fn jit_selection_sort_matches_interpreter() {
+    assert_jit_matches_interpreter(
+        "selection_sort",
+        &[(
+            "demo/Main.java",
+            r#"
+package demo;
+public class Main {
+    static void selectionSort(int[] arr) {
+        int n = arr.length;
+        for (int i = 0; i < n - 1; i++) {
+            int minIdx = i;
+            for (int j = i + 1; j < n; j++) {
+                if (arr[j] < arr[minIdx]) {
+                    minIdx = j;
+                }
+            }
+            int temp = arr[minIdx];
+            arr[minIdx] = arr[i];
+            arr[i] = temp;
+        }
+    }
+    public static void main(String[] args) {
+        int[] data = {64, 25, 12, 22, 11};
+        selectionSort(data);
+        for (int i = 0; i < data.length; i++) {
+            System.out.println(data[i]);
+        }
+    }
+}
+"#,
+        )],
+    );
+}
+
+// ---- Tier 24: Insertion sort. ----
+
+#[test]
+fn jit_insertion_sort_matches_interpreter() {
+    assert_jit_matches_interpreter(
+        "insertion_sort",
+        &[(
+            "demo/Main.java",
+            r#"
+package demo;
+public class Main {
+    static void insertionSort(int[] arr) {
+        for (int i = 1; i < arr.length; i++) {
+            int key = arr[i];
+            int j = i - 1;
+            while (j >= 0 && arr[j] > key) {
+                arr[j + 1] = arr[j];
+                j--;
+            }
+            arr[j + 1] = key;
+        }
+    }
+    public static void main(String[] args) {
+        int[] data = {12, 11, 13, 5, 6};
+        insertionSort(data);
+        for (int i = 0; i < data.length; i++) {
+            System.out.println(data[i]);
+        }
+    }
+}
+"#,
+        )],
+    );
+}
+
+// ---- Tier 25: Edit distance (Levenshtein distance). ----
+
+#[test]
+fn jit_edit_distance_matches_interpreter() {
+    assert_jit_matches_interpreter(
+        "edit_distance",
+        &[(
+            "demo/Main.java",
+            r#"
+package demo;
+public class Main {
+    static int min(int a, int b, int c) {
+        return Math.min(Math.min(a, b), c);
+    }
+    static int editDistance(String s1, String s2) {
+        int m = s1.length(), n = s2.length();
+        int[][] dp = new int[m + 1][n + 1];
+        for (int i = 0; i <= m; i++) dp[i][0] = i;
+        for (int j = 0; j <= n; j++) dp[0][j] = j;
+        for (int i = 1; i <= m; i++) {
+            for (int j = 1; j <= n; j++) {
+                if (s1.charAt(i - 1) == s2.charAt(j - 1)) {
+                    dp[i][j] = dp[i - 1][j - 1];
+                } else {
+                    dp[i][j] = 1 + min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
+                }
+            }
+        }
+        return dp[m][n];
+    }
+    public static void main(String[] args) {
+        String s1 = "sitting";
+        String s2 = "kitten";
+        System.out.println(editDistance(s1, s2));
+    }
+}
+"#,
+        )],
+    );
+}
+
+// ---- Tier 27: Heap sort. ----
+
+#[test]
+fn jit_heap_sort_matches_interpreter() {
+    assert_jit_matches_interpreter(
+        "heap_sort",
+        &[(
+            "demo/Main.java",
+            r#"
+package demo;
+public class Main {
+    static void heapSort(int[] arr) {
+        int n = arr.length;
+        for (int i = n / 2 - 1; i >= 0; i--) {
+            heapify(arr, n, i);
+        }
+        for (int i = n - 1; i > 0; i--) {
+            int temp = arr[0];
+            arr[0] = arr[i];
+            arr[i] = temp;
+            heapify(arr, i, 0);
+        }
+    }
+    static void heapify(int[] arr, int n, int i) {
+        int largest = i;
+        int left = 2 * i + 1;
+        int right = 2 * i + 2;
+        if (left < n && arr[left] > arr[largest]) largest = left;
+        if (right < n && arr[right] > arr[largest]) largest = right;
+        if (largest != i) {
+            int temp = arr[i];
+            arr[i] = arr[largest];
+            arr[largest] = temp;
+            heapify(arr, n, largest);
+        }
+    }
+    public static void main(String[] args) {
+        int[] data = {12, 11, 13, 5, 6, 7};
+        heapSort(data);
+        for (int i = 0; i < data.length; i++) {
+            System.out.println(data[i]);
+        }
+    }
+}
+"#,
+        )],
+    );
+}
+
+// ---- Tier 28: Comprehensive mixed-type algorithm tests. ----
+
+#[test]
+fn jit_comprehensive_mixed_types_matches_interpreter() {
+    assert_jit_matches_interpreter(
+        "comprehensive_mixed",
+        &[(
+            "demo/Main.java",
+            r#"
+package demo;
+public class Main {
+    static class Data {
+        int key;
+        long value;
+        double score;
+        float ratio;
+        boolean active;
+    }
+    static int partition(Data[] arr, int low, int high) {
+        int pivot = arr[high].key;
+        int i = low - 1;
+        for (int j = low; j < high; j++) {
+            if (arr[j].key <= pivot) {
+                i++;
+                Data tmp = arr[i];
+                arr[i] = arr[j];
+                arr[j] = tmp;
+            }
+        }
+        Data tmp = arr[i + 1];
+        arr[i + 1] = arr[high];
+        arr[high] = tmp;
+        return i + 1;
+    }
+    static void sort(Data[] arr, int low, int high) {
+        if (low < high) {
+            int pi = partition(arr, low, high);
+            sort(arr, low, pi - 1);
+            sort(arr, pi + 1, high);
+        }
+    }
+    static double computeScore(Data[] arr) {
+        double sum = 0.0;
+        for (int i = 0; i < arr.length; i++) {
+            if (arr[i].active) {
+                sum += arr[i].score * arr[i].ratio;
+            }
+        }
+        return sum;
+    }
+    static long factorial(int n) {
+        long result = 1L;
+        for (int i = 2; i <= n; i++) {
+            result *= i;
+        }
+        return result;
+    }
+    static boolean isPrime(int n) {
+        if (n <= 1) return false;
+        if (n <= 3) return true;
+        if (n % 2 == 0 || n % 3 == 0) return false;
+        for (int i = 5; i * i <= n; i += 6) {
+            if (n % i == 0 || n % (i + 2) == 0) return false;
+        }
+        return true;
+    }
+    public static void main(String[] args) {
+        Data[] data = new Data[6];
+        data[0] = new Data(); data[0].key = 5; data[0].value = 100L; data[0].score = 3.14; data[0].ratio = 1.5f; data[0].active = true;
+        data[1] = new Data(); data[1].key = 2; data[1].value = 200L; data[1].score = 2.71; data[1].ratio = 2.0f; data[1].active = true;
+        data[2] = new Data(); data[2].key = 8; data[2].value = 50L; data[2].score = 1.41; data[2].ratio = 0.5f; data[2].active = false;
+        data[3] = new Data(); data[3].key = 1; data[3].value = 300L; data[3].score = 1.73; data[3].ratio = 1.0f; data[3].active = true;
+        data[4] = new Data(); data[4].key = 9; data[4].value = 150L; data[4].score = 2.24; data[4].ratio = 0.8f; data[4].active = true;
+        data[5] = new Data(); data[5].key = 3; data[5].value = 75L; data[5].score = 1.41; data[5].ratio = 1.2f; data[5].active = false;
+        sort(data, 0, data.length - 1);
+        for (int i = 0; i < data.length; i++) {
+            System.out.println(data[i].key);
+            System.out.println(data[i].value);
+        }
+        System.out.println(computeScore(data));
+        System.out.println(factorial(12));
+        for (int i = 2; i <= 30; i++) {
+            if (isPrime(i)) System.out.println(i);
+        }
+    }
+}
+"#,
+        )],
+    );
+}
+
+#[test]
+fn jit_mixed_float_double_arithmetic_matches_interpreter() {
+    assert_jit_matches_interpreter(
+        "mixed_float_double",
+        &[(
+            "demo/Main.java",
+            r#"
+package demo;
+public class Main {
+    static double complexCalc(double a, float b, long c, int d) {
+        double result = a * b + c - d;
+        result = result / 2.5 + Math.sqrt(Math.abs(result));
+        return result;
+    }
+    static float[] processFloats(float[] arr, double multiplier) {
+        for (int i = 0; i < arr.length; i++) {
+            arr[i] = (float)(arr[i] * multiplier);
+        }
+        return arr;
+    }
+    static double[] initializeDoubles(int n) {
+        double[] arr = new double[n];
+        for (int i = 0; i < n; i++) {
+            arr[i] = i * 1.5;
+        }
+        return arr;
+    }
+    static double computeVariance(double[] values) {
+        double mean = 0.0;
+        for (int i = 0; i < values.length; i++) {
+            mean += values[i];
+        }
+        mean /= values.length;
+        double sumSq = 0.0;
+        for (int i = 0; i < values.length; i++) {
+            double diff = values[i] - mean;
+            sumSq += diff * diff;
+        }
+        return sumSq / values.length;
+    }
+    public static void main(String[] args) {
+        System.out.println(complexCalc(3.14, 2.5f, 100L, 25));
+        float[] floats = {1.0f, 2.0f, 3.0f, 4.0f};
+        processFloats(floats, 2.0);
+        for (int i = 0; i < floats.length; i++) {
+            System.out.println(floats[i]);
+        }
+        double[] doubles = initializeDoubles(5);
+        for (int i = 0; i < doubles.length; i++) {
+            System.out.println(doubles[i]);
+        }
+        System.out.println(computeVariance(doubles));
+    }
+}
+"#,
+        )],
+    );
+}
+
+// ---- Tier 29: 2D double arrays (drives double array load/store JIT lowering). ----
+
+#[test]
+fn jit_2d_double_array_matches_interpreter() {
+    assert_jit_matches_interpreter(
+        "2d_double_array",
+        &[(
+            "demo/Main.java",
+            r#"
+package demo;
+public class Main {
+    static double sumMatrix(double[][] m) {
+        double sum = 0.0;
+        for (int i = 0; i < m.length; i++) {
+            for (int j = 0; j < m[i].length; j++) {
+                sum += m[i][j];
+            }
+        }
+        return sum;
+    }
+    static double[][] transpose(double[][] m, int n) {
+        double[][] r = new double[n][n];
+        for (int i = 0; i < n; i++) {
+            for (int j = 0; j < n; j++) {
+                r[i][j] = m[j][i];
+            }
+        }
+        return r;
+    }
+    public static void main(String[] args) {
+        double[][] a = {{1.5, 2.5}, {3.5, 4.5}};
+        System.out.println(sumMatrix(a));
+        double[][] t = transpose(a, 2);
+        System.out.println(t[0][0]);
+        System.out.println(t[1][0]);
+    }
+}
+"#,
+        )],
+    );
+}
+
+// ---- Tier 30: StringBuilder (drives StringBuilder/append/toString JIT lowering). ----
+
+#[test]
+fn jit_stringbuilder_matches_interpreter() {
+    assert_jit_matches_interpreter(
+        "stringbuilder",
+        &[(
+            "demo/Main.java",
+            r#"
+package demo;
+public class Main {
+    static String buildString(int n) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < n; i++) {
+            sb.append(i).append(":").append("val").append(" ");
+        }
+        return sb.toString();
+    }
+    static String repeat(String s, int count) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < count; i++) {
+            sb.append(s);
+        }
+        return sb.toString();
+    }
+    public static void main(String[] args) {
+        System.out.println(buildString(3));
+        System.out.println(repeat("ab", 4));
+    }
+}
+"#,
+        )],
+    );
+}
+
+// ---- Tier 31: String concatenation with + (drives string concat JIT lowering). ----
+
+#[test]
+fn jit_string_concat_operator_matches_interpreter() {
+    assert_jit_matches_interpreter(
+        "string_concat_op",
+        &[(
+            "demo/Main.java",
+            r#"
+package demo;
+public class Main {
+    static String concatAll(int a, double b, boolean c) {
+        return "int=" + a + " double=" + b + " bool=" + c;
+    }
+    static String nestedConcat(String a, int b) {
+        return "A" + a + "B" + b + "C";
+    }
+    public static void main(String[] args) {
+        System.out.println(concatAll(42, 3.14, true));
+        System.out.println(nestedConcat("foo", 99));
+    }
+}
+"#,
+        )],
+    );
+}

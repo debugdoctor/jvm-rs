@@ -334,7 +334,7 @@ impl Heap {
         Ok(())
     }
 
-    fn check_array_index(index: i32, len: usize) -> Result<usize, VmError> {
+    pub(super) fn check_array_index(index: i32, len: usize) -> Result<usize, VmError> {
         let i =
             usize::try_from(index).map_err(|_| VmError::ArrayIndexOutOfBounds { index, len })?;
         if i >= len {

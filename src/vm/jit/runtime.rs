@@ -7,7 +7,8 @@ use std::sync::RwLock;
 use libc;
 
 use super::CompiledCode;
-use crate::vm::{FieldRef, InvokeDynamicSite, MethodRef, Reference, Value, Vm};
+use crate::vm::heap::Heap;
+use crate::vm::{FieldRef, HeapValue, InvokeDynamicSite, MethodRef, Reference, Value, Vm};
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 unsafe extern "C" {
@@ -55,10 +56,274 @@ pub struct JitRuntimeHelpers {
 }
 
 static JIT_HELPERS: OnceLock<JitRuntimeHelpers> = OnceLock::new();
+static JIT_ARRAY_DESCRIPTORS: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
 static JIT_FIELD_REFS: OnceLock<Mutex<Vec<FieldRef>>> = OnceLock::new();
 static JIT_METHOD_REFS: OnceLock<Mutex<Vec<MethodRef>>> = OnceLock::new();
 static JIT_INVOKE_DYNAMIC_SITES: OnceLock<Mutex<Vec<InvokeDynamicSite>>> = OnceLock::new();
 const INLINE_ARG_MARKER: u64 = 1u64 << 63;
+
+const ARRAY_KIND_PRIMITIVE: u64 = 1;
+const ARRAY_KIND_REFERENCE: u64 = 2;
+const ARRAY_KIND_MULTI: u64 = 3;
+
+pub extern "C" fn jit_helper_load_reference_array_element(
+    _ctx: u64,
+    array_ref: u64,
+    index: u64,
+    _: u64,
+    _: u64,
+    _: u64,
+) -> u64 {
+    let array_ref = Reference::Heap(array_ref as usize);
+    let index = index as i32;
+    let vm_ptr = get_current_vm_ptr();
+    if vm_ptr == 0 {
+        println!("JIT helper: load_reference_array_element - no VM context, deoptimizing");
+        return 0;
+    }
+    let result = unsafe {
+        let vm = &mut *(vm_ptr as *mut Vm);
+        let result = vm
+            .heap
+            .lock()
+            .unwrap()
+            .load_reference_array_element(array_ref, index);
+        set_current_vm(vm_ptr);
+        match result {
+            Ok(Reference::Heap(idx)) => idx as u64,
+            Ok(Reference::Null) => 0,
+            Err(e) => {
+                println!("JIT helper: load_reference_array_element failed: {:?}", e);
+                0
+            }
+        }
+    };
+    result
+}
+
+pub fn get_load_reference_array_element_ptr() -> u64 {
+    jit_helper_load_reference_array_element as u64
+}
+
+pub extern "C" fn jit_helper_store_reference_array_element(
+    _ctx: u64,
+    array_ref: u64,
+    index: u64,
+    value: u64,
+    _: u64,
+    _: u64,
+) -> u64 {
+    let array_ref = Reference::Heap(array_ref as usize);
+    let index = index as i32;
+    let value = if value == 0 {
+        Reference::Null
+    } else {
+        Reference::Heap(value as usize)
+    };
+    let vm_ptr = get_current_vm_ptr();
+    if vm_ptr == 0 {
+        println!("JIT helper: store_reference_array_element - no VM context, deoptimizing");
+        return 0;
+    }
+    unsafe {
+        let vm = &mut *(vm_ptr as *mut Vm);
+        let result = vm
+            .heap
+            .lock()
+            .unwrap()
+            .store_reference_array_element(array_ref, index, value);
+        set_current_vm(vm_ptr);
+        match result {
+            Ok(()) => 1,
+            Err(e) => {
+                println!("JIT helper: store_reference_array_element failed: {:?}", e);
+                0
+            }
+        }
+    }
+}
+
+pub fn get_store_reference_array_element_ptr() -> u64 {
+    jit_helper_store_reference_array_element as u64
+}
+
+pub extern "C" fn jit_helper_array_length(
+    _ctx: u64,
+    array_ref: u64,
+    _: u64,
+    _: u64,
+    _: u64,
+    _: u64,
+) -> u64 {
+    let vm_ptr = get_current_vm_ptr();
+    if vm_ptr == 0 || array_ref == 0 {
+        println!("JIT helper: array_length - missing VM context or null array");
+        return 0;
+    }
+    unsafe {
+        let vm = &mut *(vm_ptr as *mut Vm);
+        let result = vm
+            .heap
+            .lock()
+            .unwrap()
+            .array_length(Reference::Heap(array_ref as usize));
+        set_current_vm(vm_ptr);
+        match result {
+            Ok(len) => len as u64,
+            Err(e) => {
+                println!("JIT helper: array_length failed: {:?}", e);
+                0
+            }
+        }
+    }
+}
+
+pub fn get_array_length_ptr() -> u64 {
+    jit_helper_array_length as u64
+}
+
+pub extern "C" fn jit_helper_load_typed_array_element(
+    _ctx: u64,
+    array_ref: u64,
+    index: u64,
+    _type_marker: u64,
+    _: u64,
+    _: u64,
+) -> u64 {
+    let array_ref = Reference::Heap(array_ref as usize);
+    let index = index as i32;
+    let vm_ptr = get_current_vm_ptr();
+    if vm_ptr == 0 {
+        println!("JIT helper: load_typed_array_element - no VM context, deoptimizing");
+        return 0;
+    }
+    unsafe {
+        let vm = &mut *(vm_ptr as *mut Vm);
+        let heap = vm.heap.lock().unwrap();
+        let heap_val = heap.get(array_ref);
+        match heap_val {
+            Ok(HeapValue::DoubleArray { values }) => {
+                let i = match Heap::check_array_index(index, values.len()) {
+                    Ok(i) => i,
+                    Err(e) => {
+                        println!(
+                            "JIT helper: load_typed_array_element - index error: {:?}",
+                            e
+                        );
+                        return 0;
+                    }
+                };
+                let val = values[i];
+                drop(heap);
+                set_current_vm(vm_ptr);
+                val.to_bits() as u64
+            }
+            Ok(HeapValue::LongArray { values }) => {
+                let i = match Heap::check_array_index(index, values.len()) {
+                    Ok(i) => i,
+                    Err(_) => return 0,
+                };
+                let val = values[i] as u64;
+                drop(heap);
+                set_current_vm(vm_ptr);
+                val
+            }
+            Ok(HeapValue::IntArray { values }) => {
+                let i = match Heap::check_array_index(index, values.len()) {
+                    Ok(i) => i,
+                    Err(_) => return 0,
+                };
+                let val = values[i] as u32 as u64;
+                drop(heap);
+                set_current_vm(vm_ptr);
+                val
+            }
+            Ok(HeapValue::FloatArray { values }) => {
+                let i = match Heap::check_array_index(index, values.len()) {
+                    Ok(i) => i,
+                    Err(_) => return 0,
+                };
+                let val = values[i];
+                drop(heap);
+                set_current_vm(vm_ptr);
+                val.to_bits() as u64
+            }
+            Err(e) => {
+                println!(
+                    "JIT helper: load_typed_array_element - array not found: {:?}",
+                    e
+                );
+                0
+            }
+            _ => {
+                println!("JIT helper: load_typed_array_element - invalid array type");
+                0
+            }
+        }
+    }
+}
+
+pub fn get_load_typed_array_element_ptr() -> u64 {
+    jit_helper_load_typed_array_element as u64
+}
+
+pub extern "C" fn jit_helper_store_typed_array_element(
+    _ctx: u64,
+    array_ref: u64,
+    index: u64,
+    value: u64,
+    _: u64,
+    _: u64,
+) -> u64 {
+    let vm_ptr = get_current_vm_ptr();
+    if vm_ptr == 0 || array_ref == 0 {
+        println!("JIT helper: store_typed_array_element - missing VM context or null array");
+        return 0;
+    }
+
+    unsafe {
+        let vm = &mut *(vm_ptr as *mut Vm);
+        let mut heap = vm.heap.lock().unwrap();
+        let reference = Reference::Heap(array_ref as usize);
+        let index = index as i32;
+        let result = match heap.get_mut(reference) {
+            Ok(HeapValue::IntArray { values }) => {
+                let i = Heap::check_array_index(index, values.len());
+                i.map(|i| values[i] = value as i32).map_err(|e| e)
+            }
+            Ok(HeapValue::LongArray { values }) => {
+                let i = Heap::check_array_index(index, values.len());
+                i.map(|i| values[i] = value as i64).map_err(|e| e)
+            }
+            Ok(HeapValue::FloatArray { values }) => {
+                let i = Heap::check_array_index(index, values.len());
+                i.map(|i| values[i] = f32::from_bits(value as u32))
+                    .map_err(|e| e)
+            }
+            Ok(HeapValue::DoubleArray { values }) => {
+                let i = Heap::check_array_index(index, values.len());
+                i.map(|i| values[i] = f64::from_bits(value)).map_err(|e| e)
+            }
+            Ok(value) => Err(crate::vm::VmError::InvalidHeapValue {
+                expected: "primitive-array",
+                actual: value.kind_name(),
+            }),
+            Err(e) => Err(e),
+        };
+        set_current_vm(vm_ptr);
+        match result {
+            Ok(()) => 1,
+            Err(e) => {
+                println!("JIT helper: store_typed_array_element failed: {:?}", e);
+                0
+            }
+        }
+    }
+}
+
+pub fn get_store_typed_array_element_ptr() -> u64 {
+    jit_helper_store_typed_array_element as u64
+}
 
 pub static mut INVOKE_VIRTUAL_fn: JitHelperFn = jit_helper_invoke_virtual;
 pub static mut INVOKE_SPECIAL_fn: JitHelperFn = jit_helper_invoke_special;
@@ -88,6 +353,10 @@ pub fn initialize_jit_helpers() {
 pub fn get_jit_helpers_ptr() -> u64 {
     let helpers = JIT_HELPERS.get().expect("JIT helpers not initialized");
     helpers as *const JitRuntimeHelpers as u64
+}
+
+pub fn get_allocate_array_ptr() -> u64 {
+    jit_helper_allocate_array as u64
 }
 
 pub fn get_invoke_virtual_ptr() -> u64 {
@@ -128,6 +397,19 @@ pub fn get_get_instance_field_ptr() -> u64 {
 
 pub fn get_put_instance_field_ptr() -> u64 {
     jit_helper_put_instance_field as u64
+}
+
+pub fn register_array_descriptor(descriptor: impl Into<String>) -> u64 {
+    let descriptors = JIT_ARRAY_DESCRIPTORS.get_or_init(|| Mutex::new(Vec::new()));
+    let mut descriptors = descriptors.lock().unwrap();
+    descriptors.push(descriptor.into());
+    (descriptors.len() - 1) as u64
+}
+
+fn get_registered_array_descriptor(index: usize) -> Option<String> {
+    JIT_ARRAY_DESCRIPTORS
+        .get()
+        .and_then(|descriptors| descriptors.lock().ok()?.get(index).cloned())
 }
 
 pub fn register_field_ref(field_ref: FieldRef) -> u64 {
@@ -190,6 +472,15 @@ fn decode_helper_args(argc: u64, arg0: u64, arg1: u64, arg2: u64) -> (usize, [u6
     }
 }
 
+fn decode_array_counts(argc: u64, arg0: u64, arg1: u64) -> (usize, [u64; 2], bool) {
+    if argc & INLINE_ARG_MARKER != 0 {
+        let real_argc = (argc & !INLINE_ARG_MARKER) as usize;
+        (real_argc, [arg0, arg1], true)
+    } else {
+        (argc as usize, [arg0, 0], false)
+    }
+}
+
 extern "C" fn jit_helper_allocate_object(
     _ctx: u64,
     _class_ptr: u64,
@@ -204,14 +495,71 @@ extern "C" fn jit_helper_allocate_object(
 
 extern "C" fn jit_helper_allocate_array(
     _ctx: u64,
-    _class_ptr: u64,
-    _length: u64,
-    _: u64,
-    _: u64,
-    _: u64,
+    kind: u64,
+    descriptor_or_atype: u64,
+    argc: u64,
+    arg0: u64,
+    arg1: u64,
 ) -> u64 {
-    println!("JIT helper: allocate_array (stub - deoptimizing)");
-    0
+    let vm_ptr = get_current_vm_ptr();
+    if vm_ptr == 0 {
+        println!("JIT helper: allocate_array - no VM context, deoptimizing");
+        return 0;
+    }
+
+    let (argc, inline_args, inline) = decode_array_counts(argc, arg0, arg1);
+    let counts = if inline {
+        inline_args[..argc].to_vec()
+    } else {
+        unsafe {
+            let ptr = inline_args[0] as *const u64;
+            (0..argc)
+                .map(|index| std::ptr::read_unaligned(ptr.add(index)))
+                .collect()
+        }
+    };
+
+    let result = unsafe {
+        let vm = &mut *(vm_ptr as *mut Vm);
+        let result = match kind {
+            ARRAY_KIND_PRIMITIVE => vm.invoke_jit_allocate_primitive_array(
+                descriptor_or_atype as u8,
+                counts.first().copied().unwrap_or(0),
+            ),
+            ARRAY_KIND_REFERENCE => {
+                let Some(component_type) =
+                    get_registered_array_descriptor(descriptor_or_atype as usize)
+                else {
+                    println!(
+                        "JIT helper: allocate_array - missing component descriptor {}",
+                        descriptor_or_atype
+                    );
+                    return 0;
+                };
+                vm.invoke_jit_allocate_reference_array(
+                    &component_type,
+                    counts.first().copied().unwrap_or(0),
+                )
+            }
+            ARRAY_KIND_MULTI => {
+                let Some(descriptor) =
+                    get_registered_array_descriptor(descriptor_or_atype as usize)
+                else {
+                    println!(
+                        "JIT helper: allocate_array - missing array descriptor {}",
+                        descriptor_or_atype
+                    );
+                    return 0;
+                };
+                vm.invoke_jit_allocate_multi_array(&descriptor, &counts)
+            }
+            _ => None,
+        };
+        set_current_vm(vm_ptr);
+        result
+    };
+
+    value_to_u64(result.map(Value::Reference))
 }
 
 extern "C" fn jit_helper_get_static_field(

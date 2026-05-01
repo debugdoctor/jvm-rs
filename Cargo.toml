@@ -9,10 +9,10 @@ regex = "1.11"
 zip = { version = "2.2.0", default-features = false, features = ["deflate"] }
 glob = "0.3"
 smallvec = "1.13"
-cranelift = "0.89"
-cranelift-native = "0.89"
-cranelift-module = "0.89"
-cranelift-frontend = "0.89"
+cranelift = "0.131.1"
+cranelift-native = "0.131.1"
+cranelift-module = "0.131.1"
+cranelift-frontend = "0.131.1"
 memmap2 = "0.9"
 
 [profile.release]

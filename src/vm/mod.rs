@@ -575,6 +575,65 @@ impl Vm {
             .is_ok()
     }
 
+    pub(crate) fn invoke_jit_allocate_primitive_array(
+        &mut self,
+        atype: u8,
+        raw_count: u64,
+    ) -> Option<Reference> {
+        let count = Vm::jit_raw_count(raw_count)?;
+        if count < 0 {
+            return None;
+        }
+        let n = count as usize;
+        let reference = match atype {
+            4 | 5 | 8 | 9 | 10 => self.heap.lock().unwrap().allocate_int_array(vec![0; n]),
+            6 => self.heap.lock().unwrap().allocate(HeapValue::FloatArray {
+                values: vec![0.0; n],
+            }),
+            7 => self.heap.lock().unwrap().allocate(HeapValue::DoubleArray {
+                values: vec![0.0; n],
+            }),
+            11 => self
+                .heap
+                .lock()
+                .unwrap()
+                .allocate(HeapValue::LongArray { values: vec![0; n] }),
+            _ => return None,
+        };
+        Some(reference)
+    }
+
+    pub(crate) fn invoke_jit_allocate_reference_array(
+        &mut self,
+        component_type: &str,
+        raw_count: u64,
+    ) -> Option<Reference> {
+        let count = Vm::jit_raw_count(raw_count)?;
+        if count < 0 {
+            return None;
+        }
+        let values = vec![Reference::Null; count as usize];
+        Some(
+            self.heap
+                .lock()
+                .unwrap()
+                .allocate_reference_array(component_type.to_string(), values),
+        )
+    }
+
+    pub(crate) fn invoke_jit_allocate_multi_array(
+        &mut self,
+        descriptor: &str,
+        raw_counts: &[u64],
+    ) -> Option<Reference> {
+        let counts = raw_counts
+            .iter()
+            .map(|&raw| Vm::jit_raw_count(raw))
+            .collect::<Option<Vec<_>>>()?;
+        self.allocate_multi_array_descriptor(descriptor, &counts)
+            .ok()
+    }
+
     fn invoke_jit_instance_method_ref(
         &mut self,
         class_name: &str,
@@ -636,6 +695,10 @@ impl Vm {
         } else {
             Some(Reference::Heap(raw as usize))
         }
+    }
+
+    fn jit_raw_count(raw: u64) -> Option<i32> {
+        Some(raw as i64 as i32)
     }
 
     fn jit_raw_field_value_to_value(descriptor: &str, raw: u64) -> Option<Value> {
@@ -2769,7 +2832,7 @@ impl Vm {
             }
             Opcode::Multianewarray => {
                 let index = thread.current_frame_mut().read_u16()? as usize;
-                let _class_name = thread
+                let class_name = thread
                     .current_frame()
                     .load_reference_class(index)?
                     .to_string();
@@ -2779,7 +2842,7 @@ impl Vm {
                     counts.push(thread.current_frame_mut().pop()?.as_int()?);
                 }
                 counts.reverse();
-                let reference = self.allocate_multi_array(&counts, 0)?;
+                let reference = self.allocate_multi_array_descriptor(&class_name, &counts)?;
                 thread
                     .current_frame_mut()
                     .push(Value::Reference(reference))?;
@@ -2916,33 +2979,86 @@ impl Vm {
         Ok(None)
     }
 
-    /// Recursively allocate a multi-dimensional array.
-    ///
-    /// `depth` must be `< counts.len()` — guaranteed by the caller which reads
-    /// `dimensions` (≥ 1 per JVMS) from bytecode and builds `counts` with
-    /// exactly that many entries.  The recursion terminates at
-    /// `depth + 1 == counts.len()`.
-    fn allocate_multi_array(&mut self, counts: &[i32], depth: usize) -> Result<Reference, VmError> {
-        let count = counts[depth];
+    fn allocate_multi_array_descriptor(
+        &mut self,
+        descriptor: &str,
+        counts: &[i32],
+    ) -> Result<Reference, VmError> {
+        if counts.is_empty() {
+            return Err(VmError::InvalidDescriptor {
+                descriptor: descriptor.to_string(),
+            });
+        }
+
+        let count = counts[0];
         if count < 0 {
             return Err(VmError::NegativeArraySize { size: count });
         }
         let n = count as usize;
-        if depth + 1 == counts.len() {
-            // Innermost dimension — allocate an int array (common case for int[][])
-            Ok(self.heap.lock().unwrap().allocate_int_array(vec![0; n]))
-        } else {
-            // Allocate sub-arrays recursively
-            let mut elements = Vec::with_capacity(n);
-            for _ in 0..n {
-                let sub = self.allocate_multi_array(counts, depth + 1)?;
-                elements.push(sub);
+
+        let Some(component_descriptor) = descriptor.strip_prefix('[') else {
+            return Err(VmError::InvalidDescriptor {
+                descriptor: descriptor.to_string(),
+            });
+        };
+
+        if counts.len() == 1 {
+            return self.allocate_one_dimensional_array(descriptor, n);
+        }
+
+        let mut elements = Vec::with_capacity(n);
+        for _ in 0..n {
+            elements
+                .push(self.allocate_multi_array_descriptor(component_descriptor, &counts[1..])?);
+        }
+        Ok(self
+            .heap
+            .lock()
+            .unwrap()
+            .allocate_reference_array(Self::array_component_name(component_descriptor), elements))
+    }
+
+    fn allocate_one_dimensional_array(
+        &mut self,
+        descriptor: &str,
+        len: usize,
+    ) -> Result<Reference, VmError> {
+        let Some(component_descriptor) = descriptor.strip_prefix('[') else {
+            return Err(VmError::InvalidDescriptor {
+                descriptor: descriptor.to_string(),
+            });
+        };
+        let reference = match component_descriptor.as_bytes().first() {
+            Some(b'Z' | b'B' | b'C' | b'S' | b'I') => {
+                self.heap.lock().unwrap().allocate_int_array(vec![0; len])
             }
-            Ok(self
-                .heap
-                .lock()
-                .unwrap()
-                .allocate_reference_array("array", elements))
+            Some(b'J') => self.heap.lock().unwrap().allocate(HeapValue::LongArray {
+                values: vec![0; len],
+            }),
+            Some(b'F') => self.heap.lock().unwrap().allocate(HeapValue::FloatArray {
+                values: vec![0.0; len],
+            }),
+            Some(b'D') => self.heap.lock().unwrap().allocate(HeapValue::DoubleArray {
+                values: vec![0.0; len],
+            }),
+            Some(b'L' | b'[') => self.heap.lock().unwrap().allocate_reference_array(
+                Self::array_component_name(component_descriptor),
+                vec![Reference::Null; len],
+            ),
+            _ => {
+                return Err(VmError::InvalidDescriptor {
+                    descriptor: descriptor.to_string(),
+                });
+            }
+        };
+        Ok(reference)
+    }
+
+    fn array_component_name(component_descriptor: &str) -> String {
+        if component_descriptor.starts_with('L') && component_descriptor.ends_with(';') {
+            component_descriptor[1..component_descriptor.len() - 1].to_string()
+        } else {
+            component_descriptor.to_string()
         }
     }
 

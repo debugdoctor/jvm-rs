@@ -18,22 +18,9 @@ impl Optimizer {
     pub fn optimize(&mut self, func: &mut Function, isa: &dyn TargetIsa) -> Result<(), JitError> {
         let mut ctx = Context::new();
         ctx.func = func.clone();
-        ctx.compute_cfg();
-        ctx.compute_domtree();
-        ctx.compute_loop_analysis();
-
-        ctx.preopt(isa)
-            .map_err(|e| JitError::CompilationFailed(format!("preopt failed: {}", e)))?;
-
-        ctx.dce(isa)
-            .map_err(|e| JitError::CompilationFailed(format!("DCE failed: {}", e)))?;
-
-        ctx.canonicalize_nans(isa).map_err(|e| {
-            JitError::CompilationFailed(format!("NaN canonicalization failed: {}", e))
-        })?;
-
-        ctx.legalize(isa)
-            .map_err(|e| JitError::CompilationFailed(format!("legalization failed: {}", e)))?;
+        let mut ctrl_plane = cranelift::codegen::control::ControlPlane::default();
+        ctx.optimize(isa, &mut ctrl_plane)
+            .map_err(|e| JitError::CompilationFailed(format!("optimization failed: {}", e)))?;
 
         *func = ctx.func;
         Ok(())

@@ -5,6 +5,7 @@ pub mod runtime;
 
 use std::collections::HashMap;
 use std::fmt;
+use std::sync::Arc;
 use std::sync::RwLock;
 
 use crate::vm::Frame;
@@ -66,7 +67,7 @@ pub struct JitCompiler {
     compiled_code: RwLock<HashMap<String, CompiledCode>>,
     invocation_threshold: u32,
     backedge_threshold: u32,
-    isa: Box<dyn TargetIsa>,
+    isa: Arc<dyn TargetIsa>,
 }
 
 impl fmt::Debug for JitCompiler {
@@ -167,6 +168,7 @@ pub enum JitError {
     CompilationFailed(String),
     CodeGenerationFailed(String),
     LinkerError(String),
+    UnsupportedOperation(String),
 }
 
 pub fn initialize_jit() {

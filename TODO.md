@@ -255,17 +255,17 @@ Field Access:
 - [x] `putfield` — helper-backed through VM descriptor-decoded object field store
 
 Object/Array Allocation:
-- [ ] `new` — stub emits UnreachableCodeReached
-- [ ] `newarray` — stub emits UnreachableCodeReached
-- [ ] `anewarray` — stub emits UnreachableCodeReached
+- [x] `new` — helper-backed VM allocation with class load/init and inherited instance-field defaults
+- [x] `newarray` — helper-backed primitive array allocation
+- [x] `anewarray` — helper-backed reference array allocation
 
 Synchronization & Exceptions:
-- [ ] `athrow` — stub emits UnreachableCodeReached
-- [ ] `monitorenter` — stub emits UnreachableCodeReached
-- [ ] `monitorexit` — stub emits UnreachableCodeReached
+- [x] `athrow` — helper-backed pending-exception propagation for JIT methods without local exception tables; methods with catch/finally stay on interpreter until JIT frame unwinding is supported
+- [x] `monitorenter` — helper-backed through VM monitor ownership/reentrancy logic
+- [x] `monitorexit` — helper-backed through VM monitor ownership/release logic
 
 Type Checks:
-- [ ] `checkcast` — stub emits UnreachableCodeReached
+- [x] `checkcast` — helper-backed through VM class hierarchy/interface check
 
 **JIT Integration Tests (22 passing):**
 - [x] `jit_pure_int_arithmetic_matches_interpreter` — iconst/iadd/imul/ireturn

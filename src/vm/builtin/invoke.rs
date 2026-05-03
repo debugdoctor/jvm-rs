@@ -206,6 +206,17 @@ pub(super) fn invoke_lang(
             let s = crate::vm::builtin::helpers::stringify_reference(vm, args[0].as_reference()?)?;
             Ok(Some(Value::Int(s.len() as i32)))
         }
+        ("java/lang/String", "<init>", "()V") => {
+            let obj_ref = args[0].as_reference()?;
+            *vm.heap.lock().unwrap().get_mut(obj_ref)? = HeapValue::String(String::new());
+            Ok(None)
+        }
+        ("java/lang/String", "<init>", "(Ljava/lang/String;)V") => {
+            let obj_ref = args[0].as_reference()?;
+            let s = crate::vm::builtin::helpers::stringify_reference(vm, args[1].as_reference()?)?;
+            *vm.heap.lock().unwrap().get_mut(obj_ref)? = HeapValue::String(s);
+            Ok(None)
+        }
         ("java/lang/String", "charAt", "(I)C") => {
             let s = crate::vm::builtin::helpers::stringify_reference(vm, args[0].as_reference()?)?;
             let index = args[1].as_int()?;

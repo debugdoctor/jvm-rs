@@ -152,11 +152,32 @@ impl Frame {
     /// Stores a value into a local variable slot.
     pub(super) fn store_local(&mut self, index: usize, value: Value) -> Result<(), VmError> {
         let max_locals = self.locals.len();
-        let slot = self
-            .locals
-            .get_mut(index)
-            .ok_or(VmError::InvalidLocalIndex { index, max_locals })?;
-        *slot = Some(value);
+        if index >= max_locals {
+            return Err(VmError::InvalidLocalIndex { index, max_locals });
+        }
+
+        if index > 0 && matches!(self.locals[index - 1], Some(Value::Long(_) | Value::Double(_))) {
+            self.locals[index - 1] = None;
+        }
+
+        if matches!(self.locals[index], Some(Value::Long(_) | Value::Double(_)))
+            && index + 1 < max_locals
+        {
+            self.locals[index + 1] = None;
+        }
+
+        let is_wide = matches!(value, Value::Long(_) | Value::Double(_));
+        self.locals[index] = Some(value);
+        if is_wide {
+            let next = index + 1;
+            if next >= max_locals {
+                return Err(VmError::InvalidLocalIndex {
+                    index: next,
+                    max_locals,
+                });
+            }
+            self.locals[next] = None;
+        }
         Ok(())
     }
 

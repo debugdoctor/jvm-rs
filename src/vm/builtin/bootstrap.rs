@@ -49,6 +49,7 @@ pub(super) fn bootstrap_java_lang(vm: &mut Vm) {
     let mut string_methods = HashMap::new();
     for (name, desc) in [
         ("<init>", "()V"),
+        ("<init>", "(Ljava/lang/String;)V"),
         ("length", "()I"),
         ("charAt", "(I)C"),
         ("equals", "(Ljava/lang/Object;)Z"),

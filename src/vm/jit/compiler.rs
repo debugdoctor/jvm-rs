@@ -397,20 +397,14 @@ impl<'a> BytecodeCompiler<'a> {
 
     fn next_pc(&self, pc: usize, opcode: u8) -> usize {
         match opcode {
-            0x10 | 0x12 | 0xbc => pc + 2,
-            0x11 | 0x13 | 0x14 => pc + 3,
+            0x10 | 0x12 | 0x15..=0x19 | 0x36..=0x3a | 0xa9 | 0xbc => pc + 2,
+            0x11 | 0x13 | 0x14 | 0x84 => pc + 3,
             0x99..=0xa8 | 0xc6 | 0xc7 => pc + 3,
-            0xb2..=0xb8 | 0xbb | 0xbd | 0xbe | 0xc0 | 0xc1 | 0xfe => pc + 3,
-            0xb9 => pc + 5,
-            0xba => pc + 5,
+            0xb2..=0xb8 | 0xbb | 0xbd | 0xc0 | 0xc1 | 0xfe => pc + 3,
+            0xb9 | 0xba => pc + 5,
             0xc5 => pc + 4,
-            0x84 => pc + 3,
             0xaa => {
                 let mut new_pc = (pc + 4) & !3;
-                let default_offset = ((self.method.code[pc + 1] as i32) << 24)
-                    | ((self.method.code[pc + 2] as i32) << 16)
-                    | ((self.method.code[pc + 3] as i32) << 8)
-                    | (self.method.code[pc + 4] as i32);
                 let low = ((self.method.code[new_pc] as i32) << 24)
                     | ((self.method.code[new_pc + 1] as i32) << 16)
                     | ((self.method.code[new_pc + 2] as i32) << 8)
@@ -425,10 +419,6 @@ impl<'a> BytecodeCompiler<'a> {
             }
             0xab => {
                 let mut new_pc = (pc + 4) & !3;
-                let default_offset = ((self.method.code[pc + 1] as i32) << 24)
-                    | ((self.method.code[pc + 2] as i32) << 16)
-                    | ((self.method.code[pc + 3] as i32) << 8)
-                    | (self.method.code[pc + 4] as i32);
                 new_pc += 4;
                 let num_pairs = ((self.method.code[new_pc] as i32) << 24)
                     | ((self.method.code[new_pc + 1] as i32) << 16)
@@ -547,9 +537,13 @@ impl<'a> BytecodeCompiler<'a> {
                     let c = self.dconst(*d);
                     self.push(c);
                 }
-                crate::vm::types::Value::Reference(_) => {
-                    let null = self.builder.ins().iconst(types::I64, 0);
-                    self.push(null);
+                crate::vm::types::Value::Reference(reference) => {
+                    let raw = match reference {
+                        crate::vm::types::Reference::Null => 0i64,
+                        crate::vm::types::Reference::Heap(index) => (*index as i64) + 1,
+                    };
+                    let value = self.builder.ins().iconst(types::I64, raw);
+                    self.push(value);
                 }
                 _ => {
                     return Err(JitError::CompilationFailed(
@@ -1629,8 +1623,8 @@ impl<'a> BytecodeCompiler<'a> {
             0xa2 => IntCC::SignedGreaterThanOrEqual,
             0xa3 => IntCC::SignedGreaterThan,
             0xa4 => IntCC::SignedLessThanOrEqual,
-            0xa5 => IntCC::UnsignedLessThan,
-            0xa6 => IntCC::UnsignedGreaterThanOrEqual,
+            0xa5 => IntCC::Equal,
+            0xa6 => IntCC::NotEqual,
             _ => {
                 return Err(JitError::CompilationFailed(format!(
                     "Invalid if_icmp opcode: 0x{:02x}",
@@ -2076,7 +2070,7 @@ impl<'a> BytecodeCompiler<'a> {
 
         if crate::vm::types::parse_return_type(method_desc)
             .map_err(|e| JitError::CompilationFailed(format!("Invalid descriptor: {}", e)))?
-            .is_some()
+            .is_some_and(|ret| ret != b'V')
         {
             self.push(result);
             Ok(true)
@@ -2114,7 +2108,7 @@ impl<'a> BytecodeCompiler<'a> {
 
         if crate::vm::types::parse_return_type(method_desc)
             .map_err(|e| JitError::CompilationFailed(format!("Invalid descriptor: {}", e)))?
-            .is_some()
+            .is_some_and(|ret| ret != b'V')
         {
             self.push(result);
             Ok(true)
@@ -2438,7 +2432,7 @@ impl<'a> BytecodeCompiler<'a> {
 
         if crate::vm::types::parse_return_type(&descriptor)
             .map_err(|e| JitError::CompilationFailed(format!("Invalid descriptor: {}", e)))?
-            .is_some()
+            .is_some_and(|ret| ret != b'V')
         {
             self.push(result);
             Ok(true)
@@ -2468,9 +2462,16 @@ impl<'a> BytecodeCompiler<'a> {
         Ok(())
     }
 
-    fn allocate_object(&mut self, _class_name: &str) -> Result<Value, JitError> {
-        self.builder.ins().trap(JIT_TRAP_CODE);
-        Ok(self.builder.ins().iconst(types::I64, 0))
+    fn allocate_object(&mut self, class_name: &str) -> Result<Value, JitError> {
+        let class_id = crate::vm::jit::runtime::register_class_name(class_name.to_string());
+        let class_id = self.builder.ins().iconst(types::I64, class_id as i64);
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        let obj_ref = self.emit_field_helper_call(
+            crate::vm::jit::runtime::get_allocate_object_ptr(),
+            [class_id, zero, zero, zero, zero],
+        )?;
+        self.builder.ins().trapz(obj_ref, JIT_TRAP_CODE);
+        Ok(obj_ref)
     }
 
     fn lower_newarray(&mut self) -> Result<(), JitError> {
@@ -2592,17 +2593,41 @@ impl<'a> BytecodeCompiler<'a> {
     fn lower_athrow(&mut self) -> Result<(), JitError> {
         let exception_ref = self.pop();
         self.builder.ins().trapz(exception_ref, JIT_TRAP_CODE);
-        self.stack_slots.push(StackSlot {
-            size: 8,
-            offset: -1,
-        });
         self.emit_throw(exception_ref)?;
         Ok(())
     }
 
-    fn emit_throw(&mut self, _exception_ref: Value) -> Result<(), JitError> {
-        self.builder.ins().trap(JIT_TRAP_CODE);
+    fn emit_throw(&mut self, exception_ref: Value) -> Result<(), JitError> {
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        self.emit_field_helper_call(
+            crate::vm::jit::runtime::get_athrow_ptr(),
+            [exception_ref, zero, zero, zero, zero],
+        )?;
+        self.emit_default_return();
         Ok(())
+    }
+
+    fn emit_default_return(&mut self) {
+        let Some(ret) = self
+            .builder
+            .func
+            .signature
+            .returns
+            .first()
+            .map(|param| param.value_type)
+        else {
+            self.builder.ins().return_(&[]);
+            return;
+        };
+
+        let value = match ret {
+            types::I32 => self.builder.ins().iconst(types::I32, 0),
+            types::I64 => self.builder.ins().iconst(types::I64, 0),
+            types::F32 => self.builder.ins().f32const(0.0),
+            types::F64 => self.builder.ins().f64const(0.0),
+            _ => self.builder.ins().iconst(ret, 0),
+        };
+        self.builder.ins().return_(&[value]);
     }
 
     fn lower_checkcast(&mut self) -> Result<(), JitError> {
@@ -2625,8 +2650,16 @@ impl<'a> BytecodeCompiler<'a> {
         });
         self.guard_checks.push(GuardCheck {
             pc: self.pc_offset,
-            guard_type: GuardType::TypeCheck(target_class),
+            guard_type: GuardType::TypeCheck(target_class.clone()),
         });
+        let class_id = crate::vm::jit::runtime::register_class_name(target_class);
+        let class_id = self.builder.ins().iconst(types::I64, class_id as i64);
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        let ok = self.emit_field_helper_call(
+            crate::vm::jit::runtime::get_checkcast_ptr(),
+            [obj_ref, class_id, zero, zero, zero],
+        )?;
+        self.builder.ins().trapz(ok, JIT_TRAP_CODE);
         self.push(obj_ref);
         Ok(())
     }
@@ -2665,8 +2698,13 @@ impl<'a> BytecodeCompiler<'a> {
         Ok(())
     }
 
-    fn emit_monitor_enter(&mut self, _obj_ref: Value) -> Result<(), JitError> {
-        self.builder.ins().trap(JIT_TRAP_CODE);
+    fn emit_monitor_enter(&mut self, obj_ref: Value) -> Result<(), JitError> {
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        let ok = self.emit_field_helper_call(
+            crate::vm::jit::runtime::get_monitor_enter_ptr(),
+            [obj_ref, zero, zero, zero, zero],
+        )?;
+        self.builder.ins().trapz(ok, JIT_TRAP_CODE);
         Ok(())
     }
 
@@ -2681,8 +2719,13 @@ impl<'a> BytecodeCompiler<'a> {
         Ok(())
     }
 
-    fn emit_monitor_exit(&mut self, _obj_ref: Value) -> Result<(), JitError> {
-        self.builder.ins().trap(JIT_TRAP_CODE);
+    fn emit_monitor_exit(&mut self, obj_ref: Value) -> Result<(), JitError> {
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        let ok = self.emit_field_helper_call(
+            crate::vm::jit::runtime::get_monitor_exit_ptr(),
+            [obj_ref, zero, zero, zero, zero],
+        )?;
+        self.builder.ins().trapz(ok, JIT_TRAP_CODE);
         Ok(())
     }
 
@@ -2747,7 +2790,7 @@ impl<'a> BytecodeCompiler<'a> {
 
         if crate::vm::types::parse_return_type(method_desc)
             .map_err(|e| JitError::CompilationFailed(format!("Invalid descriptor: {}", e)))?
-            .is_some()
+            .is_some_and(|ret| ret != b'V')
         {
             self.push(result);
             Ok(true)
@@ -2862,6 +2905,17 @@ fn reject_runtime_dependent_bytecode(method: &Method) -> Result<(), JitError> {
     while pc < method.code.len() {
         let opcode = method.code[pc];
         match opcode {
+            0x99..=0xa8 => {
+                let high = method.code[pc + 1] as i16;
+                let low = method.code[pc + 2] as u16;
+                let offset = i16::from_be_bytes([high as u8, low as u8]) as i32;
+                if offset < 0 {
+                    return Err(JitError::CompilationFailed(
+                        "loop backedges stay on the interpreter until block-stack SSA merges are supported"
+                            .to_string(),
+                    ));
+                }
+            }
             0xb2 => {
                 let cp_index = ((method.code[pc + 1] as usize) << 8) | method.code[pc + 2] as usize;
                 if method
@@ -2878,10 +2932,31 @@ fn reject_runtime_dependent_bytecode(method: &Method) -> Result<(), JitError> {
                     ));
                 }
             }
-            0xbb | 0xbf | 0xc0 | 0xc2 | 0xc3 | 0xff => {
-                return Err(JitError::CompilationFailed(format!(
-                    "opcode 0x{opcode:02x} requires VM runtime state and is not JIT-lowerable yet"
-                )));
+            0xba => {
+                let cp_index = ((method.code[pc + 1] as usize) << 8) | method.code[pc + 2] as usize;
+                if method
+                    .invoke_dynamic_sites
+                    .get(cp_index)
+                    .and_then(|site| site.as_ref())
+                    .is_some_and(|site| {
+                        matches!(
+                            site.kind,
+                            crate::vm::types::InvokeDynamicKind::StringConcat { .. }
+                        )
+                    })
+                {
+                    return Err(JitError::CompilationFailed(
+                        "invokedynamic string concat stays on the interpreter until the JIT helper ABI is verified"
+                            .to_string(),
+                    ));
+                }
+            }
+            0xbf | 0xff => {
+                if !method.exception_handlers.is_empty() {
+                    return Err(JitError::CompilationFailed(format!(
+                        "opcode 0x{opcode:02x} with an exception table stays on the interpreter until JIT frame unwinding is supported"
+                    )));
+                }
             }
             _ => {}
         }

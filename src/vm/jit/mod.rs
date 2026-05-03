@@ -286,7 +286,7 @@ mod tests {
         );
 
         let result = context
-            .execute("jit/Test.constMath()I", &[])
+            .execute(0, "jit/Test.constMath()I", &[])
             .expect("missing JIT entry");
         assert_eq!(result, Value::Int(25));
     }

@@ -41,9 +41,14 @@ use crate::vm::jit::JitCompiler;
 use crate::vm::jit::runtime::JitContext;
 use classloader::{BootstrapClassLoader, ClassLoader, LazyClassLoader};
 
-use crate::vm::jit::runtime::{clear_current_vm, get_current_vm_ptr, set_current_vm};
+use crate::vm::jit::runtime::{clear_current_vm, set_current_vm, take_pending_jit_exception};
 
 static NEXT_THREAD_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+enum JitInvocationResult {
+    Returned(Option<Value>),
+    Threw(Reference),
+}
 
 pub struct Vm {
     heap: Arc<Mutex<Heap>>,
@@ -325,9 +330,14 @@ impl Vm {
         locals
     }
 
-    fn try_execute_jit_method(&mut self, method: &Method, args: &[Value]) -> Option<Option<Value>> {
+    fn try_execute_jit_method(
+        &mut self,
+        method: &Method,
+        args: &[Value],
+    ) -> Option<JitInvocationResult> {
         let method_key = format!("{}.{}{}", method.class_name, method.name, method.descriptor);
         let code = self.jit.as_ref()?.get_or_compile(method)?;
+        let vm_ptr = self as *mut Vm as u64;
         let jit_context = self.jit_context.as_mut()?;
 
         if jit_context.get_entry(&method_key).is_none()
@@ -337,13 +347,17 @@ impl Vm {
         }
 
         let ret = crate::vm::jit::runtime::JitReturn::from_descriptor(&method.descriptor);
-        let result = jit_context.execute_typed(&method_key, args, ret)?;
+        let result = jit_context.execute_typed(vm_ptr, &method_key, args, ret)?;
         self.runtime.lock().unwrap().jit_executions += 1;
 
+        if let Some(exception_ref) = take_pending_jit_exception() {
+            return Some(JitInvocationResult::Threw(exception_ref));
+        }
+
         if matches!(ret, crate::vm::jit::runtime::JitReturn::Void) {
-            Some(None)
+            Some(JitInvocationResult::Returned(None))
         } else {
-            Some(Some(result))
+            Some(JitInvocationResult::Returned(Some(result)))
         }
     }
 
@@ -575,6 +589,64 @@ impl Vm {
             .is_ok()
     }
 
+    pub(crate) fn invoke_jit_allocate_object(&mut self, class_name: &str) -> Option<Reference> {
+        self.ensure_class_loaded(class_name).ok()?;
+        self.ensure_class_initialized(class_name).ok()?;
+
+        let mut all_instance_fields = Vec::new();
+        let mut current_class = class_name.to_string();
+        loop {
+            self.ensure_class_loaded(&current_class).ok()?;
+            let class = self.get_class(&current_class).ok()?;
+            for (name, desc) in &class.instance_fields {
+                if !all_instance_fields.iter().any(|(n, _)| n == name) {
+                    all_instance_fields.push((name.clone(), desc.clone()));
+                }
+            }
+            match &class.super_class {
+                Some(parent) => current_class = parent.clone(),
+                None => break,
+            }
+        }
+
+        let mut fields = HashMap::new();
+        for (name, descriptor) in all_instance_fields {
+            fields.insert(name, default_value_for_descriptor(&descriptor));
+        }
+        Some(self.heap.lock().unwrap().allocate(HeapValue::Object {
+            class_name: class_name.to_string(),
+            fields,
+        }))
+    }
+
+    pub(crate) fn invoke_jit_checkcast(&mut self, receiver_raw: u64, target: &str) -> bool {
+        let Some(receiver) = Vm::jit_raw_reference(receiver_raw) else {
+            return true;
+        };
+        let Ok(obj_class) = self.get_object_class(receiver) else {
+            return false;
+        };
+        self.is_instance_of(&obj_class, target).unwrap_or(false)
+    }
+
+    pub(crate) fn invoke_jit_instanceof(&mut self, receiver_raw: u64, target: &str) -> bool {
+        self.invoke_jit_checkcast(receiver_raw, target)
+    }
+
+    pub(crate) fn invoke_jit_monitor_enter(&mut self, receiver_raw: u64) -> bool {
+        let Some(receiver) = Vm::jit_raw_reference(receiver_raw) else {
+            return false;
+        };
+        self.enter_monitor(receiver).is_ok()
+    }
+
+    pub(crate) fn invoke_jit_monitor_exit(&mut self, receiver_raw: u64) -> bool {
+        let Some(receiver) = Vm::jit_raw_reference(receiver_raw) else {
+            return false;
+        };
+        self.exit_monitor(receiver).is_ok()
+    }
+
     pub(crate) fn invoke_jit_allocate_primitive_array(
         &mut self,
         atype: u8,
@@ -693,7 +765,7 @@ impl Vm {
         if raw == 0 {
             None
         } else {
-            Some(Reference::Heap(raw as usize))
+            Some(Reference::Heap((raw - 1) as usize))
         }
     }
 
@@ -710,7 +782,7 @@ impl Vm {
             b'L' | b'[' => Some(Value::Reference(if raw == 0 {
                 Reference::Null
             } else {
-                Reference::Heap(raw as usize)
+                Reference::Heap((raw - 1) as usize)
             })),
             _ => None,
         }
@@ -741,7 +813,7 @@ impl Vm {
                     if raw == 0 {
                         Value::Reference(Reference::Null)
                     } else {
-                        Value::Reference(Reference::Heap(raw as usize))
+                        Value::Reference(Reference::Heap((raw - 1) as usize))
                     }
                 }
                 _ => return None,
@@ -1501,7 +1573,8 @@ impl Vm {
         let mut thread = Thread::new(method);
         thread.current_frame_mut().increment_invocation_count();
 
-        set_current_vm(self as *mut Vm as u64);
+        let vm_ptr = self as *mut Vm as u64;
+        set_current_vm(vm_ptr);
 
         let result = (|| -> Result<ExecutionResult, VmError> {
             if self.jit.is_some() && self.jit_context.is_some() {
@@ -1516,9 +1589,13 @@ impl Vm {
                             let ret =
                                 crate::vm::jit::runtime::JitReturn::from_descriptor(&descriptor);
                             if let Some(result) =
-                                jit_context.execute_typed(&method_key, &jit_args, ret)
+                                jit_context.execute_typed(vm_ptr, &method_key, &jit_args, ret)
                             {
                                 self.runtime.lock().unwrap().jit_executions += 1;
+                                if let Some(exception_ref) = take_pending_jit_exception() {
+                                    let class_name = self.get_object_class(exception_ref)?;
+                                    return Err(VmError::UnhandledException { class_name });
+                                }
                                 if matches!(ret, crate::vm::jit::runtime::JitReturn::Void) {
                                     return Ok(ExecutionResult::Void);
                                 }
@@ -2645,8 +2722,14 @@ impl Vm {
                             };
 
                             if let Some(result) = jit_result {
-                                if let Some(value) = result {
-                                    thread.current_frame_mut().push(value)?;
+                                match result {
+                                    JitInvocationResult::Returned(Some(value)) => {
+                                        thread.current_frame_mut().push(value)?;
+                                    }
+                                    JitInvocationResult::Returned(None) => {}
+                                    JitInvocationResult::Threw(exception_ref) => {
+                                        self.throw_exception(&mut thread, exception_ref)?;
+                                    }
                                 }
                             } else {
                                 let callee = method.with_initial_locals(Vm::args_to_locals(args));
@@ -3273,9 +3356,9 @@ impl Vm {
                 }
             }
             ClassMethod::Bytecode(method) => {
-                let mut initial_locals = vec![Some(Value::Reference(receiver))];
-                initial_locals.extend(args.into_iter().map(Some));
-                let callee = method.with_initial_locals(initial_locals);
+                let mut all_args = vec![Value::Reference(receiver)];
+                all_args.extend(args);
+                let callee = method.with_initial_locals(Vm::args_to_locals(all_args));
                 thread.push_frame(Frame::new(callee));
             }
         }
@@ -3500,6 +3583,27 @@ mod tests {
 
         let result = vm.execute(method).unwrap();
         assert_eq!(result, ExecutionResult::Value(Value::Int(2)));
+    }
+
+    #[test]
+    fn preserves_local_slot_spacing_after_wide_arguments() {
+        let method = Method::new(
+            [
+                0x1d, // iload_3
+                0xac, // ireturn
+            ],
+            4,
+            1,
+        )
+        .with_metadata("Main", "f", "(IDZ)I", 0x0009)
+        .with_initial_locals(Vm::args_to_locals(vec![
+            Value::Int(7),
+            Value::Double(3.14),
+            Value::Int(1),
+        ]));
+
+        let result = Vm::new().expect("failed to create VM").execute(method).unwrap();
+        assert_eq!(result, ExecutionResult::Value(Value::Int(1)));
     }
 
     #[test]

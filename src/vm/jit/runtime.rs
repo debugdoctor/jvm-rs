@@ -17,6 +17,7 @@ unsafe extern "C" {
 
 thread_local! {
     static CURRENT_VM: std::cell::UnsafeCell<u64> = std::cell::UnsafeCell::new(0);
+    static PENDING_JIT_EXCEPTION: std::cell::UnsafeCell<u64> = std::cell::UnsafeCell::new(0);
 }
 
 pub fn set_current_vm(vm_ptr: u64) {
@@ -33,6 +34,45 @@ pub fn clear_current_vm() {
 
 pub fn get_current_vm_ptr() -> u64 {
     CURRENT_VM.with(|cell| unsafe { *cell.get() })
+}
+
+pub fn clear_pending_jit_exception() {
+    PENDING_JIT_EXCEPTION.with(|cell| unsafe {
+        *cell.get() = 0;
+    });
+}
+
+pub fn take_pending_jit_exception() -> Option<Reference> {
+    PENDING_JIT_EXCEPTION.with(|cell| unsafe {
+        let raw = *cell.get();
+        *cell.get() = 0;
+        decode_optional_reference(raw)
+    })
+}
+
+fn set_pending_jit_exception(exception: u64) {
+    PENDING_JIT_EXCEPTION.with(|cell| unsafe {
+        *cell.get() = exception;
+    });
+}
+
+fn encode_reference(reference: Reference) -> u64 {
+    match reference {
+        Reference::Null => 0,
+        Reference::Heap(index) => index as u64 + HEAP_REF_BIAS,
+    }
+}
+
+fn decode_optional_reference(raw: u64) -> Option<Reference> {
+    if raw == 0 {
+        None
+    } else {
+        Some(Reference::Heap((raw - HEAP_REF_BIAS) as usize))
+    }
+}
+
+fn decode_reference(raw: u64) -> Reference {
+    decode_optional_reference(raw).unwrap_or(Reference::Null)
 }
 
 pub type JitHelperFn = extern "C" fn(u64, u64, u64, u64, u64, u64) -> u64;
@@ -57,10 +97,12 @@ pub struct JitRuntimeHelpers {
 
 static JIT_HELPERS: OnceLock<JitRuntimeHelpers> = OnceLock::new();
 static JIT_ARRAY_DESCRIPTORS: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
+static JIT_CLASS_NAMES: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
 static JIT_FIELD_REFS: OnceLock<Mutex<Vec<FieldRef>>> = OnceLock::new();
 static JIT_METHOD_REFS: OnceLock<Mutex<Vec<MethodRef>>> = OnceLock::new();
 static JIT_INVOKE_DYNAMIC_SITES: OnceLock<Mutex<Vec<InvokeDynamicSite>>> = OnceLock::new();
 const INLINE_ARG_MARKER: u64 = 1u64 << 63;
+const HEAP_REF_BIAS: u64 = 1;
 
 const ARRAY_KIND_PRIMITIVE: u64 = 1;
 const ARRAY_KIND_REFERENCE: u64 = 2;
@@ -74,7 +116,10 @@ pub extern "C" fn jit_helper_load_reference_array_element(
     _: u64,
     _: u64,
 ) -> u64 {
-    let array_ref = Reference::Heap(array_ref as usize);
+    let Some(array_ref) = decode_optional_reference(array_ref) else {
+        println!("JIT helper: load_reference_array_element - null array, deoptimizing");
+        return 0;
+    };
     let index = index as i32;
     let vm_ptr = get_current_vm_ptr();
     if vm_ptr == 0 {
@@ -90,8 +135,7 @@ pub extern "C" fn jit_helper_load_reference_array_element(
             .load_reference_array_element(array_ref, index);
         set_current_vm(vm_ptr);
         match result {
-            Ok(Reference::Heap(idx)) => idx as u64,
-            Ok(Reference::Null) => 0,
+            Ok(reference) => encode_reference(reference),
             Err(e) => {
                 println!("JIT helper: load_reference_array_element failed: {:?}", e);
                 0
@@ -113,13 +157,12 @@ pub extern "C" fn jit_helper_store_reference_array_element(
     _: u64,
     _: u64,
 ) -> u64 {
-    let array_ref = Reference::Heap(array_ref as usize);
-    let index = index as i32;
-    let value = if value == 0 {
-        Reference::Null
-    } else {
-        Reference::Heap(value as usize)
+    let Some(array_ref) = decode_optional_reference(array_ref) else {
+        println!("JIT helper: store_reference_array_element - null array, deoptimizing");
+        return 0;
     };
+    let index = index as i32;
+    let value = decode_reference(value);
     let vm_ptr = get_current_vm_ptr();
     if vm_ptr == 0 {
         println!("JIT helper: store_reference_array_element - no VM context, deoptimizing");
@@ -166,7 +209,7 @@ pub extern "C" fn jit_helper_array_length(
             .heap
             .lock()
             .unwrap()
-            .array_length(Reference::Heap(array_ref as usize));
+            .array_length(Reference::Heap((array_ref - HEAP_REF_BIAS) as usize));
         set_current_vm(vm_ptr);
         match result {
             Ok(len) => len as u64,
@@ -190,7 +233,10 @@ pub extern "C" fn jit_helper_load_typed_array_element(
     _: u64,
     _: u64,
 ) -> u64 {
-    let array_ref = Reference::Heap(array_ref as usize);
+    let Some(array_ref) = decode_optional_reference(array_ref) else {
+        println!("JIT helper: load_typed_array_element - null array, deoptimizing");
+        return 0;
+    };
     let index = index as i32;
     let vm_ptr = get_current_vm_ptr();
     if vm_ptr == 0 {
@@ -284,7 +330,7 @@ pub extern "C" fn jit_helper_store_typed_array_element(
     unsafe {
         let vm = &mut *(vm_ptr as *mut Vm);
         let mut heap = vm.heap.lock().unwrap();
-        let reference = Reference::Heap(array_ref as usize);
+        let reference = Reference::Heap((array_ref - HEAP_REF_BIAS) as usize);
         let index = index as i32;
         let result = match heap.get_mut(reference) {
             Ok(HeapValue::IntArray { values }) => {
@@ -359,6 +405,30 @@ pub fn get_allocate_array_ptr() -> u64 {
     jit_helper_allocate_array as u64
 }
 
+pub fn get_allocate_object_ptr() -> u64 {
+    jit_helper_allocate_object as u64
+}
+
+pub fn get_checkcast_ptr() -> u64 {
+    jit_helper_checkcast as u64
+}
+
+pub fn get_instanceof_ptr() -> u64 {
+    jit_helper_instanceof as u64
+}
+
+pub fn get_athrow_ptr() -> u64 {
+    jit_helper_athrow as u64
+}
+
+pub fn get_monitor_enter_ptr() -> u64 {
+    jit_helper_monitor_enter as u64
+}
+
+pub fn get_monitor_exit_ptr() -> u64 {
+    jit_helper_monitor_exit as u64
+}
+
 pub fn get_invoke_virtual_ptr() -> u64 {
     jit_helper_invoke_virtual as u64
 }
@@ -402,8 +472,7 @@ pub fn get_put_instance_field_ptr() -> u64 {
 pub fn register_array_descriptor(descriptor: impl Into<String>) -> u64 {
     let descriptors = JIT_ARRAY_DESCRIPTORS.get_or_init(|| Mutex::new(Vec::new()));
     let mut descriptors = descriptors.lock().unwrap();
-    descriptors.push(descriptor.into());
-    (descriptors.len() - 1) as u64
+    register_unique(&mut descriptors, descriptor.into())
 }
 
 fn get_registered_array_descriptor(index: usize) -> Option<String> {
@@ -412,11 +481,22 @@ fn get_registered_array_descriptor(index: usize) -> Option<String> {
         .and_then(|descriptors| descriptors.lock().ok()?.get(index).cloned())
 }
 
+pub fn register_class_name(class_name: impl Into<String>) -> u64 {
+    let class_names = JIT_CLASS_NAMES.get_or_init(|| Mutex::new(Vec::new()));
+    let mut class_names = class_names.lock().unwrap();
+    register_unique(&mut class_names, class_name.into())
+}
+
+fn get_registered_class_name(index: usize) -> Option<String> {
+    JIT_CLASS_NAMES
+        .get()
+        .and_then(|class_names| class_names.lock().ok()?.get(index).cloned())
+}
+
 pub fn register_field_ref(field_ref: FieldRef) -> u64 {
     let refs = JIT_FIELD_REFS.get_or_init(|| Mutex::new(Vec::new()));
     let mut refs = refs.lock().unwrap();
-    refs.push(field_ref);
-    (refs.len() - 1) as u64
+    register_unique(&mut refs, field_ref)
 }
 
 fn get_registered_field_ref(index: usize) -> Option<FieldRef> {
@@ -428,8 +508,7 @@ fn get_registered_field_ref(index: usize) -> Option<FieldRef> {
 pub fn register_method_ref(method_ref: MethodRef) -> u64 {
     let refs = JIT_METHOD_REFS.get_or_init(|| Mutex::new(Vec::new()));
     let mut refs = refs.lock().unwrap();
-    refs.push(method_ref);
-    (refs.len() - 1) as u64
+    register_unique(&mut refs, method_ref)
 }
 
 fn get_registered_method_ref(index: usize) -> Option<MethodRef> {
@@ -441,8 +520,16 @@ fn get_registered_method_ref(index: usize) -> Option<MethodRef> {
 pub fn register_invoke_dynamic_site(site: InvokeDynamicSite) -> u64 {
     let sites = JIT_INVOKE_DYNAMIC_SITES.get_or_init(|| Mutex::new(Vec::new()));
     let mut sites = sites.lock().unwrap();
-    sites.push(site);
-    (sites.len() - 1) as u64
+    register_unique(&mut sites, site)
+}
+
+fn register_unique<T: PartialEq>(items: &mut Vec<T>, item: T) -> u64 {
+    if let Some(index) = items.iter().position(|existing| *existing == item) {
+        index as u64
+    } else {
+        items.push(item);
+        (items.len() - 1) as u64
+    }
 }
 
 fn get_registered_invoke_dynamic_site(index: usize) -> Option<InvokeDynamicSite> {
@@ -457,8 +544,8 @@ fn value_to_u64(value: Option<Value>) -> u64 {
         Some(Value::Long(v)) => v as u64,
         Some(Value::Float(v)) => v.to_bits() as u64,
         Some(Value::Double(v)) => v.to_bits(),
-        Some(Value::Reference(Reference::Null)) | None => 0,
-        Some(Value::Reference(Reference::Heap(addr))) => addr as u64,
+        Some(Value::Reference(reference)) => encode_reference(reference),
+        None => 0,
         Some(Value::ReturnAddress(pc)) => pc as u64,
     }
 }
@@ -483,14 +570,34 @@ fn decode_array_counts(argc: u64, arg0: u64, arg1: u64) -> (usize, [u64; 2], boo
 
 extern "C" fn jit_helper_allocate_object(
     _ctx: u64,
-    _class_ptr: u64,
+    class_id: u64,
     _size: u64,
     _: u64,
     _: u64,
     _: u64,
 ) -> u64 {
-    println!("JIT helper: allocate_object (stub - deoptimizing)");
-    0
+    let vm_ptr = get_current_vm_ptr();
+    if vm_ptr == 0 {
+        println!("JIT helper: allocate_object - no VM context, deoptimizing");
+        return 0;
+    }
+
+    let Some(class_name) = get_registered_class_name(class_id as usize) else {
+        println!(
+            "JIT helper: allocate_object - missing class id {}",
+            class_id
+        );
+        return 0;
+    };
+
+    let result = unsafe {
+        let vm = &mut *(vm_ptr as *mut Vm);
+        let result = vm.invoke_jit_allocate_object(&class_name);
+        set_current_vm(vm_ptr);
+        result
+    };
+
+    value_to_u64(result.map(Value::Reference))
 }
 
 extern "C" fn jit_helper_allocate_array(
@@ -940,48 +1047,91 @@ extern "C" fn jit_helper_invoke_native(
 
 extern "C" fn jit_helper_checkcast(
     _ctx: u64,
-    _obj: u64,
-    _class_ptr: u64,
+    obj: u64,
+    class_id: u64,
     _: u64,
     _: u64,
     _: u64,
 ) -> u64 {
-    println!("JIT helper: checkcast (stub - deoptimizing)");
-    0
+    let vm_ptr = get_current_vm_ptr();
+    if vm_ptr == 0 {
+        println!("JIT helper: checkcast - no VM context, deoptimizing");
+        return 0;
+    }
+
+    let Some(class_name) = get_registered_class_name(class_id as usize) else {
+        println!("JIT helper: checkcast - missing class id {}", class_id);
+        return 0;
+    };
+
+    unsafe {
+        let vm = &mut *(vm_ptr as *mut Vm);
+        let ok = vm.invoke_jit_checkcast(obj, &class_name);
+        set_current_vm(vm_ptr);
+        if ok { 1 } else { 0 }
+    }
 }
 
 extern "C" fn jit_helper_instanceof(
     _ctx: u64,
-    _obj: u64,
-    _class_ptr: u64,
+    obj: u64,
+    class_id: u64,
     _: u64,
     _: u64,
     _: u64,
 ) -> u64 {
-    println!("JIT helper: instanceof (stub - deoptimizing)");
+    let vm_ptr = get_current_vm_ptr();
+    if vm_ptr == 0 {
+        println!("JIT helper: instanceof - no VM context, deoptimizing");
+        return 0;
+    }
+
+    let Some(class_name) = get_registered_class_name(class_id as usize) else {
+        println!("JIT helper: instanceof - missing class id {}", class_id);
+        return 0;
+    };
+
+    unsafe {
+        let vm = &mut *(vm_ptr as *mut Vm);
+        let ok = vm.invoke_jit_instanceof(obj, &class_name);
+        set_current_vm(vm_ptr);
+        if ok { 1 } else { 0 }
+    }
+}
+
+extern "C" fn jit_helper_athrow(_ctx: u64, exception: u64, _: u64, _: u64, _: u64, _: u64) -> u64 {
+    set_pending_jit_exception(exception);
     0
 }
 
-extern "C" fn jit_helper_athrow(_ctx: u64, _exception: u64, _: u64, _: u64, _: u64, _: u64) -> u64 {
-    println!("JIT helper: athrow (stub - deoptimizing)");
-    0
+extern "C" fn jit_helper_monitor_enter(_ctx: u64, obj: u64, _: u64, _: u64, _: u64, _: u64) -> u64 {
+    let vm_ptr = get_current_vm_ptr();
+    if vm_ptr == 0 {
+        println!("JIT helper: monitor_enter - no VM context, deoptimizing");
+        return 0;
+    }
+
+    unsafe {
+        let vm = &mut *(vm_ptr as *mut Vm);
+        let ok = vm.invoke_jit_monitor_enter(obj);
+        set_current_vm(vm_ptr);
+        if ok { 1 } else { 0 }
+    }
 }
 
-extern "C" fn jit_helper_monitor_enter(
-    _ctx: u64,
-    _obj: u64,
-    _: u64,
-    _: u64,
-    _: u64,
-    _: u64,
-) -> u64 {
-    println!("JIT helper: monitor_enter (stub - deoptimizing)");
-    0
-}
+extern "C" fn jit_helper_monitor_exit(_ctx: u64, obj: u64, _: u64, _: u64, _: u64, _: u64) -> u64 {
+    let vm_ptr = get_current_vm_ptr();
+    if vm_ptr == 0 {
+        println!("JIT helper: monitor_exit - no VM context, deoptimizing");
+        return 0;
+    }
 
-extern "C" fn jit_helper_monitor_exit(_ctx: u64, _obj: u64, _: u64, _: u64, _: u64, _: u64) -> u64 {
-    println!("JIT helper: monitor_exit (stub - deoptimizing)");
-    0
+    unsafe {
+        let vm = &mut *(vm_ptr as *mut Vm);
+        let ok = vm.invoke_jit_monitor_exit(obj);
+        set_current_vm(vm_ptr);
+        if ok { 1 } else { 0 }
+    }
 }
 
 pub struct JitRuntime {
@@ -1237,14 +1387,16 @@ impl JitContext {
 
     pub fn execute(
         &self,
+        vm_ptr: u64,
         key: &str,
         args: &[crate::vm::types::Value],
     ) -> Option<crate::vm::types::Value> {
-        self.execute_typed(key, args, JitReturn::Int)
+        self.execute_typed(vm_ptr, key, args, JitReturn::Int)
     }
 
     pub fn execute_typed(
         &self,
+        vm_ptr: u64,
         key: &str,
         args: &[crate::vm::types::Value],
         ret: JitReturn,
@@ -1252,6 +1404,8 @@ impl JitContext {
         let entry = self.entries.get(key)?;
         let fn_ptr = entry.code_ptr();
         let _ = entry.frame_size();
+        clear_pending_jit_exception();
+        set_current_vm(vm_ptr);
 
         let mut int_args: [u64; 6] = [0; 6];
         let mut int_count = 1;
@@ -1287,12 +1441,8 @@ impl JitContext {
                     int_count += 1;
                 }
                 crate::vm::types::Value::Reference(r) => {
-                    let ptr = match r {
-                        crate::vm::types::Reference::Null => 0usize,
-                        crate::vm::types::Reference::Heap(addr) => *addr,
-                    };
                     if int_count < 6 {
-                        int_args[int_count] = ptr as u64;
+                        int_args[int_count] = encode_reference(*r);
                     }
                     int_count += 1;
                 }
@@ -1300,7 +1450,7 @@ impl JitContext {
             }
         }
 
-        unsafe {
+        let result = unsafe {
             match ret {
                 JitReturn::Void => {
                     let f: extern "C" fn(u64, u64, u64, u64, u64, u64) =
@@ -1378,15 +1528,13 @@ impl JitContext {
                         int_args[4],
                         int_args[5],
                     );
-                    let r_ref = if r == 0 {
-                        crate::vm::types::Reference::Null
-                    } else {
-                        crate::vm::types::Reference::Heap(r as usize)
-                    };
+                    let r_ref = decode_reference(r);
                     Some(crate::vm::types::Value::Reference(r_ref))
                 }
             }
-        }
+        };
+        clear_current_vm();
+        result
     }
 }
 

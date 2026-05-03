@@ -207,6 +207,8 @@ fn validate_stack_map_frames(
     }
 
     let mut previous = None::<usize>;
+    let mut previous_parsed_locals = Vec::new();
+    let mut previous_normalized_locals = initial_stack_map_locals(method)?;
     for frame in &method.stack_map_frames {
         let pc = match previous {
             None => frame.offset_delta as usize,
@@ -219,11 +221,17 @@ fn validate_stack_map_frames(
                 "StackMapTable frame points to unreachable or invalid code",
             ));
         };
-        let expected_locals = frame
+        let parsed_locals = frame
             .locals
             .iter()
             .map(|info| stack_map_type(method, info))
             .collect::<Result<Vec<_>, _>>()?;
+        let normalized_locals = normalize_stack_map_locals(
+            &previous_parsed_locals,
+            &previous_normalized_locals,
+            &parsed_locals,
+        );
+        let expected_locals = expand_stack_map_locals(normalized_locals.clone());
         let expected_stack = frame
             .stack
             .iter()
@@ -232,6 +240,8 @@ fn validate_stack_map_frames(
 
         compare_stack_map(pc, &state.locals, &expected_locals, "locals")?;
         compare_stack_map(pc, &state.stack, &expected_stack, "stack")?;
+        previous_parsed_locals = parsed_locals;
+        previous_normalized_locals = normalized_locals;
     }
 
     Ok(())
@@ -313,7 +323,20 @@ fn initial_frame(method: &Method) -> Result<FrameState, VmError> {
                 "descriptor requires more locals than max_locals",
             ));
         }
-        locals[index] = ty;
+        locals[index] = ty.clone();
+        index += if is_wide_verify_type(&ty) {
+            let next = index + 1;
+            if next >= locals.len() {
+                return Err(verification_error(
+                    0,
+                    "descriptor requires more locals than max_locals",
+                ));
+            }
+            locals[next] = VerifyType::Top;
+            1
+        } else {
+            0
+        };
         index += 1;
     }
 
@@ -1529,12 +1552,92 @@ fn store_local(
     ty: VerifyType,
     pc: usize,
 ) -> Result<(), VmError> {
-    let slot = state
-        .locals
-        .get_mut(index)
-        .ok_or_else(|| verification_error(pc, format!("local {index} out of bounds")))?;
-    *slot = ty;
+    let len = state.locals.len();
+    if index >= len {
+        return Err(verification_error(pc, format!("local {index} out of bounds")));
+    }
+
+    if index > 0 && is_wide_verify_type(&state.locals[index - 1]) {
+        state.locals[index - 1] = VerifyType::Top;
+    }
+    if is_wide_verify_type(&state.locals[index]) && index + 1 < len {
+        state.locals[index + 1] = VerifyType::Top;
+    }
+
+    let is_wide = is_wide_verify_type(&ty);
+    state.locals[index] = ty;
+    if is_wide {
+        let next = index + 1;
+        if next >= len {
+            return Err(verification_error(pc, format!("local {next} out of bounds")));
+        }
+        state.locals[next] = VerifyType::Top;
+    }
     Ok(())
+}
+
+fn is_wide_verify_type(ty: &VerifyType) -> bool {
+    matches!(ty, VerifyType::Long | VerifyType::Double)
+}
+
+fn expand_stack_map_locals(locals: Vec<VerifyType>) -> Vec<VerifyType> {
+    let mut expanded = Vec::with_capacity(locals.len());
+    for ty in locals {
+        let is_wide = is_wide_verify_type(&ty);
+        expanded.push(ty);
+        if is_wide {
+            expanded.push(VerifyType::Top);
+        }
+    }
+    expanded
+}
+
+fn initial_stack_map_locals(method: &Method) -> Result<Vec<VerifyType>, VmError> {
+    let mut locals = Vec::new();
+    if method.access_flags & 0x0008 == 0 {
+        let this_ty = if method.name == "<init>" {
+            VerifyType::UninitializedThis
+        } else {
+            VerifyType::Reference(if method.class_name.is_empty() {
+                None
+            } else {
+                Some(method.class_name.clone())
+            })
+        };
+        locals.push(this_ty);
+    }
+    let (params, _) = parse_method_descriptor(&method.descriptor)?;
+    locals.extend(params);
+    Ok(locals)
+}
+
+fn normalize_stack_map_locals(
+    previous_parsed: &[VerifyType],
+    previous_normalized: &[VerifyType],
+    parsed: &[VerifyType],
+) -> Vec<VerifyType> {
+    if parsed == previous_parsed {
+        return previous_normalized.to_vec();
+    }
+
+    if parsed.len() > previous_parsed.len()
+        && parsed.starts_with(previous_parsed)
+        && parsed.len() - previous_parsed.len() <= 3
+    {
+        let mut normalized = previous_normalized.to_vec();
+        normalized.extend_from_slice(&parsed[previous_parsed.len()..]);
+        return normalized;
+    }
+
+    if parsed.len() < previous_parsed.len()
+        && previous_parsed.starts_with(parsed)
+        && previous_parsed.len() - parsed.len() <= 3
+    {
+        return previous_normalized[..previous_normalized.len() - (previous_parsed.len() - parsed.len())]
+            .to_vec();
+    }
+
+    parsed.to_vec()
 }
 
 fn push(
@@ -1677,6 +1780,21 @@ mod tests {
             1,
         )
         .with_metadata("Main", "legacy", "()I", 0x0009);
+        verify_method(&method).unwrap();
+    }
+
+    #[test]
+    fn verifier_tracks_wide_parameters_in_local_slots() {
+        let method = Method::new(
+            vec![
+                0x1d, // iload_3
+                0xac, // ireturn
+            ],
+            4,
+            1,
+        )
+        .with_metadata("Main", "f", "(IDZ)I", 0x0009);
+
         verify_method(&method).unwrap();
     }
 }

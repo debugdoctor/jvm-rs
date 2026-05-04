@@ -18,6 +18,27 @@ unsafe extern "C" {
 thread_local! {
     static CURRENT_VM: std::cell::UnsafeCell<u64> = std::cell::UnsafeCell::new(0);
     static PENDING_JIT_EXCEPTION: std::cell::UnsafeCell<u64> = std::cell::UnsafeCell::new(0);
+    static LAST_DEOPT_SNAPSHOT: std::cell::RefCell<Option<DeoptSnapshot>> = const { std::cell::RefCell::new(None) };
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum DeoptReason {
+    GuardFailure,
+    NullCheck,
+    ClassCast,
+    MonitorFailure,
+    AllocationFailure,
+    HelperUnsupported,
+    Exception,
+    SiteFallback,
+}
+
+#[derive(Clone)]
+pub struct DeoptSnapshot {
+    pub reason: Option<DeoptReason>,
+    pub pc: usize,
+    pub locals: Vec<u64>,
+    pub stack: Vec<u64>,
 }
 
 pub fn set_current_vm(vm_ptr: u64) {
@@ -42,6 +63,22 @@ pub fn clear_pending_jit_exception() {
     });
 }
 
+pub fn clear_last_deopt_snapshot() {
+    LAST_DEOPT_SNAPSHOT.with(|cell| {
+        *cell.borrow_mut() = None;
+    });
+}
+
+pub fn take_last_deopt_snapshot() -> Option<DeoptSnapshot> {
+    LAST_DEOPT_SNAPSHOT.with(|cell| cell.borrow_mut().take())
+}
+
+fn set_last_deopt_snapshot(snapshot: DeoptSnapshot) {
+    LAST_DEOPT_SNAPSHOT.with(|cell| {
+        *cell.borrow_mut() = Some(snapshot);
+    });
+}
+
 pub fn take_pending_jit_exception() -> Option<Reference> {
     PENDING_JIT_EXCEPTION.with(|cell| unsafe {
         let raw = *cell.get();
@@ -54,6 +91,63 @@ fn set_pending_jit_exception(exception: u64) {
     PENDING_JIT_EXCEPTION.with(|cell| unsafe {
         *cell.get() = exception;
     });
+}
+
+fn raise_pending_exception(vm: &mut Vm, class_name: &str) -> u64 {
+    let exception = vm.heap.lock().unwrap().allocate(HeapValue::Object {
+        class_name: class_name.to_string(),
+        fields: HashMap::new(),
+    });
+    let raw = encode_reference(exception);
+    set_pending_jit_exception(raw);
+    raw
+}
+
+fn record_pending_deopt_pc(ctx: u64, pc: u64) {
+    if ctx == 0 {
+        return;
+    }
+    unsafe {
+        *(ctx as *mut u64) = (*(ctx as *mut u64) & DEOPT_REASON_MASK) | DEOPT_PENDING_MARKER | pc;
+    }
+}
+
+fn record_deopt_request(ctx: u64, reason: DeoptReason) {
+    if ctx == 0 {
+        return;
+    }
+    unsafe {
+        let slot = ctx as *mut u64;
+        *slot = (*slot & !DEOPT_REASON_MASK) | DEOPT_PENDING_MARKER | encode_deopt_reason(reason);
+    }
+}
+
+fn encode_deopt_reason(reason: DeoptReason) -> u64 {
+    (match reason {
+        DeoptReason::GuardFailure => 1,
+        DeoptReason::NullCheck => 2,
+        DeoptReason::ClassCast => 3,
+        DeoptReason::MonitorFailure => 4,
+        DeoptReason::AllocationFailure => 5,
+        DeoptReason::HelperUnsupported => 6,
+        DeoptReason::Exception => 7,
+        DeoptReason::SiteFallback => 8,
+    } as u64)
+        << DEOPT_REASON_SHIFT
+}
+
+fn decode_deopt_reason(raw: u64) -> Option<DeoptReason> {
+    match (raw & DEOPT_REASON_MASK) >> DEOPT_REASON_SHIFT {
+        1 => Some(DeoptReason::GuardFailure),
+        2 => Some(DeoptReason::NullCheck),
+        3 => Some(DeoptReason::ClassCast),
+        4 => Some(DeoptReason::MonitorFailure),
+        5 => Some(DeoptReason::AllocationFailure),
+        6 => Some(DeoptReason::HelperUnsupported),
+        7 => Some(DeoptReason::Exception),
+        8 => Some(DeoptReason::SiteFallback),
+        _ => None,
+    }
 }
 
 fn encode_reference(reference: Reference) -> u64 {
@@ -102,6 +196,9 @@ static JIT_FIELD_REFS: OnceLock<Mutex<Vec<FieldRef>>> = OnceLock::new();
 static JIT_METHOD_REFS: OnceLock<Mutex<Vec<MethodRef>>> = OnceLock::new();
 static JIT_INVOKE_DYNAMIC_SITES: OnceLock<Mutex<Vec<InvokeDynamicSite>>> = OnceLock::new();
 const INLINE_ARG_MARKER: u64 = 1u64 << 63;
+const DEOPT_PENDING_MARKER: u64 = 1u64 << 63;
+const DEOPT_REASON_SHIFT: u64 = 56;
+const DEOPT_REASON_MASK: u64 = 0x7f << DEOPT_REASON_SHIFT;
 const HEAP_REF_BIAS: u64 = 1;
 
 const ARRAY_KIND_PRIMITIVE: u64 = 1;
@@ -109,20 +206,30 @@ const ARRAY_KIND_REFERENCE: u64 = 2;
 const ARRAY_KIND_MULTI: u64 = 3;
 
 pub extern "C" fn jit_helper_load_reference_array_element(
-    _ctx: u64,
+    ctx: u64,
     array_ref: u64,
     index: u64,
-    _: u64,
+    pc: u64,
     _: u64,
     _: u64,
 ) -> u64 {
     let Some(array_ref) = decode_optional_reference(array_ref) else {
-        println!("JIT helper: load_reference_array_element - null array, deoptimizing");
+        record_deopt_request(ctx, DeoptReason::Exception);
+        let vm_ptr = get_current_vm_ptr();
+        if vm_ptr != 0 {
+            unsafe {
+                let vm = &mut *(vm_ptr as *mut Vm);
+                raise_pending_exception(vm, "java/lang/NullPointerException");
+                set_current_vm(vm_ptr);
+            }
+        }
+        println!("JIT helper: load_reference_array_element - null array, pending NPE");
         return 0;
     };
     let index = index as i32;
     let vm_ptr = get_current_vm_ptr();
     if vm_ptr == 0 {
+        record_deopt_request(ctx, DeoptReason::HelperUnsupported);
         println!("JIT helper: load_reference_array_element - no VM context, deoptimizing");
         return 0;
     }
@@ -137,6 +244,16 @@ pub extern "C" fn jit_helper_load_reference_array_element(
         match result {
             Ok(reference) => encode_reference(reference),
             Err(e) => {
+                record_pending_deopt_pc(ctx, pc);
+                record_deopt_request(ctx, DeoptReason::Exception);
+                let class_name = match e {
+                    crate::vm::VmError::ArrayIndexOutOfBounds { .. } => {
+                        "java/lang/ArrayIndexOutOfBoundsException"
+                    }
+                    crate::vm::VmError::NullReference => "java/lang/NullPointerException",
+                    _ => "java/lang/ArrayIndexOutOfBoundsException",
+                };
+                raise_pending_exception(vm, class_name);
                 println!("JIT helper: load_reference_array_element failed: {:?}", e);
                 0
             }
@@ -150,21 +267,31 @@ pub fn get_load_reference_array_element_ptr() -> u64 {
 }
 
 pub extern "C" fn jit_helper_store_reference_array_element(
-    _ctx: u64,
+    ctx: u64,
     array_ref: u64,
     index: u64,
     value: u64,
-    _: u64,
+    pc: u64,
     _: u64,
 ) -> u64 {
     let Some(array_ref) = decode_optional_reference(array_ref) else {
-        println!("JIT helper: store_reference_array_element - null array, deoptimizing");
+        record_deopt_request(ctx, DeoptReason::Exception);
+        let vm_ptr = get_current_vm_ptr();
+        if vm_ptr != 0 {
+            unsafe {
+                let vm = &mut *(vm_ptr as *mut Vm);
+                raise_pending_exception(vm, "java/lang/NullPointerException");
+                set_current_vm(vm_ptr);
+            }
+        }
+        println!("JIT helper: store_reference_array_element - null array, pending NPE");
         return 0;
     };
     let index = index as i32;
     let value = decode_reference(value);
     let vm_ptr = get_current_vm_ptr();
     if vm_ptr == 0 {
+        record_deopt_request(ctx, DeoptReason::HelperUnsupported);
         println!("JIT helper: store_reference_array_element - no VM context, deoptimizing");
         return 0;
     }
@@ -179,6 +306,16 @@ pub extern "C" fn jit_helper_store_reference_array_element(
         match result {
             Ok(()) => 1,
             Err(e) => {
+                record_pending_deopt_pc(ctx, pc);
+                record_deopt_request(ctx, DeoptReason::Exception);
+                let class_name = match e {
+                    crate::vm::VmError::ArrayIndexOutOfBounds { .. } => {
+                        "java/lang/ArrayIndexOutOfBoundsException"
+                    }
+                    crate::vm::VmError::NullReference => "java/lang/NullPointerException",
+                    _ => "java/lang/ArrayIndexOutOfBoundsException",
+                };
+                raise_pending_exception(vm, class_name);
                 println!("JIT helper: store_reference_array_element failed: {:?}", e);
                 0
             }
@@ -191,15 +328,23 @@ pub fn get_store_reference_array_element_ptr() -> u64 {
 }
 
 pub extern "C" fn jit_helper_array_length(
-    _ctx: u64,
+    ctx: u64,
     array_ref: u64,
-    _: u64,
+    pc: u64,
     _: u64,
     _: u64,
     _: u64,
 ) -> u64 {
     let vm_ptr = get_current_vm_ptr();
     if vm_ptr == 0 || array_ref == 0 {
+        record_deopt_request(ctx, DeoptReason::Exception);
+        if vm_ptr != 0 {
+            unsafe {
+                let vm = &mut *(vm_ptr as *mut Vm);
+                raise_pending_exception(vm, "java/lang/NullPointerException");
+                set_current_vm(vm_ptr);
+            }
+        }
         println!("JIT helper: array_length - missing VM context or null array");
         return 0;
     }
@@ -214,6 +359,16 @@ pub extern "C" fn jit_helper_array_length(
         match result {
             Ok(len) => len as u64,
             Err(e) => {
+                record_pending_deopt_pc(ctx, pc);
+                record_deopt_request(ctx, DeoptReason::Exception);
+                let class_name = match e {
+                    crate::vm::VmError::ArrayIndexOutOfBounds { .. } => {
+                        "java/lang/ArrayIndexOutOfBoundsException"
+                    }
+                    crate::vm::VmError::NullReference => "java/lang/NullPointerException",
+                    _ => "java/lang/NullPointerException",
+                };
+                raise_pending_exception(vm, class_name);
                 println!("JIT helper: array_length failed: {:?}", e);
                 0
             }
@@ -225,84 +380,104 @@ pub fn get_array_length_ptr() -> u64 {
     jit_helper_array_length as u64
 }
 
-pub extern "C" fn jit_helper_load_typed_array_element(
+extern "C" fn jit_helper_raise_exception_class(
     _ctx: u64,
-    array_ref: u64,
-    index: u64,
-    _type_marker: u64,
+    class_id: u64,
+    _: u64,
+    _: u64,
     _: u64,
     _: u64,
 ) -> u64 {
+    let vm_ptr = get_current_vm_ptr();
+    if vm_ptr == 0 {
+        record_deopt_request(_ctx, DeoptReason::HelperUnsupported);
+        println!("JIT helper: raise_exception_class - no VM context, deoptimizing");
+        return 0;
+    }
+    let Some(class_name) = get_registered_class_name(class_id as usize) else {
+        record_deopt_request(_ctx, DeoptReason::HelperUnsupported);
+        println!(
+            "JIT helper: raise_exception_class - missing class id {}",
+            class_id
+        );
+        return 0;
+    };
+    unsafe {
+        let vm = &mut *(vm_ptr as *mut Vm);
+        let exception = raise_pending_exception(vm, &class_name);
+        set_current_vm(vm_ptr);
+        exception
+    }
+}
+
+pub fn get_raise_exception_class_ptr() -> u64 {
+    jit_helper_raise_exception_class as u64
+}
+
+pub extern "C" fn jit_helper_load_typed_array_element(
+    ctx: u64,
+    array_ref: u64,
+    index: u64,
+    _type_marker: u64,
+    pc: u64,
+    _: u64,
+) -> u64 {
     let Some(array_ref) = decode_optional_reference(array_ref) else {
-        println!("JIT helper: load_typed_array_element - null array, deoptimizing");
+        record_deopt_request(ctx, DeoptReason::Exception);
+        let vm_ptr = get_current_vm_ptr();
+        if vm_ptr != 0 {
+            unsafe {
+                let vm = &mut *(vm_ptr as *mut Vm);
+                raise_pending_exception(vm, "java/lang/NullPointerException");
+                set_current_vm(vm_ptr);
+            }
+        }
+        println!("JIT helper: load_typed_array_element - null array, pending NPE");
         return 0;
     };
     let index = index as i32;
     let vm_ptr = get_current_vm_ptr();
     if vm_ptr == 0 {
+        record_deopt_request(ctx, DeoptReason::HelperUnsupported);
         println!("JIT helper: load_typed_array_element - no VM context, deoptimizing");
         return 0;
     }
     unsafe {
         let vm = &mut *(vm_ptr as *mut Vm);
-        let heap = vm.heap.lock().unwrap();
-        let heap_val = heap.get(array_ref);
-        match heap_val {
-            Ok(HeapValue::DoubleArray { values }) => {
-                let i = match Heap::check_array_index(index, values.len()) {
-                    Ok(i) => i,
-                    Err(e) => {
-                        println!(
-                            "JIT helper: load_typed_array_element - index error: {:?}",
-                            e
-                        );
-                        return 0;
-                    }
-                };
-                let val = values[i];
-                drop(heap);
-                set_current_vm(vm_ptr);
-                val.to_bits() as u64
+        let outcome = {
+            let heap = vm.heap.lock().unwrap();
+            match heap.get(array_ref) {
+                Ok(HeapValue::DoubleArray { values }) => match Heap::check_array_index(index, values.len()) {
+                    Ok(i) => Ok(values[i].to_bits() as u64),
+                    Err(_) => Err("java/lang/ArrayIndexOutOfBoundsException"),
+                },
+                Ok(HeapValue::LongArray { values }) => match Heap::check_array_index(index, values.len()) {
+                    Ok(i) => Ok(values[i] as u64),
+                    Err(_) => Err("java/lang/ArrayIndexOutOfBoundsException"),
+                },
+                Ok(HeapValue::IntArray { values }) => match Heap::check_array_index(index, values.len()) {
+                    Ok(i) => Ok(values[i] as u32 as u64),
+                    Err(_) => Err("java/lang/ArrayIndexOutOfBoundsException"),
+                },
+                Ok(HeapValue::FloatArray { values }) => match Heap::check_array_index(index, values.len()) {
+                    Ok(i) => Ok(values[i].to_bits() as u64),
+                    Err(_) => Err("java/lang/ArrayIndexOutOfBoundsException"),
+                },
+                Err(_) => Err("java/lang/NullPointerException"),
+                _ => Err("java/lang/ArrayIndexOutOfBoundsException"),
             }
-            Ok(HeapValue::LongArray { values }) => {
-                let i = match Heap::check_array_index(index, values.len()) {
-                    Ok(i) => i,
-                    Err(_) => return 0,
-                };
-                let val = values[i] as u64;
-                drop(heap);
-                set_current_vm(vm_ptr);
-                val
-            }
-            Ok(HeapValue::IntArray { values }) => {
-                let i = match Heap::check_array_index(index, values.len()) {
-                    Ok(i) => i,
-                    Err(_) => return 0,
-                };
-                let val = values[i] as u32 as u64;
-                drop(heap);
-                set_current_vm(vm_ptr);
-                val
-            }
-            Ok(HeapValue::FloatArray { values }) => {
-                let i = match Heap::check_array_index(index, values.len()) {
-                    Ok(i) => i,
-                    Err(_) => return 0,
-                };
-                let val = values[i];
-                drop(heap);
-                set_current_vm(vm_ptr);
-                val.to_bits() as u64
-            }
-            Err(e) => {
+        };
+        set_current_vm(vm_ptr);
+        match outcome {
+            Ok(value) => value,
+            Err(class_name) => {
+                record_pending_deopt_pc(ctx, pc);
+                record_deopt_request(ctx, DeoptReason::Exception);
+                raise_pending_exception(vm, class_name);
                 println!(
-                    "JIT helper: load_typed_array_element - array not found: {:?}",
-                    e
+                    "JIT helper: load_typed_array_element raised pending exception {}",
+                    class_name
                 );
-                0
-            }
-            _ => {
-                println!("JIT helper: load_typed_array_element - invalid array type");
                 0
             }
         }
@@ -314,52 +489,71 @@ pub fn get_load_typed_array_element_ptr() -> u64 {
 }
 
 pub extern "C" fn jit_helper_store_typed_array_element(
-    _ctx: u64,
+    ctx: u64,
     array_ref: u64,
     index: u64,
     value: u64,
-    _: u64,
+    pc: u64,
     _: u64,
 ) -> u64 {
     let vm_ptr = get_current_vm_ptr();
     if vm_ptr == 0 || array_ref == 0 {
+        if vm_ptr != 0 {
+            unsafe {
+                let vm = &mut *(vm_ptr as *mut Vm);
+                raise_pending_exception(vm, "java/lang/NullPointerException");
+                set_current_vm(vm_ptr);
+            }
+        }
         println!("JIT helper: store_typed_array_element - missing VM context or null array");
         return 0;
     }
 
     unsafe {
         let vm = &mut *(vm_ptr as *mut Vm);
-        let mut heap = vm.heap.lock().unwrap();
         let reference = Reference::Heap((array_ref - HEAP_REF_BIAS) as usize);
         let index = index as i32;
-        let result = match heap.get_mut(reference) {
-            Ok(HeapValue::IntArray { values }) => {
-                let i = Heap::check_array_index(index, values.len());
-                i.map(|i| values[i] = value as i32).map_err(|e| e)
+        let result = {
+            let mut heap = vm.heap.lock().unwrap();
+            match heap.get_mut(reference) {
+                Ok(HeapValue::IntArray { values }) => {
+                    let i = Heap::check_array_index(index, values.len());
+                    i.map(|i| values[i] = value as i32).map_err(|e| e)
+                }
+                Ok(HeapValue::LongArray { values }) => {
+                    let i = Heap::check_array_index(index, values.len());
+                    i.map(|i| values[i] = value as i64).map_err(|e| e)
+                }
+                Ok(HeapValue::FloatArray { values }) => {
+                    let i = Heap::check_array_index(index, values.len());
+                    i.map(|i| values[i] = f32::from_bits(value as u32))
+                        .map_err(|e| e)
+                }
+                Ok(HeapValue::DoubleArray { values }) => {
+                    let i = Heap::check_array_index(index, values.len());
+                    i.map(|i| values[i] = f64::from_bits(value)).map_err(|e| e)
+                }
+                Ok(value) => Err(crate::vm::VmError::InvalidHeapValue {
+                    expected: "primitive-array",
+                    actual: value.kind_name(),
+                }),
+                Err(e) => Err(e),
             }
-            Ok(HeapValue::LongArray { values }) => {
-                let i = Heap::check_array_index(index, values.len());
-                i.map(|i| values[i] = value as i64).map_err(|e| e)
-            }
-            Ok(HeapValue::FloatArray { values }) => {
-                let i = Heap::check_array_index(index, values.len());
-                i.map(|i| values[i] = f32::from_bits(value as u32))
-                    .map_err(|e| e)
-            }
-            Ok(HeapValue::DoubleArray { values }) => {
-                let i = Heap::check_array_index(index, values.len());
-                i.map(|i| values[i] = f64::from_bits(value)).map_err(|e| e)
-            }
-            Ok(value) => Err(crate::vm::VmError::InvalidHeapValue {
-                expected: "primitive-array",
-                actual: value.kind_name(),
-            }),
-            Err(e) => Err(e),
         };
         set_current_vm(vm_ptr);
         match result {
             Ok(()) => 1,
             Err(e) => {
+                record_pending_deopt_pc(ctx, pc);
+                record_deopt_request(ctx, DeoptReason::Exception);
+                let class_name = match e {
+                    crate::vm::VmError::ArrayIndexOutOfBounds { .. } => {
+                        "java/lang/ArrayIndexOutOfBoundsException"
+                    }
+                    crate::vm::VmError::NullReference => "java/lang/NullPointerException",
+                    _ => "java/lang/ArrayIndexOutOfBoundsException",
+                };
+                raise_pending_exception(vm, class_name);
                 println!("JIT helper: store_typed_array_element failed: {:?}", e);
                 0
             }
@@ -411,6 +605,10 @@ pub fn get_allocate_object_ptr() -> u64 {
 
 pub fn get_checkcast_ptr() -> u64 {
     jit_helper_checkcast as u64
+}
+
+pub fn get_force_deopt_ptr() -> u64 {
+    jit_helper_force_deopt as u64
 }
 
 pub fn get_instanceof_ptr() -> u64 {
@@ -569,7 +767,7 @@ fn decode_array_counts(argc: u64, arg0: u64, arg1: u64) -> (usize, [u64; 2], boo
 }
 
 extern "C" fn jit_helper_allocate_object(
-    _ctx: u64,
+    ctx: u64,
     class_id: u64,
     _size: u64,
     _: u64,
@@ -578,11 +776,13 @@ extern "C" fn jit_helper_allocate_object(
 ) -> u64 {
     let vm_ptr = get_current_vm_ptr();
     if vm_ptr == 0 {
+        record_deopt_request(ctx, DeoptReason::AllocationFailure);
         println!("JIT helper: allocate_object - no VM context, deoptimizing");
         return 0;
     }
 
     let Some(class_name) = get_registered_class_name(class_id as usize) else {
+        record_deopt_request(ctx, DeoptReason::HelperUnsupported);
         println!(
             "JIT helper: allocate_object - missing class id {}",
             class_id
@@ -597,11 +797,14 @@ extern "C" fn jit_helper_allocate_object(
         result
     };
 
+    if result.is_none() {
+        record_deopt_request(ctx, DeoptReason::AllocationFailure);
+    }
     value_to_u64(result.map(Value::Reference))
 }
 
 extern "C" fn jit_helper_allocate_array(
-    _ctx: u64,
+    ctx: u64,
     kind: u64,
     descriptor_or_atype: u64,
     argc: u64,
@@ -610,6 +813,7 @@ extern "C" fn jit_helper_allocate_array(
 ) -> u64 {
     let vm_ptr = get_current_vm_ptr();
     if vm_ptr == 0 {
+        record_deopt_request(ctx, DeoptReason::AllocationFailure);
         println!("JIT helper: allocate_array - no VM context, deoptimizing");
         return 0;
     }
@@ -637,6 +841,7 @@ extern "C" fn jit_helper_allocate_array(
                 let Some(component_type) =
                     get_registered_array_descriptor(descriptor_or_atype as usize)
                 else {
+                    record_deopt_request(ctx, DeoptReason::HelperUnsupported);
                     println!(
                         "JIT helper: allocate_array - missing component descriptor {}",
                         descriptor_or_atype
@@ -652,6 +857,7 @@ extern "C" fn jit_helper_allocate_array(
                 let Some(descriptor) =
                     get_registered_array_descriptor(descriptor_or_atype as usize)
                 else {
+                    record_deopt_request(ctx, DeoptReason::HelperUnsupported);
                     println!(
                         "JIT helper: allocate_array - missing array descriptor {}",
                         descriptor_or_atype
@@ -666,11 +872,14 @@ extern "C" fn jit_helper_allocate_array(
         result
     };
 
+    if result.is_none() {
+        record_deopt_request(ctx, DeoptReason::AllocationFailure);
+    }
     value_to_u64(result.map(Value::Reference))
 }
 
 extern "C" fn jit_helper_get_static_field(
-    _ctx: u64,
+    ctx: u64,
     field_ref_id: u64,
     _: u64,
     _: u64,
@@ -679,11 +888,13 @@ extern "C" fn jit_helper_get_static_field(
 ) -> u64 {
     let vm_ptr = get_current_vm_ptr();
     if vm_ptr == 0 {
+        record_deopt_request(ctx, DeoptReason::HelperUnsupported);
         println!("JIT helper: get_static_field - no VM context, deoptimizing");
         return 0;
     }
 
     let Some(field_ref) = get_registered_field_ref(field_ref_id as usize) else {
+        record_deopt_request(ctx, DeoptReason::HelperUnsupported);
         println!(
             "JIT helper: get_static_field - missing field ref {}",
             field_ref_id
@@ -698,11 +909,14 @@ extern "C" fn jit_helper_get_static_field(
         result
     };
 
+    if result.is_none() {
+        record_deopt_request(ctx, DeoptReason::GuardFailure);
+    }
     value_to_u64(result)
 }
 
 extern "C" fn jit_helper_put_static_field(
-    _ctx: u64,
+    ctx: u64,
     field_ref_id: u64,
     value: u64,
     _: u64,
@@ -711,11 +925,13 @@ extern "C" fn jit_helper_put_static_field(
 ) -> u64 {
     let vm_ptr = get_current_vm_ptr();
     if vm_ptr == 0 {
+        record_deopt_request(ctx, DeoptReason::HelperUnsupported);
         println!("JIT helper: put_static_field - no VM context, deoptimizing");
         return 0;
     }
 
     let Some(field_ref) = get_registered_field_ref(field_ref_id as usize) else {
+        record_deopt_request(ctx, DeoptReason::HelperUnsupported);
         println!(
             "JIT helper: put_static_field - missing field ref {}",
             field_ref_id
@@ -725,7 +941,9 @@ extern "C" fn jit_helper_put_static_field(
 
     unsafe {
         let vm = &mut *(vm_ptr as *mut Vm);
-        vm.invoke_jit_put_static_field_ref(&field_ref, value);
+        if !vm.invoke_jit_put_static_field_ref(&field_ref, value) {
+            record_deopt_request(ctx, DeoptReason::GuardFailure);
+        }
         set_current_vm(vm_ptr);
     }
 
@@ -733,7 +951,7 @@ extern "C" fn jit_helper_put_static_field(
 }
 
 extern "C" fn jit_helper_get_instance_field(
-    _ctx: u64,
+    ctx: u64,
     obj: u64,
     field_ref_id: u64,
     _: u64,
@@ -741,17 +959,20 @@ extern "C" fn jit_helper_get_instance_field(
     _: u64,
 ) -> u64 {
     if obj == 0 {
+        record_deopt_request(ctx, DeoptReason::NullCheck);
         println!("JIT helper: get_instance_field - null receiver, deoptimizing");
         return 0;
     }
 
     let vm_ptr = get_current_vm_ptr();
     if vm_ptr == 0 {
+        record_deopt_request(ctx, DeoptReason::HelperUnsupported);
         println!("JIT helper: get_instance_field - no VM context, deoptimizing");
         return 0;
     }
 
     let Some(field_ref) = get_registered_field_ref(field_ref_id as usize) else {
+        record_deopt_request(ctx, DeoptReason::HelperUnsupported);
         println!(
             "JIT helper: get_instance_field - missing field ref {}",
             field_ref_id
@@ -766,11 +987,14 @@ extern "C" fn jit_helper_get_instance_field(
         result
     };
 
+    if result.is_none() {
+        record_deopt_request(ctx, DeoptReason::GuardFailure);
+    }
     value_to_u64(result)
 }
 
 extern "C" fn jit_helper_put_instance_field(
-    _ctx: u64,
+    ctx: u64,
     obj: u64,
     field_ref_id: u64,
     value: u64,
@@ -778,17 +1002,20 @@ extern "C" fn jit_helper_put_instance_field(
     _: u64,
 ) -> u64 {
     if obj == 0 {
+        record_deopt_request(ctx, DeoptReason::NullCheck);
         println!("JIT helper: put_instance_field - null receiver, deoptimizing");
         return 0;
     }
 
     let vm_ptr = get_current_vm_ptr();
     if vm_ptr == 0 {
+        record_deopt_request(ctx, DeoptReason::HelperUnsupported);
         println!("JIT helper: put_instance_field - no VM context, deoptimizing");
         return 0;
     }
 
     let Some(field_ref) = get_registered_field_ref(field_ref_id as usize) else {
+        record_deopt_request(ctx, DeoptReason::HelperUnsupported);
         println!(
             "JIT helper: put_instance_field - missing field ref {}",
             field_ref_id
@@ -798,7 +1025,9 @@ extern "C" fn jit_helper_put_instance_field(
 
     unsafe {
         let vm = &mut *(vm_ptr as *mut Vm);
-        vm.invoke_jit_put_instance_field_ref(&field_ref, obj, value);
+        if !vm.invoke_jit_put_instance_field_ref(&field_ref, obj, value) {
+            record_deopt_request(ctx, DeoptReason::GuardFailure);
+        }
         set_current_vm(vm_ptr);
     }
 
@@ -806,7 +1035,7 @@ extern "C" fn jit_helper_put_instance_field(
 }
 
 extern "C" fn jit_helper_invoke_virtual(
-    _ctx: u64,
+    ctx: u64,
     obj: u64,
     method_ref_id: u64,
     argc: u64,
@@ -814,17 +1043,20 @@ extern "C" fn jit_helper_invoke_virtual(
     arg1: u64,
 ) -> u64 {
     if obj == 0 {
+        record_deopt_request(ctx, DeoptReason::NullCheck);
         println!("JIT helper: invoke_virtual - null receiver, deoptimizing");
         return 0;
     }
 
     let vm_ptr = get_current_vm_ptr();
     if vm_ptr == 0 {
+        record_deopt_request(ctx, DeoptReason::HelperUnsupported);
         println!("JIT helper: invoke_virtual - no VM context, deoptimizing");
         return 0;
     }
 
     let Some(method_ref) = get_registered_method_ref(method_ref_id as usize) else {
+        record_deopt_request(ctx, DeoptReason::HelperUnsupported);
         println!(
             "JIT helper: invoke_virtual - missing method ref {}",
             method_ref_id
@@ -845,11 +1077,14 @@ extern "C" fn jit_helper_invoke_virtual(
         result
     };
 
+    if result.is_none() && !method_ref.descriptor.ends_with('V') {
+        record_deopt_request(ctx, DeoptReason::GuardFailure);
+    }
     value_to_u64(result)
 }
 
 extern "C" fn jit_helper_invoke_special(
-    _ctx: u64,
+    ctx: u64,
     obj: u64,
     method_ref_id: u64,
     argc: u64,
@@ -857,17 +1092,20 @@ extern "C" fn jit_helper_invoke_special(
     arg1: u64,
 ) -> u64 {
     if obj == 0 {
+        record_deopt_request(ctx, DeoptReason::NullCheck);
         println!("JIT helper: invoke_special - null receiver, deoptimizing");
         return 0;
     }
 
     let vm_ptr = get_current_vm_ptr();
     if vm_ptr == 0 {
+        record_deopt_request(ctx, DeoptReason::HelperUnsupported);
         println!("JIT helper: invoke_special - no VM context, deoptimizing");
         return 0;
     }
 
     let Some(method_ref) = get_registered_method_ref(method_ref_id as usize) else {
+        record_deopt_request(ctx, DeoptReason::HelperUnsupported);
         println!(
             "JIT helper: invoke_special - missing method ref {}",
             method_ref_id
@@ -888,11 +1126,14 @@ extern "C" fn jit_helper_invoke_special(
         result
     };
 
+    if result.is_none() && !method_ref.descriptor.ends_with('V') {
+        record_deopt_request(ctx, DeoptReason::GuardFailure);
+    }
     value_to_u64(result)
 }
 
 extern "C" fn jit_helper_invoke_static(
-    _ctx: u64,
+    ctx: u64,
     method_ref_id: u64,
     argc: u64,
     arg0: u64,
@@ -901,11 +1142,13 @@ extern "C" fn jit_helper_invoke_static(
 ) -> u64 {
     let vm_ptr = get_current_vm_ptr();
     if vm_ptr == 0 {
+        record_deopt_request(ctx, DeoptReason::HelperUnsupported);
         println!("JIT helper: invoke_static - no VM context, deoptimizing");
         return 0;
     }
 
     let Some(method_ref) = get_registered_method_ref(method_ref_id as usize) else {
+        record_deopt_request(ctx, DeoptReason::HelperUnsupported);
         println!(
             "JIT helper: invoke_static - missing method ref {}",
             method_ref_id
@@ -926,11 +1169,14 @@ extern "C" fn jit_helper_invoke_static(
         result
     };
 
+    if result.is_none() && !method_ref.descriptor.ends_with('V') {
+        record_deopt_request(ctx, DeoptReason::GuardFailure);
+    }
     value_to_u64(result)
 }
 
 extern "C" fn jit_helper_invoke_interface(
-    _ctx: u64,
+    ctx: u64,
     obj: u64,
     method_ref_id: u64,
     argc: u64,
@@ -938,17 +1184,20 @@ extern "C" fn jit_helper_invoke_interface(
     arg1: u64,
 ) -> u64 {
     if obj == 0 {
+        record_deopt_request(ctx, DeoptReason::NullCheck);
         println!("JIT helper: invoke_interface - null receiver, deoptimizing");
         return 0;
     }
 
     let vm_ptr = get_current_vm_ptr();
     if vm_ptr == 0 {
+        record_deopt_request(ctx, DeoptReason::HelperUnsupported);
         println!("JIT helper: invoke_interface - no VM context, deoptimizing");
         return 0;
     }
 
     let Some(method_ref) = get_registered_method_ref(method_ref_id as usize) else {
+        record_deopt_request(ctx, DeoptReason::HelperUnsupported);
         println!(
             "JIT helper: invoke_interface - missing method ref {}",
             method_ref_id
@@ -969,11 +1218,14 @@ extern "C" fn jit_helper_invoke_interface(
         result
     };
 
+    if result.is_none() && !method_ref.descriptor.ends_with('V') {
+        record_deopt_request(ctx, DeoptReason::GuardFailure);
+    }
     value_to_u64(result)
 }
 
 extern "C" fn jit_helper_invoke_dynamic(
-    _ctx: u64,
+    ctx: u64,
     site_id: u64,
     argc: u64,
     arg0: u64,
@@ -982,11 +1234,13 @@ extern "C" fn jit_helper_invoke_dynamic(
 ) -> u64 {
     let vm_ptr = get_current_vm_ptr();
     if vm_ptr == 0 {
+        record_deopt_request(ctx, DeoptReason::HelperUnsupported);
         println!("JIT helper: invoke_dynamic - no VM context, deoptimizing");
         return 0;
     }
 
     let Some(site) = get_registered_invoke_dynamic_site(site_id as usize) else {
+        record_deopt_request(ctx, DeoptReason::HelperUnsupported);
         println!("JIT helper: invoke_dynamic - missing site {}", site_id);
         return 0;
     };
@@ -1004,11 +1258,14 @@ extern "C" fn jit_helper_invoke_dynamic(
         result
     };
 
+    if result.is_none() && !site.descriptor.ends_with('V') {
+        record_deopt_request(ctx, DeoptReason::GuardFailure);
+    }
     value_to_u64(result)
 }
 
 extern "C" fn jit_helper_invoke_native(
-    _ctx: u64,
+    ctx: u64,
     method_ref_id: u64,
     argc: u64,
     arg0: u64,
@@ -1017,11 +1274,13 @@ extern "C" fn jit_helper_invoke_native(
 ) -> u64 {
     let vm_ptr = get_current_vm_ptr();
     if vm_ptr == 0 {
+        record_deopt_request(ctx, DeoptReason::HelperUnsupported);
         println!("JIT helper: invoke_native - no VM context, deoptimizing");
         return 0;
     }
 
     let Some(method_ref) = get_registered_method_ref(method_ref_id as usize) else {
+        record_deopt_request(ctx, DeoptReason::HelperUnsupported);
         println!(
             "JIT helper: invoke_native - missing method ref {}",
             method_ref_id
@@ -1042,11 +1301,14 @@ extern "C" fn jit_helper_invoke_native(
         result
     };
 
+    if result.is_none() && !method_ref.descriptor.ends_with('V') {
+        record_deopt_request(ctx, DeoptReason::GuardFailure);
+    }
     value_to_u64(result)
 }
 
 extern "C" fn jit_helper_checkcast(
-    _ctx: u64,
+    ctx: u64,
     obj: u64,
     class_id: u64,
     _: u64,
@@ -1055,11 +1317,13 @@ extern "C" fn jit_helper_checkcast(
 ) -> u64 {
     let vm_ptr = get_current_vm_ptr();
     if vm_ptr == 0 {
+        record_deopt_request(ctx, DeoptReason::HelperUnsupported);
         println!("JIT helper: checkcast - no VM context, deoptimizing");
         return 0;
     }
 
     let Some(class_name) = get_registered_class_name(class_id as usize) else {
+        record_deopt_request(ctx, DeoptReason::HelperUnsupported);
         println!("JIT helper: checkcast - missing class id {}", class_id);
         return 0;
     };
@@ -1068,12 +1332,38 @@ extern "C" fn jit_helper_checkcast(
         let vm = &mut *(vm_ptr as *mut Vm);
         let ok = vm.invoke_jit_checkcast(obj, &class_name);
         set_current_vm(vm_ptr);
+        if !ok {
+            record_deopt_request(ctx, DeoptReason::ClassCast);
+        }
         if ok { 1 } else { 0 }
     }
 }
 
+extern "C" fn jit_helper_force_deopt(
+    ctx: u64,
+    raw_reason: u64,
+    passthrough: u64,
+    _: u64,
+    _: u64,
+    _: u64,
+) -> u64 {
+    let reason = match raw_reason {
+        1 => DeoptReason::GuardFailure,
+        2 => DeoptReason::NullCheck,
+        3 => DeoptReason::ClassCast,
+        4 => DeoptReason::MonitorFailure,
+        5 => DeoptReason::AllocationFailure,
+        6 => DeoptReason::HelperUnsupported,
+        7 => DeoptReason::Exception,
+        8 => DeoptReason::SiteFallback,
+        _ => DeoptReason::SiteFallback,
+    };
+    record_deopt_request(ctx, reason);
+    passthrough
+}
+
 extern "C" fn jit_helper_instanceof(
-    _ctx: u64,
+    ctx: u64,
     obj: u64,
     class_id: u64,
     _: u64,
@@ -1082,11 +1372,13 @@ extern "C" fn jit_helper_instanceof(
 ) -> u64 {
     let vm_ptr = get_current_vm_ptr();
     if vm_ptr == 0 {
+        record_deopt_request(ctx, DeoptReason::HelperUnsupported);
         println!("JIT helper: instanceof - no VM context, deoptimizing");
         return 0;
     }
 
     let Some(class_name) = get_registered_class_name(class_id as usize) else {
+        record_deopt_request(ctx, DeoptReason::HelperUnsupported);
         println!("JIT helper: instanceof - missing class id {}", class_id);
         return 0;
     };
@@ -1099,14 +1391,27 @@ extern "C" fn jit_helper_instanceof(
     }
 }
 
-extern "C" fn jit_helper_athrow(_ctx: u64, exception: u64, _: u64, _: u64, _: u64, _: u64) -> u64 {
+extern "C" fn jit_helper_athrow(ctx: u64, exception: u64, _: u64, _: u64, _: u64, _: u64) -> u64 {
+    record_deopt_request(ctx, DeoptReason::Exception);
+    if exception == 0 {
+        let vm_ptr = get_current_vm_ptr();
+        if vm_ptr != 0 {
+            unsafe {
+                let vm = &mut *(vm_ptr as *mut Vm);
+                raise_pending_exception(vm, "java/lang/NullPointerException");
+                set_current_vm(vm_ptr);
+            }
+        }
+        return 0;
+    }
     set_pending_jit_exception(exception);
     0
 }
 
-extern "C" fn jit_helper_monitor_enter(_ctx: u64, obj: u64, _: u64, _: u64, _: u64, _: u64) -> u64 {
+extern "C" fn jit_helper_monitor_enter(ctx: u64, obj: u64, _: u64, _: u64, _: u64, _: u64) -> u64 {
     let vm_ptr = get_current_vm_ptr();
     if vm_ptr == 0 {
+        record_deopt_request(ctx, DeoptReason::HelperUnsupported);
         println!("JIT helper: monitor_enter - no VM context, deoptimizing");
         return 0;
     }
@@ -1115,13 +1420,17 @@ extern "C" fn jit_helper_monitor_enter(_ctx: u64, obj: u64, _: u64, _: u64, _: u
         let vm = &mut *(vm_ptr as *mut Vm);
         let ok = vm.invoke_jit_monitor_enter(obj);
         set_current_vm(vm_ptr);
+        if !ok {
+            record_deopt_request(ctx, DeoptReason::MonitorFailure);
+        }
         if ok { 1 } else { 0 }
     }
 }
 
-extern "C" fn jit_helper_monitor_exit(_ctx: u64, obj: u64, _: u64, _: u64, _: u64, _: u64) -> u64 {
+extern "C" fn jit_helper_monitor_exit(ctx: u64, obj: u64, _: u64, _: u64, _: u64, _: u64) -> u64 {
     let vm_ptr = get_current_vm_ptr();
     if vm_ptr == 0 {
+        record_deopt_request(ctx, DeoptReason::HelperUnsupported);
         println!("JIT helper: monitor_exit - no VM context, deoptimizing");
         return 0;
     }
@@ -1130,6 +1439,9 @@ extern "C" fn jit_helper_monitor_exit(_ctx: u64, obj: u64, _: u64, _: u64, _: u6
         let vm = &mut *(vm_ptr as *mut Vm);
         let ok = vm.invoke_jit_monitor_exit(obj);
         set_current_vm(vm_ptr);
+        if !ok {
+            record_deopt_request(ctx, DeoptReason::MonitorFailure);
+        }
         if ok { 1 } else { 0 }
     }
 }
@@ -1212,16 +1524,26 @@ pub struct JitEntry {
     alloc_size: usize,
     frame_size: usize,
     num_slots: usize,
+    deopt_local_count: usize,
+    deopt_stack_count: usize,
 }
 
 impl JitEntry {
-    pub fn new(code: Vec<u8>, frame_size: usize, num_slots: usize) -> Option<Self> {
+    pub fn new(
+        code: Vec<u8>,
+        frame_size: usize,
+        num_slots: usize,
+        deopt_local_count: usize,
+        deopt_stack_count: usize,
+    ) -> Option<Self> {
         let (code_ptr, alloc_size) = Self::make_executable(&code)?;
         Some(JitEntry {
             code_ptr,
             alloc_size,
             frame_size,
             num_slots,
+            deopt_local_count,
+            deopt_stack_count,
         })
     }
 
@@ -1325,6 +1647,14 @@ impl JitEntry {
     pub fn num_slots(&self) -> usize {
         self.num_slots
     }
+
+    pub fn deopt_local_count(&self) -> usize {
+        self.deopt_local_count
+    }
+
+    pub fn deopt_stack_count(&self) -> usize {
+        self.deopt_stack_count
+    }
 }
 
 impl Drop for JitEntry {
@@ -1371,8 +1701,16 @@ impl JitContext {
     pub fn add_method(&mut self, key: String, code: CompiledCode) -> bool {
         let frame_size = code.frame_size;
         let num_slots = code.stack_slots.len();
+        let deopt_local_count = code.deopt_info.local_kinds.len();
+        let deopt_stack_count = code.deopt_info.max_stack_depth;
 
-        match JitEntry::new(code.code_buffer, frame_size, num_slots) {
+        match JitEntry::new(
+            code.code_buffer,
+            frame_size,
+            num_slots,
+            deopt_local_count,
+            deopt_stack_count,
+        ) {
             Some(entry) => {
                 self.entries.insert(key, entry);
                 true
@@ -1383,6 +1721,10 @@ impl JitContext {
 
     pub fn get_entry(&self, key: &str) -> Option<&JitEntry> {
         self.entries.get(key)
+    }
+
+    pub fn remove_method(&mut self, key: &str) {
+        self.entries.remove(key);
     }
 
     pub fn execute(
@@ -1405,14 +1747,17 @@ impl JitContext {
         let fn_ptr = entry.code_ptr();
         let _ = entry.frame_size();
         clear_pending_jit_exception();
+        clear_last_deopt_snapshot();
         set_current_vm(vm_ptr);
+        let deopt_stack_depth_index = 1 + entry.deopt_local_count();
+        let deopt_stack_base = deopt_stack_depth_index + 1;
+        let mut deopt_buffer =
+            vec![0u64; deopt_stack_base + entry.deopt_stack_count()];
 
         let mut int_args: [u64; 6] = [0; 6];
         let mut int_count = 1;
 
-        // First int slot is the JIT context pointer (currently 0 — runtime helpers
-        // read the live VM through the thread-local in `set_current_vm`).
-        int_args[0] = 0;
+        int_args[0] = deopt_buffer.as_mut_ptr() as u64;
 
         for arg in args {
             match arg {
@@ -1533,6 +1878,22 @@ impl JitContext {
                 }
             }
         };
+        let stack_depth = deopt_buffer
+            .get(deopt_stack_depth_index)
+            .copied()
+            .unwrap_or(0) as usize;
+        let stack_end = deopt_stack_base + stack_depth.min(entry.deopt_stack_count());
+        let deopt_flags = deopt_buffer[0];
+        set_last_deopt_snapshot(DeoptSnapshot {
+            reason: if deopt_flags & DEOPT_PENDING_MARKER != 0 {
+                decode_deopt_reason(deopt_flags)
+            } else {
+                None
+            },
+            pc: (deopt_flags & !(DEOPT_PENDING_MARKER | DEOPT_REASON_MASK)) as usize,
+            locals: deopt_buffer[1..deopt_stack_depth_index].to_vec(),
+            stack: deopt_buffer[deopt_stack_base..stack_end].to_vec(),
+        });
         clear_current_vm();
         result
     }

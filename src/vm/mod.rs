@@ -41,12 +41,21 @@ use crate::vm::jit::JitCompiler;
 use crate::vm::jit::runtime::JitContext;
 use classloader::{BootstrapClassLoader, ClassLoader, LazyClassLoader};
 
-use crate::vm::jit::runtime::{clear_current_vm, set_current_vm, take_pending_jit_exception};
+use crate::vm::jit::runtime::{
+    clear_current_vm, set_current_vm, take_last_deopt_snapshot, take_pending_jit_exception,
+    DeoptReason, DeoptSnapshot,
+};
+use crate::vm::jit::DeoptLocalKind;
 
 static NEXT_THREAD_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 enum JitInvocationResult {
     Returned(Option<Value>),
+    Threw(Reference),
+}
+
+enum InterpreterFallbackResult {
+    Returned(ExecutionResult),
     Threw(Reference),
 }
 
@@ -256,6 +265,81 @@ impl Vm {
         self.runtime.lock().unwrap().jit_executions
     }
 
+    /// Test hook: how many times a specific compiled method deoptimized for a
+    /// given reason.
+    pub fn jit_deopt_count(
+        &self,
+        class_name: &str,
+        method_name: &str,
+        descriptor: &str,
+        reason: DeoptReason,
+    ) -> u64 {
+        let method_key = format!("{}.{}{}", class_name, method_name, descriptor);
+        self.jit
+            .as_ref()
+            .map(|jit| jit.deopt_count(&method_key, reason))
+            .unwrap_or(0)
+    }
+
+    /// Test hook: total deoptimizations observed for a specific compiled
+    /// method across all reasons.
+    pub fn jit_total_deopt_count(
+        &self,
+        class_name: &str,
+        method_name: &str,
+        descriptor: &str,
+    ) -> u64 {
+        let method_key = format!("{}.{}{}", class_name, method_name, descriptor);
+        self.jit
+            .as_ref()
+            .map(|jit| jit.total_deopt_count(&method_key))
+            .unwrap_or(0)
+    }
+
+    /// Test hook: how many times a specific bytecode pc deoptimized for a
+    /// given reason within a compiled method.
+    pub fn jit_deopt_site_count(
+        &self,
+        class_name: &str,
+        method_name: &str,
+        descriptor: &str,
+        pc: usize,
+        reason: DeoptReason,
+    ) -> u64 {
+        let method_key = format!("{}.{}{}", class_name, method_name, descriptor);
+        self.jit
+            .as_ref()
+            .map(|jit| jit.deopt_site_count(&method_key, pc, reason))
+            .unwrap_or(0)
+    }
+
+    /// Test hook: hottest deoptimization bytecode site for a specific method.
+    pub fn jit_hottest_deopt_site(
+        &self,
+        class_name: &str,
+        method_name: &str,
+        descriptor: &str,
+    ) -> Option<(usize, u64)> {
+        let method_key = format!("{}.{}{}", class_name, method_name, descriptor);
+        self.jit
+            .as_ref()
+            .and_then(|jit| jit.hottest_deopt_site(&method_key))
+    }
+
+    /// Test hook: whether the method has been forced back to interpreter-only
+    /// execution after repeated JIT deoptimizations.
+    pub fn jit_interpreter_only_reason(
+        &self,
+        class_name: &str,
+        method_name: &str,
+        descriptor: &str,
+    ) -> Option<DeoptReason> {
+        let method_key = format!("{}.{}{}", class_name, method_name, descriptor);
+        self.jit
+            .as_ref()
+            .and_then(|jit| jit.interpreter_only_reason(&method_key))
+    }
+
     /// Turn off automatic GC. Programs can still call [`Self::request_gc`]
     /// explicitly (for example after a workload that produces transient garbage).
     pub fn disable_gc(&mut self) {
@@ -330,6 +414,289 @@ impl Vm {
         locals
     }
 
+    fn execute_interpreter_fallback(
+        &mut self,
+        method: Method,
+        locals: Vec<Option<Value>>,
+    ) -> Option<InterpreterFallbackResult> {
+        let mut fallback_vm = self.clone();
+        let method = method.with_initial_locals(locals);
+        match fallback_vm.execute(method) {
+            Ok(result) => Some(InterpreterFallbackResult::Returned(result)),
+            Err(VmError::UnhandledException { class_name }) => {
+                let exception_ref = fallback_vm.heap.lock().unwrap().allocate(HeapValue::Object {
+                    class_name,
+                    fields: HashMap::new(),
+                });
+                Some(InterpreterFallbackResult::Threw(exception_ref))
+            }
+            Err(err) => {
+                println!("interpreter fallback failed for JIT exception path: {:?}", err);
+                None
+            }
+        }
+    }
+
+    fn decode_deopt_locals(
+        &self,
+        local_kinds: &[DeoptLocalKind],
+        raw_locals: &[u64],
+    ) -> Vec<Option<Value>> {
+        local_kinds
+            .iter()
+            .enumerate()
+            .map(|(index, kind)| match kind {
+                DeoptLocalKind::Int => Some(Value::Int(raw_locals.get(index).copied().unwrap_or(0) as i32)),
+                DeoptLocalKind::Long => Some(Value::Long(raw_locals.get(index).copied().unwrap_or(0) as i64)),
+                DeoptLocalKind::Float => Some(Value::Float(f32::from_bits(
+                    raw_locals.get(index).copied().unwrap_or(0) as u32,
+                ))),
+                DeoptLocalKind::Double => Some(Value::Double(f64::from_bits(
+                    raw_locals.get(index).copied().unwrap_or(0),
+                ))),
+                DeoptLocalKind::Reference => Some(Value::Reference(Vm::jit_raw_reference(
+                    raw_locals.get(index).copied().unwrap_or(0),
+                ).unwrap_or(Reference::Null))),
+                DeoptLocalKind::Top => None,
+            })
+            .collect()
+    }
+
+    fn decode_deopt_stack(
+        &self,
+        stack_kinds: &[DeoptLocalKind],
+        raw_stack: &[u64],
+    ) -> Vec<Value> {
+        stack_kinds
+            .iter()
+            .enumerate()
+            .filter_map(|(index, kind)| match kind {
+                DeoptLocalKind::Int => Some(Value::Int(raw_stack.get(index).copied().unwrap_or(0) as i32)),
+                DeoptLocalKind::Long => Some(Value::Long(raw_stack.get(index).copied().unwrap_or(0) as i64)),
+                DeoptLocalKind::Float => Some(Value::Float(f32::from_bits(
+                    raw_stack.get(index).copied().unwrap_or(0) as u32,
+                ))),
+                DeoptLocalKind::Double => Some(Value::Double(f64::from_bits(
+                    raw_stack.get(index).copied().unwrap_or(0),
+                ))),
+                DeoptLocalKind::Reference => Some(Value::Reference(Vm::jit_raw_reference(
+                    raw_stack.get(index).copied().unwrap_or(0),
+                ).unwrap_or(Reference::Null))),
+                DeoptLocalKind::Top => None,
+            })
+            .collect()
+    }
+
+    fn run_interpreter_thread(&mut self, thread: &mut Thread) -> Result<ExecutionResult, VmError> {
+        loop {
+            let opcode_pc = thread.current_frame().pc;
+            if opcode_pc >= thread.current_frame().code.len() {
+                return Err(VmError::MissingReturn);
+            }
+            let opcode_byte = thread.current_frame_mut().read_u8()?;
+            let opcode = Opcode::from_byte(opcode_byte).ok_or(VmError::InvalidOpcode {
+                opcode: opcode_byte,
+                pc: opcode_pc,
+            })?;
+
+            match self.execute_opcode(thread, opcode, opcode_pc) {
+                Ok(Some(result)) => return Ok(result),
+                Ok(None) => {}
+                Err(VmError::NullReference) => {
+                    self.throw_new_exception(thread, "java/lang/NullPointerException")?;
+                }
+                Err(VmError::ArrayIndexOutOfBounds { .. }) => {
+                    self.throw_new_exception(thread, "java/lang/ArrayIndexOutOfBoundsException")?;
+                }
+                Err(VmError::NegativeArraySize { .. }) => {
+                    self.throw_new_exception(thread, "java/lang/NegativeArraySizeException")?;
+                }
+                Err(VmError::ClassCastError { .. }) => {
+                    self.throw_new_exception(thread, "java/lang/ClassCastException")?;
+                }
+                Err(VmError::UnhandledException { class_name }) => {
+                    self.throw_new_exception(thread, &class_name)?;
+                }
+                Err(err) => return Err(err),
+            }
+        }
+    }
+
+    fn resume_interpreter_from_deopt(
+        &mut self,
+        method: Method,
+        local_kinds: &[DeoptLocalKind],
+        stack_kinds_by_pc: &HashMap<usize, Vec<DeoptLocalKind>>,
+        snapshot: &DeoptSnapshot,
+        exception_ref: Option<Reference>,
+    ) -> Option<InterpreterFallbackResult> {
+        let locals = self.decode_deopt_locals(local_kinds, &snapshot.locals);
+        let stack_kinds = stack_kinds_by_pc
+            .get(&snapshot.pc)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let stack = self.decode_deopt_stack(stack_kinds, &snapshot.stack);
+        let mut fallback_vm = self.clone();
+        let method = method.with_initial_locals(locals);
+        let mut thread = Thread::new(method);
+        {
+            let frame = thread.current_frame_mut();
+            frame.stack = stack;
+        }
+
+        match exception_ref {
+            Some(exception_ref) => {
+                thread.current_frame_mut().pc = snapshot.pc.saturating_add(1);
+                match fallback_vm.throw_exception(&mut thread, exception_ref) {
+                    Ok(()) => match fallback_vm.run_interpreter_thread(&mut thread) {
+                        Ok(result) => Some(InterpreterFallbackResult::Returned(result)),
+                        Err(VmError::UnhandledException { .. }) => {
+                            Some(InterpreterFallbackResult::Threw(exception_ref))
+                        }
+                        Err(err) => {
+                            println!("deopt resume failed while interpreting handler: {:?}", err);
+                            None
+                        }
+                    },
+                    Err(VmError::UnhandledException { .. }) => {
+                        Some(InterpreterFallbackResult::Threw(exception_ref))
+                    }
+                    Err(err) => {
+                        println!("deopt resume failed while installing exception: {:?}", err);
+                        None
+                    }
+                }
+            }
+            None => {
+                thread.current_frame_mut().pc = snapshot.pc;
+                match fallback_vm.run_interpreter_thread(&mut thread) {
+                    Ok(result) => Some(InterpreterFallbackResult::Returned(result)),
+                    Err(VmError::UnhandledException { class_name }) => {
+                        let exception_ref = fallback_vm.heap.lock().unwrap().allocate(HeapValue::Object {
+                            class_name,
+                            fields: HashMap::new(),
+                        });
+                        Some(InterpreterFallbackResult::Threw(exception_ref))
+                    }
+                    Err(err) => {
+                        println!("deopt resume failed while continuing in interpreter: {:?}", err);
+                        None
+                    }
+                }
+            }
+        }
+    }
+
+    fn apply_jit_deopt_policy(&mut self, method_key: &str, snapshot: Option<&DeoptSnapshot>) {
+        let Some(reason) = snapshot.and_then(|snapshot| snapshot.reason) else {
+            return;
+        };
+
+        if let Some(jit) = self.jit.as_ref() {
+            jit.record_deopt(method_key, reason);
+            let should_abandon = if let Some(snapshot) = snapshot {
+                jit.record_deopt_site(method_key, snapshot.pc, reason);
+                if jit.should_recompile_with_site_fallback(method_key, snapshot.pc, reason) {
+                    jit.invalidate_compiled_method(method_key);
+                    if let Some(jit_context) = self.jit_context.as_mut() {
+                        jit_context.remove_method(method_key);
+                    }
+                }
+                jit.should_abandon_jit_at_site(method_key, snapshot.pc, reason)
+            } else {
+                jit.should_abandon_jit(method_key, reason)
+            };
+            if should_abandon {
+                if let Some(jit_context) = self.jit_context.as_mut() {
+                    jit_context.remove_method(method_key);
+                }
+                jit.mark_interpreter_only(method_key.to_string(), reason);
+            }
+        }
+    }
+
+    fn complete_jit_execution(
+        &mut self,
+        method_key: &str,
+        method: Method,
+        deopt_local_kinds: &[DeoptLocalKind],
+        deopt_stack_kinds_by_pc: &HashMap<usize, Vec<DeoptLocalKind>>,
+        snapshot: Option<DeoptSnapshot>,
+        exception_ref: Option<Reference>,
+        interpreter_locals: Option<Vec<Option<Value>>>,
+        jit_value: Value,
+        ret: crate::vm::jit::runtime::JitReturn,
+    ) -> Option<JitInvocationResult> {
+        let snapshot_ref = snapshot.as_ref();
+        self.apply_jit_deopt_policy(method_key, snapshot_ref);
+
+        if let Some(exception_ref) = exception_ref {
+            if !method.exception_handlers.is_empty() {
+                if let Some(snapshot) = snapshot_ref {
+                    match self.resume_interpreter_from_deopt(
+                        method.clone(),
+                        deopt_local_kinds,
+                        deopt_stack_kinds_by_pc,
+                        snapshot,
+                        Some(exception_ref),
+                    ) {
+                        Some(InterpreterFallbackResult::Returned(ExecutionResult::Void)) => {
+                            return Some(JitInvocationResult::Returned(None));
+                        }
+                        Some(InterpreterFallbackResult::Returned(ExecutionResult::Value(value))) => {
+                            return Some(JitInvocationResult::Returned(Some(value)));
+                        }
+                        Some(InterpreterFallbackResult::Threw(exception_ref)) => {
+                            return Some(JitInvocationResult::Threw(exception_ref));
+                        }
+                        None => {}
+                    }
+                } else if let Some(locals) = interpreter_locals {
+                    match self.execute_interpreter_fallback(method.clone(), locals) {
+                        Some(InterpreterFallbackResult::Returned(ExecutionResult::Void)) => {
+                            return Some(JitInvocationResult::Returned(None));
+                        }
+                        Some(InterpreterFallbackResult::Returned(ExecutionResult::Value(value))) => {
+                            return Some(JitInvocationResult::Returned(Some(value)));
+                        }
+                        Some(InterpreterFallbackResult::Threw(exception_ref)) => {
+                            return Some(JitInvocationResult::Threw(exception_ref));
+                        }
+                        None => {}
+                    }
+                }
+            }
+            return Some(JitInvocationResult::Threw(exception_ref));
+        }
+
+        if let Some(snapshot) = snapshot_ref.filter(|snapshot| snapshot.reason.is_some()) {
+            match self.resume_interpreter_from_deopt(
+                method,
+                deopt_local_kinds,
+                deopt_stack_kinds_by_pc,
+                snapshot,
+                None,
+            ) {
+                Some(InterpreterFallbackResult::Returned(ExecutionResult::Void)) => {
+                    return Some(JitInvocationResult::Returned(None));
+                }
+                Some(InterpreterFallbackResult::Returned(ExecutionResult::Value(value))) => {
+                    return Some(JitInvocationResult::Returned(Some(value)));
+                }
+                Some(InterpreterFallbackResult::Threw(exception_ref)) => {
+                    return Some(JitInvocationResult::Threw(exception_ref));
+                }
+                None => {}
+            }
+        }
+
+        if matches!(ret, crate::vm::jit::runtime::JitReturn::Void) {
+            Some(JitInvocationResult::Returned(None))
+        } else {
+            Some(JitInvocationResult::Returned(Some(jit_value)))
+        }
+    }
+
     fn try_execute_jit_method(
         &mut self,
         method: &Method,
@@ -339,6 +706,8 @@ impl Vm {
         let code = self.jit.as_ref()?.get_or_compile(method)?;
         let vm_ptr = self as *mut Vm as u64;
         let jit_context = self.jit_context.as_mut()?;
+        let deopt_local_kinds = code.deopt_info.local_kinds.clone();
+        let deopt_stack_kinds_by_pc = code.deopt_info.stack_kinds_by_pc.clone();
 
         if jit_context.get_entry(&method_key).is_none()
             && !jit_context.add_method(method_key.clone(), code)
@@ -349,16 +718,18 @@ impl Vm {
         let ret = crate::vm::jit::runtime::JitReturn::from_descriptor(&method.descriptor);
         let result = jit_context.execute_typed(vm_ptr, &method_key, args, ret)?;
         self.runtime.lock().unwrap().jit_executions += 1;
-
-        if let Some(exception_ref) = take_pending_jit_exception() {
-            return Some(JitInvocationResult::Threw(exception_ref));
-        }
-
-        if matches!(ret, crate::vm::jit::runtime::JitReturn::Void) {
-            Some(JitInvocationResult::Returned(None))
-        } else {
-            Some(JitInvocationResult::Returned(Some(result)))
-        }
+        let snapshot = take_last_deopt_snapshot();
+        self.complete_jit_execution(
+            &method_key,
+            method.clone(),
+            &deopt_local_kinds,
+            &deopt_stack_kinds_by_pc,
+            snapshot,
+            take_pending_jit_exception(),
+            Some(Vm::args_to_locals(args.to_vec())),
+            result,
+            ret,
+        )
     }
 
     pub(crate) fn invoke_jit_static_method_ref(
@@ -1592,14 +1963,30 @@ impl Vm {
                                 jit_context.execute_typed(vm_ptr, &method_key, &jit_args, ret)
                             {
                                 self.runtime.lock().unwrap().jit_executions += 1;
-                                if let Some(exception_ref) = take_pending_jit_exception() {
-                                    let class_name = self.get_object_class(exception_ref)?;
-                                    return Err(VmError::UnhandledException { class_name });
+                                let snapshot = take_last_deopt_snapshot();
+                                match self.complete_jit_execution(
+                                    &method_key,
+                                    method_clone.clone(),
+                                    &code.deopt_info.local_kinds,
+                                    &code.deopt_info.stack_kinds_by_pc,
+                                    snapshot,
+                                    take_pending_jit_exception(),
+                                    Some(thread.current_frame().locals.clone()),
+                                    result,
+                                    ret,
+                                ) {
+                                    Some(JitInvocationResult::Returned(None)) => {
+                                        return Ok(ExecutionResult::Void);
+                                    }
+                                    Some(JitInvocationResult::Returned(Some(value))) => {
+                                        return Ok(ExecutionResult::Value(value));
+                                    }
+                                    Some(JitInvocationResult::Threw(exception_ref)) => {
+                                        let class_name = self.get_object_class(exception_ref)?;
+                                        return Err(VmError::UnhandledException { class_name });
+                                    }
+                                    None => {}
                                 }
-                                if matches!(ret, crate::vm::jit::runtime::JitReturn::Void) {
-                                    return Ok(ExecutionResult::Void);
-                                }
-                                return Ok(ExecutionResult::Value(result));
                             }
                         }
                     } else {
@@ -1882,59 +2269,128 @@ impl Vm {
             }
             Opcode::Pop => execute_pop(thread)?,
             Opcode::Pop2 => {
-                let _ = thread.current_frame_mut().pop()?;
-                let _ = thread.current_frame_mut().pop()?;
+                let top = thread.current_frame_mut().pop()?;
+                if !matches!(top, Value::Long(_) | Value::Double(_)) {
+                    let _ = thread.current_frame_mut().pop()?;
+                }
             }
             Opcode::Dup => execute_dup(thread)?,
             Opcode::DupX1 => {
                 let top = thread.current_frame_mut().pop()?;
                 let below = thread.current_frame_mut().pop()?;
+                if matches!(top, Value::Long(_) | Value::Double(_))
+                    || matches!(below, Value::Long(_) | Value::Double(_))
+                {
+                    return Err(VmError::VerificationError {
+                        pc: opcode_pc,
+                        reason: "dup_x1 requires two category-1 values".to_string(),
+                    });
+                }
                 thread.current_frame_mut().push(top)?;
                 thread.current_frame_mut().push(below)?;
                 thread.current_frame_mut().push(top)?;
             }
             Opcode::Dup2 => {
                 let top = thread.current_frame_mut().pop()?;
-                let below = thread.current_frame_mut().pop()?;
-                thread.current_frame_mut().push(below)?;
-                thread.current_frame_mut().push(top)?;
-                thread.current_frame_mut().push(below)?;
-                thread.current_frame_mut().push(top)?;
+                if matches!(top, Value::Long(_) | Value::Double(_)) {
+                    thread.current_frame_mut().push(top)?;
+                    thread.current_frame_mut().push(top)?;
+                } else {
+                    let below = thread.current_frame_mut().pop()?;
+                    thread.current_frame_mut().push(below)?;
+                    thread.current_frame_mut().push(top)?;
+                    thread.current_frame_mut().push(below)?;
+                    thread.current_frame_mut().push(top)?;
+                }
             }
             Opcode::DupX2 => {
                 let v1 = thread.current_frame_mut().pop()?;
                 let v2 = thread.current_frame_mut().pop()?;
-                let v3 = thread.current_frame_mut().pop()?;
-                thread.current_frame_mut().push(v1)?;
-                thread.current_frame_mut().push(v3)?;
-                thread.current_frame_mut().push(v2)?;
-                thread.current_frame_mut().push(v1)?;
+                if matches!(v1, Value::Long(_) | Value::Double(_)) {
+                    return Err(VmError::VerificationError {
+                        pc: opcode_pc,
+                        reason: "dup_x2 requires top value to be category-1".to_string(),
+                    });
+                }
+                if matches!(v2, Value::Long(_) | Value::Double(_)) {
+                    thread.current_frame_mut().push(v1)?;
+                    thread.current_frame_mut().push(v2)?;
+                    thread.current_frame_mut().push(v1)?;
+                } else {
+                    let v3 = thread.current_frame_mut().pop()?;
+                    if matches!(v3, Value::Long(_) | Value::Double(_)) {
+                        return Err(VmError::VerificationError {
+                            pc: opcode_pc,
+                            reason: "dup_x2 requires either [cat1, cat2] or [cat1, cat1, cat1]"
+                                .to_string(),
+                        });
+                    }
+                    thread.current_frame_mut().push(v1)?;
+                    thread.current_frame_mut().push(v3)?;
+                    thread.current_frame_mut().push(v2)?;
+                    thread.current_frame_mut().push(v1)?;
+                }
             }
             Opcode::Dup2X1 => {
                 let v1 = thread.current_frame_mut().pop()?;
                 let v2 = thread.current_frame_mut().pop()?;
-                let v3 = thread.current_frame_mut().pop()?;
-                thread.current_frame_mut().push(v2)?;
-                thread.current_frame_mut().push(v1)?;
-                thread.current_frame_mut().push(v3)?;
-                thread.current_frame_mut().push(v2)?;
-                thread.current_frame_mut().push(v1)?;
+                if matches!(v1, Value::Long(_) | Value::Double(_)) {
+                    thread.current_frame_mut().push(v1)?;
+                    thread.current_frame_mut().push(v2)?;
+                    thread.current_frame_mut().push(v1)?;
+                } else {
+                    let v3 = thread.current_frame_mut().pop()?;
+                    thread.current_frame_mut().push(v2)?;
+                    thread.current_frame_mut().push(v1)?;
+                    thread.current_frame_mut().push(v3)?;
+                    thread.current_frame_mut().push(v2)?;
+                    thread.current_frame_mut().push(v1)?;
+                }
             }
             Opcode::Dup2X2 => {
                 let v1 = thread.current_frame_mut().pop()?;
                 let v2 = thread.current_frame_mut().pop()?;
-                let v3 = thread.current_frame_mut().pop()?;
-                let v4 = thread.current_frame_mut().pop()?;
-                thread.current_frame_mut().push(v2)?;
-                thread.current_frame_mut().push(v1)?;
-                thread.current_frame_mut().push(v4)?;
-                thread.current_frame_mut().push(v3)?;
-                thread.current_frame_mut().push(v2)?;
-                thread.current_frame_mut().push(v1)?;
+                if matches!(v1, Value::Long(_) | Value::Double(_)) {
+                    if matches!(v2, Value::Long(_) | Value::Double(_)) {
+                        thread.current_frame_mut().push(v1)?;
+                        thread.current_frame_mut().push(v2)?;
+                        thread.current_frame_mut().push(v1)?;
+                    } else {
+                        let v3 = thread.current_frame_mut().pop()?;
+                        thread.current_frame_mut().push(v1)?;
+                        thread.current_frame_mut().push(v3)?;
+                        thread.current_frame_mut().push(v2)?;
+                        thread.current_frame_mut().push(v1)?;
+                    }
+                } else if matches!(v2, Value::Long(_) | Value::Double(_)) {
+                    let v3 = thread.current_frame_mut().pop()?;
+                    thread.current_frame_mut().push(v2)?;
+                    thread.current_frame_mut().push(v1)?;
+                    thread.current_frame_mut().push(v3)?;
+                    thread.current_frame_mut().push(v2)?;
+                    thread.current_frame_mut().push(v1)?;
+                } else {
+                    let v3 = thread.current_frame_mut().pop()?;
+                    let v4 = thread.current_frame_mut().pop()?;
+                    thread.current_frame_mut().push(v2)?;
+                    thread.current_frame_mut().push(v1)?;
+                    thread.current_frame_mut().push(v4)?;
+                    thread.current_frame_mut().push(v3)?;
+                    thread.current_frame_mut().push(v2)?;
+                    thread.current_frame_mut().push(v1)?;
+                }
             }
             Opcode::Swap => {
                 let top = thread.current_frame_mut().pop()?;
                 let below = thread.current_frame_mut().pop()?;
+                if matches!(top, Value::Long(_) | Value::Double(_))
+                    || matches!(below, Value::Long(_) | Value::Double(_))
+                {
+                    return Err(VmError::VerificationError {
+                        pc: opcode_pc,
+                        reason: "swap requires two category-1 values".to_string(),
+                    });
+                }
                 thread.current_frame_mut().push(top)?;
                 thread.current_frame_mut().push(below)?;
             }
@@ -3448,10 +3904,12 @@ mod tests {
     use std::sync::atomic::Ordering;
     use std::sync::mpsc;
     use std::time::Duration;
+    use crate::vm::jit::runtime::DeoptReason;
 
     use super::{
-        ExecutionResult, FieldRef, HeapValue, Method, MethodRef, NEXT_THREAD_ID, Reference,
-        RuntimeClass, Value, Vm, VmError,
+        DeoptLocalKind, DeoptSnapshot, ExecutionResult, FieldRef, HeapValue,
+        InterpreterFallbackResult, Method, MethodRef, NEXT_THREAD_ID, Reference, RuntimeClass,
+        Value, Vm, VmError,
     };
 
     #[test]
@@ -4402,5 +4860,44 @@ mod tests {
         // But a manual request still works.
         vm.request_gc();
         assert_eq!(vm.gc_stats().collections, 1);
+    }
+
+    #[test]
+    fn resumes_interpreter_from_deopt_with_operand_stack_state() {
+        let mut vm = Vm::new().expect("failed to create VM");
+        let method = Method::new(
+            [
+                0x04, // iconst_1
+                0x05, // iconst_2
+                0x60, // iadd
+                0xac, // ireturn
+            ],
+            0,
+            2,
+        )
+        .with_metadata("jit/Test", "resume", "()I", 0);
+        let mut stack_kinds_by_pc = HashMap::new();
+        stack_kinds_by_pc.insert(2, vec![DeoptLocalKind::Int, DeoptLocalKind::Int]);
+        let snapshot = DeoptSnapshot {
+            reason: Some(DeoptReason::GuardFailure),
+            pc: 2,
+            locals: Vec::new(),
+            stack: vec![1, 2],
+        };
+
+        let resumed = vm.resume_interpreter_from_deopt(
+            method,
+            &[],
+            &stack_kinds_by_pc,
+            &snapshot,
+            None,
+        );
+
+        match resumed {
+            Some(InterpreterFallbackResult::Returned(ExecutionResult::Value(Value::Int(value)))) => {
+                assert_eq!(value, 3);
+            }
+            _ => panic!("unexpected deopt resume result"),
+        }
     }
 }

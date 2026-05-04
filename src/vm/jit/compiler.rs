@@ -1,18 +1,28 @@
-use cranelift::codegen::ir::{AbiParam, Signature, TrapCode, UserFuncName};
+use cranelift::codegen::ir::{AbiParam, BlockArg, Signature, TrapCode, UserFuncName};
 use cranelift::codegen::{Context, isa::TargetIsa};
 use cranelift::prelude::*;
-use cranelift_frontend::{FunctionBuilderContext, Variable};
+use cranelift_frontend::{FunctionBuilderContext, Switch, Variable};
 
-use super::{CompiledCode, DeoptimizationInfo, GuardCheck, GuardType, JitError, StackSlot};
+use super::{
+    CompiledCode, DeoptLocalKind, DeoptimizationInfo, GuardCheck, GuardType, JitError, StackSlot,
+};
+use crate::vm::jit::runtime::DeoptReason;
 use crate::vm::types::Method;
 
 const X64_ALIGN: u16 = 16;
 const JIT_TRAP_CODE: TrapCode = TrapCode::unwrap_user(1);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StackCategory {
+    Category1,
+    Category2,
+}
+
 pub struct BytecodeCompiler<'a> {
     method: &'a Method,
     builder: &'a mut FunctionBuilder<'a>,
     value_stack: Vec<Value>,
+    value_stack_kinds: Vec<StackCategory>,
     frame_size: usize,
     stack_slots: Vec<StackSlot>,
     guard_checks: Vec<GuardCheck>,
@@ -22,7 +32,11 @@ pub struct BytecodeCompiler<'a> {
     context_var: Variable,
     local_vars: Vec<Variable>,
     block_map: std::collections::HashMap<usize, Block>,
+    block_stack_types: std::collections::HashMap<usize, Vec<Type>>,
+    block_stack_kinds: std::collections::HashMap<usize, Vec<StackCategory>>,
+    deopt_stack_kinds_by_pc: std::collections::HashMap<usize, Vec<DeoptLocalKind>>,
     branch_targets: std::collections::HashSet<usize>,
+    site_fallbacks: std::collections::HashMap<usize, DeoptReason>,
 }
 
 impl<'a> BytecodeCompiler<'a> {
@@ -30,11 +44,13 @@ impl<'a> BytecodeCompiler<'a> {
         method: &'a Method,
         builder: &'a mut FunctionBuilder<'a>,
         arg_types: Vec<u8>,
+        site_fallbacks: std::collections::HashMap<usize, DeoptReason>,
     ) -> Self {
         Self {
             method,
             builder,
             value_stack: Vec::new(),
+            value_stack_kinds: Vec::new(),
             frame_size: 0,
             stack_slots: Vec::new(),
             guard_checks: Vec::new(),
@@ -44,7 +60,11 @@ impl<'a> BytecodeCompiler<'a> {
             context_var: Variable::new(0),
             local_vars: Vec::new(),
             block_map: std::collections::HashMap::new(),
+            block_stack_types: std::collections::HashMap::new(),
+            block_stack_kinds: std::collections::HashMap::new(),
+            deopt_stack_kinds_by_pc: std::collections::HashMap::new(),
             branch_targets: std::collections::HashSet::new(),
+            site_fallbacks,
         }
     }
 
@@ -69,7 +89,7 @@ impl<'a> BytecodeCompiler<'a> {
 
     fn collect_branch_target_for_opcode(&mut self, pc: usize, opcode: u8) {
         match opcode {
-            0x99..=0x9e | 0x9f..=0xa6 => {
+            0x99..=0x9e | 0x9f..=0xa6 | 0xc6 | 0xc7 => {
                 let offset =
                     ((self.method.code[pc + 1] as i16) << 8) | (self.method.code[pc + 2] as i16);
                 let target = (pc as i32 + offset as i32) as usize;
@@ -82,15 +102,20 @@ impl<'a> BytecodeCompiler<'a> {
                 let target = (pc as i32 + offset as i32) as usize;
                 self.branch_targets.insert(target);
             }
+            0xc8 | 0xc9 => {
+                let offset = self.read_i32(pc + 1);
+                let target = (pc as i32 + offset) as usize;
+                self.branch_targets.insert(target);
+            }
             0xaa => {
-                let default_offset = ((self.method.code[pc + 1] as i32) << 24)
-                    | ((self.method.code[pc + 2] as i32) << 16)
-                    | ((self.method.code[pc + 3] as i32) << 8)
-                    | (self.method.code[pc + 4] as i32);
+                let mut new_pc = (pc + 4) & !3;
+                let default_offset = ((self.method.code[new_pc] as i32) << 24)
+                    | ((self.method.code[new_pc + 1] as i32) << 16)
+                    | ((self.method.code[new_pc + 2] as i32) << 8)
+                    | (self.method.code[new_pc + 3] as i32);
                 let default_target = (pc as i32 + default_offset) as usize;
                 self.branch_targets.insert(default_target);
-
-                let mut new_pc = (pc + 4) & !3;
+                new_pc += 4;
                 let low = ((self.method.code[new_pc] as i32) << 24)
                     | ((self.method.code[new_pc + 1] as i32) << 16)
                     | ((self.method.code[new_pc + 2] as i32) << 8)
@@ -112,14 +137,14 @@ impl<'a> BytecodeCompiler<'a> {
                 }
             }
             0xab => {
-                let default_offset = ((self.method.code[pc + 1] as i32) << 24)
-                    | ((self.method.code[pc + 2] as i32) << 16)
-                    | ((self.method.code[pc + 3] as i32) << 8)
-                    | (self.method.code[pc + 4] as i32);
+                let mut new_pc = (pc + 4) & !3;
+                let default_offset = ((self.method.code[new_pc] as i32) << 24)
+                    | ((self.method.code[new_pc + 1] as i32) << 16)
+                    | ((self.method.code[new_pc + 2] as i32) << 8)
+                    | (self.method.code[new_pc + 3] as i32);
                 let default_target = (pc as i32 + default_offset) as usize;
                 self.branch_targets.insert(default_target);
-
-                let mut new_pc = (pc + 4) & !3;
+                new_pc += 4;
                 let num_pairs = ((self.method.code[new_pc] as i32) << 24)
                     | ((self.method.code[new_pc + 1] as i32) << 16)
                     | ((self.method.code[new_pc + 2] as i32) << 8)
@@ -145,6 +170,8 @@ impl<'a> BytecodeCompiler<'a> {
 
     fn create_blocks(&mut self) -> Result<(), JitError> {
         self.block_map.clear();
+        self.block_stack_types.clear();
+        self.block_stack_kinds.clear();
         for &target in &self.branch_targets {
             let block = self.builder.create_block();
             self.block_map.insert(target, block);
@@ -166,6 +193,7 @@ impl<'a> BytecodeCompiler<'a> {
                 if Some(block) != current_block {
                     current_block = Some(block);
                     self.builder.switch_to_block(block);
+                    self.restore_block_stack(pc, block)?;
                 }
             } else if current_block.is_none() {
                 let opcode = code[pc];
@@ -182,8 +210,7 @@ impl<'a> BytecodeCompiler<'a> {
             if self.opcode_terminates_block(opcode) {
                 current_block = None;
             } else if next_pc < code.len() && self.branch_targets.contains(&next_pc) {
-                let fall_block = *self.block_map.get(&next_pc).unwrap();
-                self.builder.ins().jump(fall_block, &[]);
+                self.branch_to_pc(next_pc)?;
                 current_block = None;
             }
 
@@ -200,7 +227,21 @@ impl<'a> BytecodeCompiler<'a> {
     fn opcode_terminates_block(&self, opcode: u8) -> bool {
         matches!(
             opcode,
-            0x99..=0xa8 | 0xaa | 0xab | 0xac | 0xad | 0xae | 0xaf | 0xb0 | 0xb1 | 0xbf | 0xff
+            0x99..=0xa8
+                | 0xaa
+                | 0xab
+                | 0xac
+                | 0xad
+                | 0xae
+                | 0xaf
+                | 0xb0
+                | 0xb1
+                | 0xbf
+                | 0xc6
+                | 0xc7
+                | 0xc8
+                | 0xc9
+                | 0xff
         )
     }
 
@@ -213,6 +254,7 @@ impl<'a> BytecodeCompiler<'a> {
     fn get_switch_targets_for_pc(&self, pc: usize, code: &[u8]) -> Vec<usize> {
         let mut targets = Vec::new();
         let mut offset = (pc + 4) & !3;
+        offset += 4;
         let low = ((code[offset] as i32) << 24)
             | ((code[offset + 1] as i32) << 16)
             | ((code[offset + 2] as i32) << 8)
@@ -235,6 +277,9 @@ impl<'a> BytecodeCompiler<'a> {
     }
 
     fn lower_opcode(&mut self, pc: usize, opcode: u8) -> Result<(), JitError> {
+        self.emit_deopt_pc(self.pc_offset);
+        self.emit_deopt_stack_state();
+        self.record_deopt_stack_kinds(pc);
         match opcode {
             0x00 => Ok(()), // nop
             0x01 => self.lower_aconst_null(),
@@ -352,7 +397,13 @@ impl<'a> BytecodeCompiler<'a> {
             0x99..=0x9e => self.lower_if_icmp(opcode),
             0x9f..=0xa6 => self.lower_if_icmp(opcode),
             0xa7 => self.lower_goto(),
-            0xa8 => self.lower_goto(),
+            0xa8 => Err(JitError::CompilationFailed(
+                "jsr subroutines stay on the interpreter until return-address SSA is supported"
+                    .into(),
+            )),
+            0xa9 => Err(JitError::CompilationFailed(
+                "ret stays on the interpreter until return-address SSA is supported".into(),
+            )),
             0xaa => self.lower_tableswitch(),
             0xab => self.lower_lookupswitch(),
             0xac => self.lower_ireturn(),
@@ -379,7 +430,14 @@ impl<'a> BytecodeCompiler<'a> {
             0xc1 => self.lower_instanceof(),
             0xc2 => self.lower_monitorenter(),
             0xc3 => self.lower_monitorexit(),
+            0xc4 => self.lower_wide(),
+            0xc6 | 0xc7 => self.lower_if_null(opcode),
+            0xc8 => self.lower_goto_w(),
             0xc5 => self.lower_multianewarray(),
+            0xc9 => Err(JitError::CompilationFailed(
+                "jsr_w subroutines stay on the interpreter until return-address SSA is supported"
+                    .into(),
+            )),
             0xfe => self.lower_invokenative(),
             0xff => self.lower_athrow(),
             _ => Err(JitError::CompilationFailed(format!(
@@ -400,11 +458,17 @@ impl<'a> BytecodeCompiler<'a> {
             0x10 | 0x12 | 0x15..=0x19 | 0x36..=0x3a | 0xa9 | 0xbc => pc + 2,
             0x11 | 0x13 | 0x14 | 0x84 => pc + 3,
             0x99..=0xa8 | 0xc6 | 0xc7 => pc + 3,
+            0xc4 => {
+                let inner = self.method.code[pc + 1];
+                if inner == 0x84 { pc + 6 } else { pc + 4 }
+            }
+            0xc8 | 0xc9 => pc + 5,
             0xb2..=0xb8 | 0xbb | 0xbd | 0xc0 | 0xc1 | 0xfe => pc + 3,
             0xb9 | 0xba => pc + 5,
             0xc5 => pc + 4,
             0xaa => {
                 let mut new_pc = (pc + 4) & !3;
+                new_pc += 4;
                 let low = ((self.method.code[new_pc] as i32) << 24)
                     | ((self.method.code[new_pc + 1] as i32) << 16)
                     | ((self.method.code[new_pc + 2] as i32) << 8)
@@ -432,11 +496,202 @@ impl<'a> BytecodeCompiler<'a> {
     }
 
     fn push(&mut self, value: Value) {
+        let ty = self.builder.func.dfg.value_type(value);
+        let kind = if ty == types::F64 {
+            StackCategory::Category2
+        } else {
+            StackCategory::Category1
+        };
+        self.push_with_kind(value, kind);
+    }
+
+    fn push_wide(&mut self, value: Value) {
+        self.push_with_kind(value, StackCategory::Category2);
+    }
+
+    fn push_with_kind(&mut self, value: Value, kind: StackCategory) {
         self.value_stack.push(value);
+        self.value_stack_kinds.push(kind);
     }
 
     fn pop(&mut self) -> Value {
+        self.value_stack_kinds.pop().expect("stack kind underflow");
         self.value_stack.pop().expect("stack underflow")
+    }
+
+    fn pop_with_kind(&mut self) -> (Value, StackCategory) {
+        let kind = self.value_stack_kinds.pop().expect("stack kind underflow");
+        let value = self.value_stack.pop().expect("stack underflow");
+        (value, kind)
+    }
+
+    fn stack_args_from_values(values: &[Value]) -> Vec<BlockArg> {
+        values.iter().copied().map(BlockArg::Value).collect()
+    }
+
+    fn ensure_block_stack_signature(
+        &mut self,
+        target_pc: usize,
+        block: Block,
+        stack_values: &[Value],
+        stack_kinds: &[StackCategory],
+    ) -> Result<(), JitError> {
+        if stack_values.len() != stack_kinds.len() {
+            return Err(JitError::CompilationFailed(format!(
+                "internal error: stack values/kinds length mismatch at pc {target_pc}"
+            )));
+        }
+        let incoming_types: Vec<Type> = stack_values
+            .iter()
+            .map(|value| self.builder.func.dfg.value_type(*value))
+            .collect();
+
+        if let Some(expected_types) = self.block_stack_types.get(&target_pc) {
+            if expected_types.len() != incoming_types.len() {
+                return Err(JitError::CompilationFailed(format!(
+                    "block at pc {target_pc} expects stack depth {}, got {}",
+                    expected_types.len(),
+                    incoming_types.len()
+                )));
+            }
+
+            for (index, (expected, incoming)) in expected_types
+                .iter()
+                .zip(incoming_types.iter())
+                .enumerate()
+            {
+                if expected != incoming {
+                    return Err(JitError::CompilationFailed(format!(
+                        "block at pc {target_pc} stack slot {index} expects {expected}, got {incoming}"
+                    )));
+                }
+            }
+
+            if let Some(expected_kinds) = self.block_stack_kinds.get(&target_pc) {
+                for (index, (expected, incoming)) in
+                    expected_kinds.iter().zip(stack_kinds.iter()).enumerate()
+                {
+                    if expected != incoming {
+                        return Err(JitError::CompilationFailed(format!(
+                            "block at pc {target_pc} stack slot {index} expects {:?}, got {:?}",
+                            expected, incoming
+                        )));
+                    }
+                }
+            }
+        } else {
+            for ty in &incoming_types {
+                self.builder.append_block_param(block, *ty);
+            }
+            self.block_stack_types.insert(target_pc, incoming_types);
+            self.block_stack_kinds
+                .insert(target_pc, stack_kinds.to_vec());
+        }
+
+        Ok(())
+    }
+
+    fn restore_block_stack(&mut self, pc: usize, block: Block) -> Result<(), JitError> {
+        let params = self.builder.block_params(block).to_vec();
+        if let Some(expected_types) = self.block_stack_types.get(&pc) {
+            if expected_types.len() != params.len() {
+                return Err(JitError::CompilationFailed(format!(
+                    "block at pc {pc} has {} params, expected {}",
+                    params.len(),
+                    expected_types.len()
+                )));
+            }
+
+            for (index, (param, expected)) in params.iter().zip(expected_types.iter()).enumerate() {
+                let actual = self.builder.func.dfg.value_type(*param);
+                if &actual != expected {
+                    return Err(JitError::CompilationFailed(format!(
+                        "block at pc {pc} param {index} has type {actual}, expected {expected}"
+                    )));
+                }
+            }
+            if let Some(expected_kinds) = self.block_stack_kinds.get(&pc) {
+                self.value_stack_kinds = expected_kinds.clone();
+            } else {
+                self.value_stack_kinds = vec![StackCategory::Category1; params.len()];
+            }
+        } else if !params.is_empty() {
+            self.block_stack_types.insert(
+                pc,
+                params
+                    .iter()
+                    .map(|param| self.builder.func.dfg.value_type(*param))
+                    .collect(),
+            );
+            self.block_stack_kinds
+                .insert(pc, vec![StackCategory::Category1; params.len()]);
+            self.value_stack_kinds = vec![StackCategory::Category1; params.len()];
+        } else {
+            self.value_stack_kinds.clear();
+        }
+
+        self.value_stack = params;
+        Ok(())
+    }
+
+    fn branch_to_pc(&mut self, target_pc: usize) -> Result<(), JitError> {
+        let stack_values = self.value_stack.clone();
+        let stack_kinds = self.value_stack_kinds.clone();
+        self.branch_values_to_pc(target_pc, &stack_values, &stack_kinds)
+    }
+
+    fn branch_values_to_pc(
+        &mut self,
+        target_pc: usize,
+        stack_values: &[Value],
+        stack_kinds: &[StackCategory],
+    ) -> Result<(), JitError> {
+        let block = self.create_block_for_pc(target_pc);
+        self.ensure_block_stack_signature(target_pc, block, &stack_values, stack_kinds)?;
+        let stack_args = Self::stack_args_from_values(&stack_values);
+        self.builder.ins().jump(block, &stack_args);
+        Ok(())
+    }
+
+    fn branch_conditional_to_pcs(
+        &mut self,
+        condition: Value,
+        true_pc: usize,
+        false_pc: usize,
+    ) -> Result<(), JitError> {
+        let true_block = self.create_block_for_pc(true_pc);
+        let false_block = self.create_block_for_pc(false_pc);
+        let stack_values = self.value_stack.clone();
+        let stack_kinds = self.value_stack_kinds.clone();
+
+        self.ensure_block_stack_signature(true_pc, true_block, &stack_values, &stack_kinds)?;
+        self.ensure_block_stack_signature(false_pc, false_block, &stack_values, &stack_kinds)?;
+
+        let true_args = Self::stack_args_from_values(&stack_values);
+        let false_args = Self::stack_args_from_values(&stack_values);
+
+        self.builder
+            .ins()
+            .brif(condition, true_block, &true_args, false_block, &false_args);
+        Ok(())
+    }
+
+    fn push_descriptor_value(&mut self, value: Value, descriptor: &str) {
+        match descriptor.as_bytes().first().copied() {
+            Some(b'J') => self.push_wide(value),
+            _ => self.push(value),
+        }
+    }
+
+    fn push_method_result_value(&mut self, value: Value, method_desc: &str) -> Result<(), JitError> {
+        match crate::vm::types::parse_return_type(method_desc)
+            .map_err(|e| JitError::CompilationFailed(format!("Invalid descriptor: {}", e)))?
+        {
+            Some(b'J') => self.push_wide(value),
+            Some(_) => self.push(value),
+            None => {}
+        }
+        Ok(())
     }
 
     fn iconst(&mut self, val: i32) -> Value {
@@ -469,7 +724,7 @@ impl<'a> BytecodeCompiler<'a> {
 
     fn lower_lconst(&mut self, val: i64) -> Result<(), JitError> {
         let c = self.lconst(val);
-        self.push(c);
+        self.push_wide(c);
         Ok(())
     }
 
@@ -527,7 +782,7 @@ impl<'a> BytecodeCompiler<'a> {
                 }
                 crate::vm::types::Value::Long(l) => {
                     let c = self.lconst(*l);
-                    self.push(c);
+                    self.push_wide(c);
                 }
                 crate::vm::types::Value::Float(f) => {
                     let c = self.fconst(*f);
@@ -584,14 +839,28 @@ impl<'a> BytecodeCompiler<'a> {
         let var = self.local_var(index)?;
         let value = self.builder.use_var(var);
         let declared_ty = self.local_var_type(index);
+        let declared_kind = self.local_var_kind(index);
         let requested_ty = _ty;
         let coerced = match (declared_ty, requested_ty) {
             (types::I64, types::I32) => self.builder.ins().ireduce(types::I32, value),
             (types::I32, types::I64) => self.builder.ins().sextend(types::I64, value),
             _ => value,
         };
-        self.push(coerced);
+        let kind = match requested_ty {
+            types::F64 => StackCategory::Category2,
+            types::I64 => declared_kind,
+            _ => StackCategory::Category1,
+        };
+        self.push_with_kind(coerced, kind);
         Ok(())
+    }
+
+    fn expected_stack_category_for_type(&self, ty: Type, index: usize) -> StackCategory {
+        match ty {
+            types::F64 => StackCategory::Category2,
+            types::I64 => self.local_var_kind(index),
+            _ => StackCategory::Category1,
+        }
     }
 
     fn lower_iload_n(&mut self, n: usize) -> Result<(), JitError> {
@@ -618,9 +887,10 @@ impl<'a> BytecodeCompiler<'a> {
         let index = self.pop();
         let array_ref = self.pop();
         let zero = self.builder.ins().iconst(types::I64, 0);
+        let pc = self.builder.ins().iconst(types::I64, self.pc_offset as i64);
         let raw = self.emit_field_helper_call(
             crate::vm::jit::runtime::get_load_typed_array_element_ptr(),
-            [array_ref, index, zero, zero, zero],
+            [array_ref, index, zero, pc, zero],
         )?;
         let val = self.coerce_raw_field_result(raw, "I")?;
         self.push(val);
@@ -631,12 +901,13 @@ impl<'a> BytecodeCompiler<'a> {
         let index = self.pop();
         let array_ref = self.pop();
         let zero = self.builder.ins().iconst(types::I64, 0);
+        let pc = self.builder.ins().iconst(types::I64, self.pc_offset as i64);
         let raw = self.emit_field_helper_call(
             crate::vm::jit::runtime::get_load_typed_array_element_ptr(),
-            [array_ref, index, zero, zero, zero],
+            [array_ref, index, zero, pc, zero],
         )?;
         let val = self.coerce_raw_field_result(raw, "J")?;
-        self.push(val);
+        self.push_wide(val);
         Ok(())
     }
 
@@ -644,9 +915,10 @@ impl<'a> BytecodeCompiler<'a> {
         let index = self.pop();
         let array_ref = self.pop();
         let zero = self.builder.ins().iconst(types::I64, 0);
+        let pc = self.builder.ins().iconst(types::I64, self.pc_offset as i64);
         let raw = self.emit_field_helper_call(
             crate::vm::jit::runtime::get_load_typed_array_element_ptr(),
-            [array_ref, index, zero, zero, zero],
+            [array_ref, index, zero, pc, zero],
         )?;
         let val = self.coerce_raw_field_result(raw, "F")?;
         self.push(val);
@@ -657,9 +929,10 @@ impl<'a> BytecodeCompiler<'a> {
         let index = self.pop();
         let array_ref = self.pop();
         let zero = self.builder.ins().iconst(types::I64, 0);
+        let pc = self.builder.ins().iconst(types::I64, self.pc_offset as i64);
         let raw = self.emit_field_helper_call(
             crate::vm::jit::runtime::get_load_typed_array_element_ptr(),
-            [array_ref, index, zero, zero, zero],
+            [array_ref, index, zero, pc, zero],
         )?;
         let val = self.coerce_raw_field_result(raw, "D")?;
         self.push(val);
@@ -670,9 +943,10 @@ impl<'a> BytecodeCompiler<'a> {
         let index = self.pop();
         let array_ref = self.pop();
         let zero = self.builder.ins().iconst(types::I64, 0);
+        let pc = self.builder.ins().iconst(types::I64, self.pc_offset as i64);
         let raw = self.emit_field_helper_call(
             crate::vm::jit::runtime::get_load_reference_array_element_ptr(),
-            [array_ref, index, zero, zero, zero],
+            [array_ref, index, pc, zero, zero],
         )?;
         self.push(raw);
         Ok(())
@@ -682,9 +956,10 @@ impl<'a> BytecodeCompiler<'a> {
         let index = self.pop();
         let array_ref = self.pop();
         let zero = self.builder.ins().iconst(types::I64, 0);
+        let pc = self.builder.ins().iconst(types::I64, self.pc_offset as i64);
         let raw = self.emit_field_helper_call(
             crate::vm::jit::runtime::get_load_typed_array_element_ptr(),
-            [array_ref, index, zero, zero, zero],
+            [array_ref, index, zero, pc, zero],
         )?;
         let val = self.coerce_raw_field_result(raw, "I")?;
         self.push(val);
@@ -695,9 +970,10 @@ impl<'a> BytecodeCompiler<'a> {
         let index = self.pop();
         let array_ref = self.pop();
         let zero = self.builder.ins().iconst(types::I64, 0);
+        let pc = self.builder.ins().iconst(types::I64, self.pc_offset as i64);
         let raw = self.emit_field_helper_call(
             crate::vm::jit::runtime::get_load_typed_array_element_ptr(),
-            [array_ref, index, zero, zero, zero],
+            [array_ref, index, zero, pc, zero],
         )?;
         let val = self.coerce_raw_field_result(raw, "I")?;
         self.push(val);
@@ -708,9 +984,10 @@ impl<'a> BytecodeCompiler<'a> {
         let index = self.pop();
         let array_ref = self.pop();
         let zero = self.builder.ins().iconst(types::I64, 0);
+        let pc = self.builder.ins().iconst(types::I64, self.pc_offset as i64);
         let raw = self.emit_field_helper_call(
             crate::vm::jit::runtime::get_load_typed_array_element_ptr(),
-            [array_ref, index, zero, zero, zero],
+            [array_ref, index, zero, pc, zero],
         )?;
         let val = self.coerce_raw_field_result(raw, "I")?;
         self.push(val);
@@ -743,15 +1020,23 @@ impl<'a> BytecodeCompiler<'a> {
     }
 
     fn store_local(&mut self, index: usize, _ty: Type) -> Result<(), JitError> {
-        let value = self.pop();
+        let (value, kind) = self.pop_with_kind();
         let var = self.local_var(index)?;
         let declared_ty = self.local_var_type(index);
+        let expected_kind = self.expected_stack_category_for_type(_ty, index);
+        if kind != expected_kind {
+            return Err(JitError::CompilationFailed(format!(
+                "local {index} expects {:?} on stack, got {:?}",
+                expected_kind, kind
+            )));
+        }
         let stored = match (_ty, declared_ty) {
             (types::I32, types::I64) => self.builder.ins().sextend(types::I64, value),
             (types::I64, types::I32) => self.builder.ins().ireduce(types::I32, value),
             _ => value,
         };
         self.builder.def_var(var, stored);
+        self.emit_deopt_local_store(index, stored);
         Ok(())
     }
 
@@ -812,9 +1097,10 @@ impl<'a> BytecodeCompiler<'a> {
         let index = self.pop();
         let array_ref = self.pop();
         let zero = self.builder.ins().iconst(types::I64, 0);
+        let pc = self.builder.ins().iconst(types::I64, self.pc_offset as i64);
         self.emit_field_helper_call(
             crate::vm::jit::runtime::get_store_reference_array_element_ptr(),
-            [array_ref, index, value, zero, zero],
+            [array_ref, index, value, pc, zero],
         )?;
         Ok(())
     }
@@ -849,79 +1135,194 @@ impl<'a> BytecodeCompiler<'a> {
     }
 
     fn lower_pop2(&mut self) -> Result<(), JitError> {
-        self.pop();
-        self.pop();
+        let (_value, kind) = self.pop_with_kind();
+        if kind == StackCategory::Category1 {
+            let (_value2, kind2) = self.pop_with_kind();
+            if kind2 != StackCategory::Category1 {
+                return Err(JitError::CompilationFailed(
+                    "pop2 encountered mixed category stack shape".into(),
+                ));
+            }
+        }
         Ok(())
     }
 
     fn lower_dup(&mut self) -> Result<(), JitError> {
-        let val = self.pop();
-        self.push(val.clone());
-        self.push(val);
+        let (val, kind) = self.pop_with_kind();
+        if kind != StackCategory::Category1 {
+            return Err(JitError::CompilationFailed(
+                "dup does not support category-2 values".into(),
+            ));
+        }
+        self.push_with_kind(val, kind);
+        self.push_with_kind(val, kind);
         Ok(())
     }
 
     fn lower_dup_x1(&mut self) -> Result<(), JitError> {
-        let val1 = self.pop();
-        let val2 = self.pop();
-        self.push(val1.clone());
-        self.push(val2);
-        self.push(val1);
+        let (val1, kind1) = self.pop_with_kind();
+        let (val2, kind2) = self.pop_with_kind();
+        if kind1 != StackCategory::Category1 || kind2 != StackCategory::Category1 {
+            return Err(JitError::CompilationFailed(
+                "dup_x1 requires two category-1 values".into(),
+            ));
+        }
+        self.push_with_kind(val1, kind1);
+        self.push_with_kind(val2, kind2);
+        self.push_with_kind(val1, kind1);
         Ok(())
     }
 
     fn lower_dup_x2(&mut self) -> Result<(), JitError> {
-        let val1 = self.pop();
-        let val2 = self.pop();
-        let val3 = self.pop();
-        self.push(val1.clone());
-        self.push(val3);
-        self.push(val2);
-        self.push(val1);
+        let (val1, kind1) = self.pop_with_kind();
+        if kind1 != StackCategory::Category1 {
+            return Err(JitError::CompilationFailed(
+                "dup_x2 requires top value to be category-1".into(),
+            ));
+        }
+        let (val2, kind2) = self.pop_with_kind();
+        if kind2 == StackCategory::Category2 {
+            self.push_with_kind(val1, kind1);
+            self.push_with_kind(val2, kind2);
+            self.push_with_kind(val1, kind1);
+            return Ok(());
+        }
+        let (val3, kind3) = self.pop_with_kind();
+        if kind3 != StackCategory::Category1 {
+            return Err(JitError::CompilationFailed(
+                "dup_x2 requires either [cat1,cat2] or [cat1,cat1,cat1]".into(),
+            ));
+        }
+        self.push_with_kind(val1, kind1);
+        self.push_with_kind(val3, kind3);
+        self.push_with_kind(val2, kind2);
+        self.push_with_kind(val1, kind1);
         Ok(())
     }
 
     fn lower_dup2(&mut self) -> Result<(), JitError> {
-        let val1 = self.pop();
-        let val2 = self.pop();
-        self.push(val1.clone());
-        self.push(val2.clone());
-        self.push(val1);
-        self.push(val2);
+        let (val1, kind1) = self.pop_with_kind();
+        if kind1 == StackCategory::Category2 {
+            self.push_with_kind(val1, kind1);
+            self.push_with_kind(val1, kind1);
+            return Ok(());
+        }
+        let (val2, kind2) = self.pop_with_kind();
+        if kind2 != StackCategory::Category1 {
+            return Err(JitError::CompilationFailed(
+                "dup2 requires either one category-2 or two category-1 values".into(),
+            ));
+        }
+        self.push_with_kind(val2, kind2);
+        self.push_with_kind(val1, kind1);
+        self.push_with_kind(val2, kind2);
+        self.push_with_kind(val1, kind1);
         Ok(())
     }
 
     fn lower_dup2_x1(&mut self) -> Result<(), JitError> {
-        let val1 = self.pop();
-        let val2 = self.pop();
-        let val3 = self.pop();
-        self.push(val1.clone());
-        self.push(val2.clone());
-        self.push(val3);
-        self.push(val1);
-        self.push(val2);
+        let (val1, kind1) = self.pop_with_kind();
+        let (val2, kind2) = self.pop_with_kind();
+        if kind1 == StackCategory::Category2 {
+            if kind2 != StackCategory::Category1 {
+                return Err(JitError::CompilationFailed(
+                    "dup2_x1 wide form requires [..., cat1, cat2]".into(),
+                ));
+            }
+            self.push_with_kind(val1, kind1);
+            self.push_with_kind(val2, kind2);
+            self.push_with_kind(val1, kind1);
+            return Ok(());
+        }
+        if kind2 != StackCategory::Category1 {
+            return Err(JitError::CompilationFailed(
+                "dup2_x1 narrow form requires top two values category-1".into(),
+            ));
+        }
+        let (val3, kind3) = self.pop_with_kind();
+        if kind3 != StackCategory::Category1 {
+            return Err(JitError::CompilationFailed(
+                "dup2_x1 narrow form requires three category-1 values".into(),
+            ));
+        }
+        self.push_with_kind(val2, kind2);
+        self.push_with_kind(val1, kind1);
+        self.push_with_kind(val3, kind3);
+        self.push_with_kind(val2, kind2);
+        self.push_with_kind(val1, kind1);
         Ok(())
     }
 
     fn lower_dup2_x2(&mut self) -> Result<(), JitError> {
-        let val1 = self.pop();
-        let val2 = self.pop();
-        let val3 = self.pop();
-        let val4 = self.pop();
-        self.push(val1.clone());
-        self.push(val2.clone());
-        self.push(val4);
-        self.push(val3);
-        self.push(val1);
-        self.push(val2);
+        let (val1, kind1) = self.pop_with_kind();
+        let (val2, kind2) = self.pop_with_kind();
+        if kind1 == StackCategory::Category2 {
+            if kind2 == StackCategory::Category2 {
+                self.push_with_kind(val1, kind1);
+                self.push_with_kind(val2, kind2);
+                self.push_with_kind(val1, kind1);
+                return Ok(());
+            }
+            let (val3, kind3) = self.pop_with_kind();
+            if kind2 != StackCategory::Category1 || kind3 != StackCategory::Category1 {
+                return Err(JitError::CompilationFailed(
+                    "dup2_x2 wide-top form requires [cat1, cat1, cat2] or [cat2, cat2]".into(),
+                ));
+            }
+            self.push_with_kind(val1, kind1);
+            self.push_with_kind(val3, kind3);
+            self.push_with_kind(val2, kind2);
+            self.push_with_kind(val1, kind1);
+            return Ok(());
+        }
+        if kind2 == StackCategory::Category2 {
+            let (val3, kind3) = self.pop_with_kind();
+            if kind1 != StackCategory::Category1 || kind3 != StackCategory::Category1 {
+                return Err(JitError::CompilationFailed(
+                    "dup2_x2 mixed form requires [cat1, cat2, cat1]".into(),
+                ));
+            }
+            self.push_with_kind(val2, kind2);
+            self.push_with_kind(val1, kind1);
+            self.push_with_kind(val3, kind3);
+            self.push_with_kind(val2, kind2);
+            self.push_with_kind(val1, kind1);
+            return Ok(());
+        }
+        let (val3, kind3) = self.pop_with_kind();
+        let (val4, kind4) = self.pop_with_kind();
+        if !matches!(
+            (kind1, kind2, kind3, kind4),
+            (
+                StackCategory::Category1,
+                StackCategory::Category1,
+                StackCategory::Category1,
+                StackCategory::Category1
+            )
+        ) {
+            return Err(JitError::CompilationFailed(
+                "dup2_x2 narrow form requires four category-1 values".into(),
+            ));
+        }
+        self.push_with_kind(val2, kind2);
+        self.push_with_kind(val1, kind1);
+        self.push_with_kind(val4, kind4);
+        self.push_with_kind(val3, kind3);
+        self.push_with_kind(val2, kind2);
+        self.push_with_kind(val1, kind1);
         Ok(())
     }
 
     fn lower_swap(&mut self) -> Result<(), JitError> {
-        let val1 = self.pop();
-        let val2 = self.pop();
-        self.push(val1);
-        self.push(val2);
+        let (val1, kind1) = self.pop_with_kind();
+        let (val2, kind2) = self.pop_with_kind();
+        if kind1 != StackCategory::Category1 || kind2 != StackCategory::Category1 {
+            return Err(JitError::CompilationFailed(
+                "swap requires two category-1 values".into(),
+            ));
+        }
+        self.push_with_kind(val1, kind1);
+        self.push_with_kind(val2, kind2);
         Ok(())
     }
 
@@ -937,7 +1338,7 @@ impl<'a> BytecodeCompiler<'a> {
         let rhs = self.pop();
         let lhs = self.pop();
         let result = self.builder.ins().iadd(lhs, rhs);
-        self.push(result);
+        self.push_wide(result);
         Ok(())
     }
 
@@ -976,6 +1377,20 @@ impl<'a> BytecodeCompiler<'a> {
     fn lower_idiv(&mut self) -> Result<(), JitError> {
         let rhs = self.pop();
         let lhs = self.pop();
+        let zero = self.builder.ins().iconst(types::I32, 0);
+        let is_zero = self.builder.ins().icmp(IntCC::Equal, rhs, zero);
+        let trap_block = self.builder.create_block();
+        let cont_block = self.builder.create_block();
+        self.builder
+            .ins()
+            .brif(is_zero, trap_block, &[], cont_block, &[]);
+
+        self.builder.seal_block(trap_block);
+        self.builder.switch_to_block(trap_block);
+        self.emit_pending_exception_and_return("java/lang/ArithmeticException")?;
+
+        self.builder.seal_block(cont_block);
+        self.builder.switch_to_block(cont_block);
         let result = self.builder.ins().sdiv(lhs, rhs);
         self.push(result);
         Ok(())
@@ -984,6 +1399,20 @@ impl<'a> BytecodeCompiler<'a> {
     fn lower_irem(&mut self) -> Result<(), JitError> {
         let rhs = self.pop();
         let lhs = self.pop();
+        let zero = self.builder.ins().iconst(types::I32, 0);
+        let is_zero = self.builder.ins().icmp(IntCC::Equal, rhs, zero);
+        let trap_block = self.builder.create_block();
+        let cont_block = self.builder.create_block();
+        self.builder
+            .ins()
+            .brif(is_zero, trap_block, &[], cont_block, &[]);
+
+        self.builder.seal_block(trap_block);
+        self.builder.switch_to_block(trap_block);
+        self.emit_pending_exception_and_return("java/lang/ArithmeticException")?;
+
+        self.builder.seal_block(cont_block);
+        self.builder.switch_to_block(cont_block);
         let quotient = self.builder.ins().sdiv(lhs, rhs);
         let product = self.builder.ins().imul(quotient, rhs);
         let remainder = self.builder.ins().isub(lhs, product);
@@ -1057,7 +1486,7 @@ impl<'a> BytecodeCompiler<'a> {
         let rhs = self.pop();
         let lhs = self.pop();
         let result = self.builder.ins().isub(lhs, rhs);
-        self.push(result);
+        self.push_wide(result);
         Ok(())
     }
 
@@ -1081,7 +1510,7 @@ impl<'a> BytecodeCompiler<'a> {
         let rhs = self.pop();
         let lhs = self.pop();
         let result = self.builder.ins().imul(lhs, rhs);
-        self.push(result);
+        self.push_wide(result);
         Ok(())
     }
 
@@ -1104,8 +1533,22 @@ impl<'a> BytecodeCompiler<'a> {
     fn lower_ldiv(&mut self) -> Result<(), JitError> {
         let rhs = self.pop();
         let lhs = self.pop();
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        let is_zero = self.builder.ins().icmp(IntCC::Equal, rhs, zero);
+        let trap_block = self.builder.create_block();
+        let cont_block = self.builder.create_block();
+        self.builder
+            .ins()
+            .brif(is_zero, trap_block, &[], cont_block, &[]);
+
+        self.builder.seal_block(trap_block);
+        self.builder.switch_to_block(trap_block);
+        self.emit_pending_exception_and_return("java/lang/ArithmeticException")?;
+
+        self.builder.seal_block(cont_block);
+        self.builder.switch_to_block(cont_block);
         let result = self.builder.ins().sdiv(lhs, rhs);
-        self.push(result);
+        self.push_wide(result);
         Ok(())
     }
 
@@ -1128,10 +1571,24 @@ impl<'a> BytecodeCompiler<'a> {
     fn lower_lrem(&mut self) -> Result<(), JitError> {
         let rhs = self.pop();
         let lhs = self.pop();
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        let is_zero = self.builder.ins().icmp(IntCC::Equal, rhs, zero);
+        let trap_block = self.builder.create_block();
+        let cont_block = self.builder.create_block();
+        self.builder
+            .ins()
+            .brif(is_zero, trap_block, &[], cont_block, &[]);
+
+        self.builder.seal_block(trap_block);
+        self.builder.switch_to_block(trap_block);
+        self.emit_pending_exception_and_return("java/lang/ArithmeticException")?;
+
+        self.builder.seal_block(cont_block);
+        self.builder.switch_to_block(cont_block);
         let quotient = self.builder.ins().sdiv(lhs, rhs);
         let product = self.builder.ins().imul(quotient, rhs);
         let remainder = self.builder.ins().isub(lhs, product);
-        self.push(remainder);
+        self.push_wide(remainder);
         Ok(())
     }
 
@@ -1161,7 +1618,7 @@ impl<'a> BytecodeCompiler<'a> {
         let val = self.pop();
         let zero = self.lconst(0);
         let result = self.builder.ins().isub(zero, val);
-        self.push(result);
+        self.push_wide(result);
         Ok(())
     }
 
@@ -1185,7 +1642,7 @@ impl<'a> BytecodeCompiler<'a> {
         let mask = self.builder.ins().iconst(types::I64, 0x3f);
         let shifted = self.builder.ins().band(rhs, mask);
         let result = self.builder.ins().ishl(lhs, shifted);
-        self.push(result);
+        self.push_wide(result);
         Ok(())
     }
 
@@ -1195,7 +1652,7 @@ impl<'a> BytecodeCompiler<'a> {
         let mask = self.builder.ins().iconst(types::I64, 0x3f);
         let shifted = self.builder.ins().band(rhs, mask);
         let result = self.builder.ins().sshr(lhs, shifted);
-        self.push(result);
+        self.push_wide(result);
         Ok(())
     }
 
@@ -1205,7 +1662,7 @@ impl<'a> BytecodeCompiler<'a> {
         let mask = self.builder.ins().iconst(types::I64, 0x3f);
         let shifted = self.builder.ins().band(rhs, mask);
         let result = self.builder.ins().ushr(lhs, shifted);
-        self.push(result);
+        self.push_wide(result);
         Ok(())
     }
 
@@ -1213,7 +1670,7 @@ impl<'a> BytecodeCompiler<'a> {
         let rhs = self.pop();
         let lhs = self.pop();
         let result = self.builder.ins().band(lhs, rhs);
-        self.push(result);
+        self.push_wide(result);
         Ok(())
     }
 
@@ -1221,7 +1678,7 @@ impl<'a> BytecodeCompiler<'a> {
         let rhs = self.pop();
         let lhs = self.pop();
         let result = self.builder.ins().bor(lhs, rhs);
-        self.push(result);
+        self.push_wide(result);
         Ok(())
     }
 
@@ -1229,7 +1686,7 @@ impl<'a> BytecodeCompiler<'a> {
         let rhs = self.pop();
         let lhs = self.pop();
         let result = self.builder.ins().bxor(lhs, rhs);
-        self.push(result);
+        self.push_wide(result);
         Ok(())
     }
 
@@ -1269,6 +1726,7 @@ impl<'a> BytecodeCompiler<'a> {
                 let param = self.coerce_entry_param(param, *arg_type);
                 let var = self.local_var(local_index)?;
                 self.builder.def_var(var, param);
+                self.emit_deopt_local_store(local_index, param);
                 initialized_locals[local_index] = true;
             }
             local_index += if matches!(arg_type, b'J' | b'D') {
@@ -1289,6 +1747,7 @@ impl<'a> BytecodeCompiler<'a> {
                 };
                 let var = self.local_var(i)?;
                 self.builder.def_var(var, zero);
+                self.emit_deopt_local_store(i, zero);
             }
         }
 
@@ -1352,6 +1811,32 @@ impl<'a> BytecodeCompiler<'a> {
         types::I64
     }
 
+    fn local_var_kind(&self, index: usize) -> StackCategory {
+        let mut local_index = 0;
+        for arg_type in &self.arg_types {
+            if index == local_index {
+                return match arg_type {
+                    b'J' | b'D' => StackCategory::Category2,
+                    _ => StackCategory::Category1,
+                };
+            }
+            if matches!(arg_type, b'J' | b'D') && index == local_index + 1 {
+                return StackCategory::Category1;
+            }
+            local_index += if matches!(arg_type, b'J' | b'D') { 2 } else { 1 };
+        }
+
+        if let Some(kind) = self.infer_local_kind_from_stores(index) {
+            return kind;
+        }
+
+        if self.local_var_type(index) == types::F64 {
+            StackCategory::Category2
+        } else {
+            StackCategory::Category1
+        }
+    }
+
     fn infer_local_type_from_stores(&self, index: usize) -> Option<Type> {
         let mut pc = 0;
         while pc < self.method.code.len() {
@@ -1398,11 +1883,102 @@ impl<'a> BytecodeCompiler<'a> {
                     .get(pc + 1)
                     .copied()
                     .map(|i| (i as usize, types::I32)),
+                0xc4 => self
+                    .method
+                    .code
+                    .get(pc + 1)
+                    .copied()
+                    .and_then(|inner| {
+                        self.method.code.get(pc + 2..pc + 4).map(|bytes| {
+                            (inner, u16::from_be_bytes([bytes[0], bytes[1]]) as usize)
+                        })
+                    })
+                    .and_then(|(inner, index)| match inner {
+                        0x36 | 0x84 => Some((index, types::I32)),
+                        0x37 => Some((index, types::I64)),
+                        0x38 => Some((index, types::F32)),
+                        0x39 => Some((index, types::F64)),
+                        0x3a => Some((index, types::I64)),
+                        _ => None,
+                    }),
                 _ => None,
             };
             if let Some((local, ty)) = hit {
                 if local == index {
                     return Some(ty);
+                }
+            }
+            pc = self.next_pc(pc, opcode);
+        }
+        None
+    }
+
+    fn infer_local_kind_from_stores(&self, index: usize) -> Option<StackCategory> {
+        let mut pc = 0;
+        while pc < self.method.code.len() {
+            let opcode = self.method.code[pc];
+            let hit = match opcode {
+                0x36 => self
+                    .method
+                    .code
+                    .get(pc + 1)
+                    .copied()
+                    .map(|i| (i as usize, StackCategory::Category1)),
+                0x37 => self
+                    .method
+                    .code
+                    .get(pc + 1)
+                    .copied()
+                    .map(|i| (i as usize, StackCategory::Category2)),
+                0x38 => self
+                    .method
+                    .code
+                    .get(pc + 1)
+                    .copied()
+                    .map(|i| (i as usize, StackCategory::Category1)),
+                0x39 => self
+                    .method
+                    .code
+                    .get(pc + 1)
+                    .copied()
+                    .map(|i| (i as usize, StackCategory::Category2)),
+                0x3a => self
+                    .method
+                    .code
+                    .get(pc + 1)
+                    .copied()
+                    .map(|i| (i as usize, StackCategory::Category1)),
+                0x3b..=0x3e => Some(((opcode - 0x3b) as usize, StackCategory::Category1)),
+                0x3f..=0x42 => Some(((opcode - 0x3f) as usize, StackCategory::Category2)),
+                0x43..=0x46 => Some(((opcode - 0x43) as usize, StackCategory::Category1)),
+                0x47..=0x4a => Some(((opcode - 0x47) as usize, StackCategory::Category2)),
+                0x4b..=0x4e => Some(((opcode - 0x4b) as usize, StackCategory::Category1)),
+                0x84 => self
+                    .method
+                    .code
+                    .get(pc + 1)
+                    .copied()
+                    .map(|i| (i as usize, StackCategory::Category1)),
+                0xc4 => self
+                    .method
+                    .code
+                    .get(pc + 1)
+                    .copied()
+                    .and_then(|inner| {
+                        self.method.code.get(pc + 2..pc + 4).map(|bytes| {
+                            (inner, u16::from_be_bytes([bytes[0], bytes[1]]) as usize)
+                        })
+                    })
+                    .and_then(|(inner, index)| match inner {
+                        0x36 | 0x38 | 0x3a | 0x84 => Some((index, StackCategory::Category1)),
+                        0x37 | 0x39 => Some((index, StackCategory::Category2)),
+                        _ => None,
+                    }),
+                _ => None,
+            };
+            if let Some((local, kind)) = hit {
+                if local == index {
+                    return Some(kind);
                 }
             }
             pc = self.next_pc(pc, opcode);
@@ -1430,18 +2006,50 @@ impl<'a> BytecodeCompiler<'a> {
     fn lower_iinc(&mut self) -> Result<(), JitError> {
         let index = self.method.code[self.pc_offset + 1] as usize;
         let increment = self.method.code[self.pc_offset + 2] as i8 as i32;
+        self.lower_iinc_at(index, increment)
+    }
+
+    fn lower_iinc_at(&mut self, index: usize, increment: i32) -> Result<(), JitError> {
         let var = self.local_var(index)?;
         let current = self.builder.use_var(var);
         let inc_val = self.builder.ins().iconst(types::I32, increment as i64);
         let result = self.builder.ins().iadd(current, inc_val);
         self.builder.def_var(var, result);
+        self.emit_deopt_local_store(index, result);
         Ok(())
+    }
+
+    fn lower_wide(&mut self) -> Result<(), JitError> {
+        let opcode = self.method.code[self.pc_offset + 1];
+        let index = self.read_u16(self.pc_offset + 2) as usize;
+        match opcode {
+            0x15 => self.load_local(index, types::I32),
+            0x16 => self.load_local(index, types::I64),
+            0x17 => self.load_local(index, types::F32),
+            0x18 => self.load_local(index, types::F64),
+            0x19 => self.load_local(index, types::I64),
+            0x36 => self.store_local(index, types::I32),
+            0x37 => self.store_local(index, types::I64),
+            0x38 => self.store_local(index, types::F32),
+            0x39 => self.store_local(index, types::F64),
+            0x3a => self.store_local(index, types::I64),
+            0x84 => {
+                let increment = self.read_i16(self.pc_offset + 4) as i32;
+                self.lower_iinc_at(index, increment)
+            }
+            0xa9 => Err(JitError::CompilationFailed(
+                "wide ret stays on the interpreter until return-address SSA is supported".into(),
+            )),
+            _ => Err(JitError::CompilationFailed(format!(
+                "Unsupported wide opcode: 0x{opcode:02x}"
+            ))),
+        }
     }
 
     fn lower_i2l(&mut self) -> Result<(), JitError> {
         let val = self.pop();
         let result = self.builder.ins().sextend(types::I64, val);
-        self.push(result);
+        self.push_wide(result);
         Ok(())
     }
 
@@ -1490,7 +2098,7 @@ impl<'a> BytecodeCompiler<'a> {
     fn lower_f2l(&mut self) -> Result<(), JitError> {
         let val = self.pop();
         let result = self.builder.ins().fcvt_to_sint(types::I64, val);
-        self.push(result);
+        self.push_wide(result);
         Ok(())
     }
 
@@ -1511,7 +2119,7 @@ impl<'a> BytecodeCompiler<'a> {
     fn lower_d2l(&mut self) -> Result<(), JitError> {
         let val = self.pop();
         let result = self.builder.ins().fcvt_to_sint(types::I64, val);
-        self.push(result);
+        self.push_wide(result);
         Ok(())
     }
 
@@ -1637,40 +2245,110 @@ impl<'a> BytecodeCompiler<'a> {
         let target = self.read_branch_offset();
         let target_pc = (self.pc_offset as i32 + target as i32) as usize;
         let fallthrough_pc = self.next_pc(self.pc_offset, opcode);
-
-        let target_block = self.create_block_for_pc(target_pc);
-        let fallthrough_block = self.create_block_for_pc(fallthrough_pc);
-        self.builder
-            .ins()
-            .brif(cmp, target_block, &[], fallthrough_block, &[]);
-        Ok(())
+        self.branch_conditional_to_pcs(cmp, target_pc, fallthrough_pc)
     }
 
     fn lower_goto(&mut self) -> Result<(), JitError> {
         let target = self.read_branch_offset();
         let target_pc = (self.pc_offset as i32 + target as i32) as usize;
+        self.branch_to_pc(target_pc)
+    }
 
-        let jump_block = self.create_block_for_pc(target_pc);
-        self.builder.ins().jump(jump_block, &[]);
-        Ok(())
+    fn lower_goto_w(&mut self) -> Result<(), JitError> {
+        let target = self.read_i32(self.pc_offset + 1);
+        let target_pc = (self.pc_offset as i32 + target) as usize;
+        self.branch_to_pc(target_pc)
+    }
+
+    fn lower_if_null(&mut self, opcode: u8) -> Result<(), JitError> {
+        let value = self.pop();
+        let cond = match opcode {
+            0xc6 => IntCC::Equal,
+            0xc7 => IntCC::NotEqual,
+            _ => {
+                return Err(JitError::CompilationFailed(format!(
+                    "Invalid ifnull opcode: 0x{:02x}",
+                    opcode
+                )));
+            }
+        };
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        let cmp = self.builder.ins().icmp(cond, value, zero);
+        let target = self.read_branch_offset();
+        let target_pc = (self.pc_offset as i32 + target as i32) as usize;
+        let fallthrough_pc = self.next_pc(self.pc_offset, opcode);
+        self.branch_conditional_to_pcs(cmp, target_pc, fallthrough_pc)
     }
 
     fn lower_tableswitch(&mut self) -> Result<(), JitError> {
-        let default_offset = self.read_i32(1);
-        let low = self.read_i32(self.pc_offset + 4 + ((4 - self.pc_offset % 4) % 4) as usize);
-        let high = self.read_i32(self.pc_offset + 8 + ((4 - self.pc_offset % 4) % 4) as usize);
         let index = self.pop();
+        let aligned = (self.pc_offset + 4) & !3;
+        let default_offset = self.read_i32(aligned);
+        let low = self.read_i32(aligned + 4);
+        let high = self.read_i32(aligned + 8);
         let default_target = (self.pc_offset as i32 + default_offset) as usize;
-        let jump_block = self.create_block_for_pc(default_target);
-        self.builder.ins().jump(jump_block, &[]);
-        Ok(())
+
+        let mut cases = Vec::new();
+        let mut cursor = aligned + 12;
+        for case_value in low..=high {
+            let target_offset = self.read_i32(cursor);
+            let target_pc = (self.pc_offset as i32 + target_offset) as usize;
+            cases.push((case_value, target_pc));
+            cursor += 4;
+        }
+
+        self.emit_switch_dispatch(index, default_target, &cases)
     }
 
     fn lower_lookupswitch(&mut self) -> Result<(), JitError> {
-        let default_offset = self.read_i32(1);
+        let index = self.pop();
+        let aligned = (self.pc_offset + 4) & !3;
+        let default_offset = self.read_i32(aligned);
+        let npairs = self.read_i32(aligned + 4);
         let default_target = (self.pc_offset as i32 + default_offset) as usize;
-        let jump_block = self.create_block_for_pc(default_target);
-        self.builder.ins().jump(jump_block, &[]);
+
+        let mut cases = Vec::new();
+        let mut cursor = aligned + 8;
+        for _ in 0..npairs {
+            let match_value = self.read_i32(cursor);
+            let target_offset = self.read_i32(cursor + 4);
+            let target_pc = (self.pc_offset as i32 + target_offset) as usize;
+            cases.push((match_value, target_pc));
+            cursor += 8;
+        }
+
+        self.emit_switch_dispatch(index, default_target, &cases)
+    }
+
+    fn emit_switch_dispatch(
+        &mut self,
+        index: Value,
+        default_target: usize,
+        cases: &[(i32, usize)],
+    ) -> Result<(), JitError> {
+        let stack_values = self.value_stack.clone();
+        let stack_kinds = self.value_stack_kinds.clone();
+        let default_adapter = self.builder.create_block();
+        let case_adapters: Vec<(Block, usize, i32)> = cases
+            .iter()
+            .map(|(case_value, target_pc)| (self.builder.create_block(), *target_pc, *case_value))
+            .collect();
+        let mut switch = Switch::new();
+        for (case_block, _target_pc, case_value) in &case_adapters {
+            switch.set_entry((*case_value as u32) as u128, *case_block);
+        }
+        switch.emit(self.builder, index, default_adapter);
+
+        for (case_block, target_pc, _case_value) in case_adapters {
+            self.builder.seal_block(case_block);
+            self.builder.switch_to_block(case_block);
+            self.branch_values_to_pc(target_pc, &stack_values, &stack_kinds)?;
+        }
+
+        self.builder.seal_block(default_adapter);
+        self.builder.switch_to_block(default_adapter);
+        self.branch_values_to_pc(default_target, &stack_values, &stack_kinds)?;
+
         Ok(())
     }
 
@@ -1680,6 +2358,113 @@ impl<'a> BytecodeCompiler<'a> {
             | ((bytes[1] as i32) << 16)
             | ((bytes[2] as i32) << 8)
             | (bytes[3] as i32)
+    }
+
+    fn emit_deopt_pc(&mut self, pc: usize) {
+        let ctx = self.builder.use_var(self.context_var);
+        let current = self.builder.ins().load(types::I64, MemFlags::new(), ctx, 0);
+        let pending = self.builder.ins().icmp_imm(IntCC::SignedLessThan, current, 0);
+        let raw_pc = self.builder.ins().iconst(types::I64, pc as i64);
+        let stored = self.builder.ins().select(pending, current, raw_pc);
+        self.builder.ins().store(MemFlags::new(), stored, ctx, 0);
+    }
+
+    fn emit_deopt_local_store(&mut self, index: usize, value: Value) {
+        let ctx = self.builder.use_var(self.context_var);
+        let raw = self.coerce_deopt_local_raw_value(index, value);
+        let offset = ((index + 1) * 8) as i32;
+        self.builder.ins().store(MemFlags::new(), raw, ctx, offset);
+    }
+
+    fn emit_deopt_stack_state(&mut self) {
+        let ctx = self.builder.use_var(self.context_var);
+        let depth = self.builder.ins().iconst(types::I64, self.value_stack.len() as i64);
+        let depth_offset = ((self.method.max_locals + 1) * 8) as i32;
+        self.builder.ins().store(MemFlags::new(), depth, ctx, depth_offset);
+
+        let stack_values = self.value_stack.clone();
+        let stack_kinds = self.value_stack_kinds.clone();
+        for (index, (value, kind)) in stack_values.into_iter().zip(stack_kinds).enumerate() {
+            let raw = self.coerce_deopt_stack_raw_value(value, kind);
+            let offset = ((self.method.max_locals + 2 + index) * 8) as i32;
+            self.builder.ins().store(MemFlags::new(), raw, ctx, offset);
+        }
+    }
+
+    fn record_deopt_stack_kinds(&mut self, pc: usize) {
+        let kinds = self
+            .value_stack
+            .iter()
+            .copied()
+            .zip(self.value_stack_kinds.iter().copied())
+            .map(|(value, kind)| self.deopt_kind_for_value(value, kind))
+            .collect();
+        self.deopt_stack_kinds_by_pc.insert(pc, kinds);
+    }
+
+    fn coerce_deopt_local_raw_value(&mut self, index: usize, value: Value) -> Value {
+        let kind = match (self.local_var_type(index), self.local_var_kind(index)) {
+            (types::I32, _) => DeoptLocalKind::Int,
+            (types::F32, _) => DeoptLocalKind::Float,
+            (types::F64, _) => DeoptLocalKind::Double,
+            (types::I64, StackCategory::Category2) => DeoptLocalKind::Long,
+            (types::I64, StackCategory::Category1) => DeoptLocalKind::Reference,
+            _ => DeoptLocalKind::Top,
+        };
+        self.coerce_deopt_raw_value(value, kind)
+    }
+
+    fn coerce_deopt_stack_raw_value(&mut self, value: Value, kind: StackCategory) -> Value {
+        self.coerce_deopt_raw_value(value, self.deopt_kind_for_value(value, kind))
+    }
+
+    fn deopt_kind_for_value(&self, value: Value, kind: StackCategory) -> DeoptLocalKind {
+        match (self.builder.func.dfg.value_type(value), kind) {
+            (types::I32, _) => DeoptLocalKind::Int,
+            (types::F32, _) => DeoptLocalKind::Float,
+            (types::F64, _) => DeoptLocalKind::Double,
+            (types::I64, StackCategory::Category2) => DeoptLocalKind::Long,
+            (types::I64, StackCategory::Category1) => DeoptLocalKind::Reference,
+            _ => DeoptLocalKind::Top,
+        }
+    }
+
+    fn coerce_deopt_raw_value(&mut self, value: Value, kind: DeoptLocalKind) -> Value {
+        match kind {
+            DeoptLocalKind::Int => self.builder.ins().uextend(types::I64, value),
+            DeoptLocalKind::Float => {
+                let slot = self.builder.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    8,
+                    3,
+                ));
+                self.builder.ins().stack_store(value, slot, 0);
+                let bits = self.builder.ins().stack_load(types::I32, slot, 0);
+                self.builder.ins().uextend(types::I64, bits)
+            }
+            DeoptLocalKind::Double => {
+                let slot = self.builder.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    8,
+                    3,
+                ));
+                self.builder.ins().stack_store(value, slot, 0);
+                self.builder.ins().stack_load(types::I64, slot, 0)
+            }
+            DeoptLocalKind::Long | DeoptLocalKind::Reference | DeoptLocalKind::Top => value,
+        }
+    }
+
+    fn read_u16(&self, offset: usize) -> u16 {
+        let high = self.method.code[offset];
+        let low = self.method.code[offset + 1];
+        u16::from_be_bytes([high, low])
+    }
+
+    fn read_i16(&self, offset: usize) -> i16 {
+        let high = self.method.code[offset];
+        let low = self.method.code[offset + 1];
+        i16::from_be_bytes([high, low])
     }
 
     fn create_block_for_pc(&mut self, pc: usize) -> Block {
@@ -1754,7 +2539,7 @@ impl<'a> BytecodeCompiler<'a> {
             offset: cp_index as i32,
         });
         let field_value = self.load_static_field(field_ref, &field_desc)?;
-        self.push(field_value);
+        self.push_descriptor_value(field_value, &field_desc);
         Ok(())
     }
 
@@ -1827,13 +2612,12 @@ impl<'a> BytecodeCompiler<'a> {
             })?;
         let field_desc = field_ref.descriptor.clone();
         let obj = self.pop();
-        self.builder.ins().trapz(obj, JIT_TRAP_CODE);
         self.stack_slots.push(StackSlot {
             size: 8,
             offset: cp_index as i32,
         });
         let field_value = self.load_instance_field(obj, field_ref, &field_desc)?;
-        self.push(field_value);
+        self.push_descriptor_value(field_value, &field_desc);
         Ok(())
     }
 
@@ -1869,7 +2653,6 @@ impl<'a> BytecodeCompiler<'a> {
         let field_desc = field_ref.descriptor.clone();
         let value = self.pop();
         let obj = self.pop();
-        self.builder.ins().trapz(obj, JIT_TRAP_CODE);
         self.stack_slots.push(StackSlot {
             size: 8,
             offset: cp_index as i32,
@@ -1918,7 +2701,6 @@ impl<'a> BytecodeCompiler<'a> {
         }
         args.reverse();
         let this_ref = self.pop();
-        self.builder.ins().trapz(this_ref, JIT_TRAP_CODE);
         self.stack_slots.push(StackSlot {
             size: 8,
             offset: cp_index as i32,
@@ -1931,7 +2713,7 @@ impl<'a> BytecodeCompiler<'a> {
         if result {
             let raw = self.pop();
             let coerced = self.coerce_raw_helper_result(raw, &method_desc)?;
-            self.push(coerced);
+            self.push_method_result_value(coerced, &method_desc)?;
         }
         Ok(())
     }
@@ -1974,7 +2756,6 @@ impl<'a> BytecodeCompiler<'a> {
         }
         args.reverse();
         let this_ref = self.pop();
-        self.builder.ins().trapz(this_ref, JIT_TRAP_CODE);
         self.stack_slots.push(StackSlot {
             size: 8,
             offset: cp_index as i32,
@@ -1987,7 +2768,7 @@ impl<'a> BytecodeCompiler<'a> {
         if result {
             let raw = self.pop();
             let coerced = self.coerce_raw_helper_result(raw, &method_desc)?;
-            self.push(coerced);
+            self.push_method_result_value(coerced, &method_desc)?;
         }
         Ok(())
     }
@@ -2037,7 +2818,7 @@ impl<'a> BytecodeCompiler<'a> {
         if result {
             let raw = self.pop();
             let coerced = self.coerce_raw_helper_result(raw, &method_desc)?;
-            self.push(coerced);
+            self.push_method_result_value(coerced, &method_desc)?;
         }
         Ok(())
     }
@@ -2061,7 +2842,7 @@ impl<'a> BytecodeCompiler<'a> {
             types::I64,
             crate::vm::jit::runtime::get_invoke_static_ptr() as i64,
         );
-        let ctx = self.builder.ins().iconst(types::I64, 0);
+        let ctx = self.builder.use_var(self.context_var);
         let method_ref_id = self.builder.ins().iconst(types::I64, method_ref_id as i64);
         let call_args = vec![ctx, method_ref_id, argc, arg0, arg1, arg2];
 
@@ -2072,7 +2853,7 @@ impl<'a> BytecodeCompiler<'a> {
             .map_err(|e| JitError::CompilationFailed(format!("Invalid descriptor: {}", e)))?
             .is_some_and(|ret| ret != b'V')
         {
-            self.push(result);
+            self.push_method_result_value(result, method_desc)?;
             Ok(true)
         } else {
             Ok(false)
@@ -2098,7 +2879,7 @@ impl<'a> BytecodeCompiler<'a> {
         let sigref = self.builder.import_signature(sig);
 
         let helper = self.builder.ins().iconst(types::I64, helper_ptr as i64);
-        let ctx = self.builder.ins().iconst(types::I64, 0);
+        let ctx = self.builder.use_var(self.context_var);
         let receiver = self.coerce_helper_arg(receiver);
         let method_ref_id = self.builder.ins().iconst(types::I64, method_ref_id as i64);
         let call_args = vec![ctx, receiver, method_ref_id, argc, arg0, arg1];
@@ -2110,7 +2891,7 @@ impl<'a> BytecodeCompiler<'a> {
             .map_err(|e| JitError::CompilationFailed(format!("Invalid descriptor: {}", e)))?
             .is_some_and(|ret| ret != b'V')
         {
-            self.push(result);
+            self.push_method_result_value(result, method_desc)?;
             Ok(true)
         } else {
             Ok(false)
@@ -2179,7 +2960,7 @@ impl<'a> BytecodeCompiler<'a> {
         let sigref = self.builder.import_signature(sig);
 
         let helper = self.builder.ins().iconst(types::I64, helper_ptr as i64);
-        let ctx = self.builder.ins().iconst(types::I64, 0);
+        let ctx = self.builder.use_var(self.context_var);
         let call_args = [
             ctx,
             self.coerce_helper_arg(args[0]),
@@ -2189,7 +2970,30 @@ impl<'a> BytecodeCompiler<'a> {
             self.coerce_helper_arg(args[4]),
         ];
         let call = self.builder.ins().call_indirect(sigref, helper, &call_args);
-        Ok(self.builder.inst_results(call)[0])
+        let result = self.builder.inst_results(call)[0];
+        self.emit_return_if_deopt_requested();
+        Ok(result)
+    }
+
+    fn emit_return_if_deopt_requested(&mut self) {
+        let ctx = self.builder.use_var(self.context_var);
+        let deopt_state = self.builder.ins().load(types::I64, MemFlags::new(), ctx, 0);
+        let pending = self
+            .builder
+            .ins()
+            .icmp_imm(IntCC::SignedLessThan, deopt_state, 0);
+        let continue_block = self.builder.create_block();
+        let deopt_block = self.builder.create_block();
+        self.builder
+            .ins()
+            .brif(pending, deopt_block, &[], continue_block, &[]);
+
+        self.builder.switch_to_block(deopt_block);
+        self.builder.seal_block(deopt_block);
+        self.emit_default_return();
+
+        self.builder.switch_to_block(continue_block);
+        self.builder.seal_block(continue_block);
     }
 
     fn emit_typed_array_store(
@@ -2200,9 +3004,10 @@ impl<'a> BytecodeCompiler<'a> {
     ) -> Result<(), JitError> {
         let value = self.coerce_helper_arg(value);
         let zero = self.builder.ins().iconst(types::I64, 0);
+        let pc = self.builder.ins().iconst(types::I64, self.pc_offset as i64);
         self.emit_field_helper_call(
             crate::vm::jit::runtime::get_store_typed_array_element_ptr(),
-            [array_ref, index, value, zero, zero],
+            [array_ref, index, value, pc, zero],
         )?;
         Ok(())
     }
@@ -2328,7 +3133,6 @@ impl<'a> BytecodeCompiler<'a> {
         }
         args.reverse();
         let this_ref = self.pop();
-        self.builder.ins().trapz(this_ref, JIT_TRAP_CODE);
         self.stack_slots.push(StackSlot {
             size: 8,
             offset: cp_index as i32,
@@ -2342,7 +3146,7 @@ impl<'a> BytecodeCompiler<'a> {
         if result {
             let raw = self.pop();
             let coerced = self.coerce_raw_helper_result(raw, &method_desc)?;
-            self.push(coerced);
+            self.push_method_result_value(coerced, &method_desc)?;
         }
         Ok(())
     }
@@ -2399,7 +3203,7 @@ impl<'a> BytecodeCompiler<'a> {
         if result {
             let raw = self.pop();
             let coerced = self.coerce_raw_helper_result(raw, &descriptor)?;
-            self.push(coerced);
+            self.push_method_result_value(coerced, &descriptor)?;
         }
         Ok(())
     }
@@ -2423,7 +3227,7 @@ impl<'a> BytecodeCompiler<'a> {
             types::I64,
             crate::vm::jit::runtime::get_invoke_dynamic_ptr() as i64,
         );
-        let ctx = self.builder.ins().iconst(types::I64, 0);
+        let ctx = self.builder.use_var(self.context_var);
         let site_id = self.builder.ins().iconst(types::I64, site_id as i64);
         let call_args = vec![ctx, site_id, argc, arg0, arg1, arg2];
 
@@ -2434,7 +3238,7 @@ impl<'a> BytecodeCompiler<'a> {
             .map_err(|e| JitError::CompilationFailed(format!("Invalid descriptor: {}", e)))?
             .is_some_and(|ret| ret != b'V')
         {
-            self.push(result);
+            self.push_method_result_value(result, &descriptor)?;
             Ok(true)
         } else {
             Ok(false)
@@ -2470,7 +3274,6 @@ impl<'a> BytecodeCompiler<'a> {
             crate::vm::jit::runtime::get_allocate_object_ptr(),
             [class_id, zero, zero, zero, zero],
         )?;
-        self.builder.ins().trapz(obj_ref, JIT_TRAP_CODE);
         Ok(obj_ref)
     }
 
@@ -2582,9 +3385,10 @@ impl<'a> BytecodeCompiler<'a> {
     fn lower_arraylength(&mut self) -> Result<(), JitError> {
         let array_ref = self.pop();
         let zero = self.builder.ins().iconst(types::I64, 0);
+        let pc = self.builder.ins().iconst(types::I64, self.pc_offset as i64);
         let raw = self.emit_field_helper_call(
             crate::vm::jit::runtime::get_array_length_ptr(),
-            [array_ref, zero, zero, zero, zero],
+            [array_ref, pc, zero, zero, zero],
         )?;
         let len = self.builder.ins().ireduce(types::I32, raw);
         self.push(len);
@@ -2592,7 +3396,6 @@ impl<'a> BytecodeCompiler<'a> {
     }
     fn lower_athrow(&mut self) -> Result<(), JitError> {
         let exception_ref = self.pop();
-        self.builder.ins().trapz(exception_ref, JIT_TRAP_CODE);
         self.emit_throw(exception_ref)?;
         Ok(())
     }
@@ -2602,6 +3405,18 @@ impl<'a> BytecodeCompiler<'a> {
         self.emit_field_helper_call(
             crate::vm::jit::runtime::get_athrow_ptr(),
             [exception_ref, zero, zero, zero, zero],
+        )?;
+        self.emit_default_return();
+        Ok(())
+    }
+
+    fn emit_pending_exception_and_return(&mut self, class_name: &str) -> Result<(), JitError> {
+        let class_id = crate::vm::jit::runtime::register_class_name(class_name.to_string());
+        let class_id = self.builder.ins().iconst(types::I64, class_id as i64);
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        self.emit_field_helper_call(
+            crate::vm::jit::runtime::get_raise_exception_class_ptr(),
+            [class_id, zero, zero, zero, zero],
         )?;
         self.emit_default_return();
         Ok(())
@@ -2643,7 +3458,6 @@ impl<'a> BytecodeCompiler<'a> {
                 JitError::CompilationFailed(format!("Invalid reference class index: {}", cp_index))
             })?;
         let obj_ref = self.pop();
-        self.builder.ins().trapz(obj_ref, JIT_TRAP_CODE);
         self.stack_slots.push(StackSlot {
             size: 8,
             offset: cp_index as i32,
@@ -2652,6 +3466,16 @@ impl<'a> BytecodeCompiler<'a> {
             pc: self.pc_offset,
             guard_type: GuardType::TypeCheck(target_class.clone()),
         });
+        if self.site_fallbacks.get(&self.pc_offset) == Some(&DeoptReason::ClassCast) {
+            let reason = self.builder.ins().iconst(types::I64, 8);
+            let zero = self.builder.ins().iconst(types::I64, 0);
+            let _ = self.emit_field_helper_call(
+                crate::vm::jit::runtime::get_force_deopt_ptr(),
+                [reason, obj_ref, zero, zero, zero],
+            )?;
+            self.push(obj_ref);
+            return Ok(());
+        }
         let class_id = crate::vm::jit::runtime::register_class_name(target_class);
         let class_id = self.builder.ins().iconst(types::I64, class_id as i64);
         let zero = self.builder.ins().iconst(types::I64, 0);
@@ -2659,7 +3483,7 @@ impl<'a> BytecodeCompiler<'a> {
             crate::vm::jit::runtime::get_checkcast_ptr(),
             [obj_ref, class_id, zero, zero, zero],
         )?;
-        self.builder.ins().trapz(ok, JIT_TRAP_CODE);
+        let _ = ok;
         self.push(obj_ref);
         Ok(())
     }
@@ -2689,7 +3513,6 @@ impl<'a> BytecodeCompiler<'a> {
 
     fn lower_monitorenter(&mut self) -> Result<(), JitError> {
         let obj_ref = self.pop();
-        self.builder.ins().trapz(obj_ref, JIT_TRAP_CODE);
         self.stack_slots.push(StackSlot {
             size: 8,
             offset: -1,
@@ -2704,13 +3527,12 @@ impl<'a> BytecodeCompiler<'a> {
             crate::vm::jit::runtime::get_monitor_enter_ptr(),
             [obj_ref, zero, zero, zero, zero],
         )?;
-        self.builder.ins().trapz(ok, JIT_TRAP_CODE);
+        let _ = ok;
         Ok(())
     }
 
     fn lower_monitorexit(&mut self) -> Result<(), JitError> {
         let obj_ref = self.pop();
-        self.builder.ins().trapz(obj_ref, JIT_TRAP_CODE);
         self.stack_slots.push(StackSlot {
             size: 8,
             offset: -1,
@@ -2725,7 +3547,7 @@ impl<'a> BytecodeCompiler<'a> {
             crate::vm::jit::runtime::get_monitor_exit_ptr(),
             [obj_ref, zero, zero, zero, zero],
         )?;
-        self.builder.ins().trapz(ok, JIT_TRAP_CODE);
+        let _ = ok;
         Ok(())
     }
 
@@ -2757,7 +3579,7 @@ impl<'a> BytecodeCompiler<'a> {
         if result {
             let raw = self.pop();
             let coerced = self.coerce_raw_helper_result(raw, &method_desc)?;
-            self.push(coerced);
+            self.push_method_result_value(coerced, &method_desc)?;
         }
         Ok(())
     }
@@ -2781,7 +3603,7 @@ impl<'a> BytecodeCompiler<'a> {
             types::I64,
             crate::vm::jit::runtime::get_invoke_native_ptr() as i64,
         );
-        let ctx = self.builder.ins().iconst(types::I64, 0);
+        let ctx = self.builder.use_var(self.context_var);
         let method_ref_id = self.builder.ins().iconst(types::I64, method_ref_id as i64);
         let call_args = vec![ctx, method_ref_id, argc, arg0, arg1, arg2];
 
@@ -2792,7 +3614,7 @@ impl<'a> BytecodeCompiler<'a> {
             .map_err(|e| JitError::CompilationFailed(format!("Invalid descriptor: {}", e)))?
             .is_some_and(|ret| ret != b'V')
         {
-            self.push(result);
+            self.push_method_result_value(result, method_desc)?;
             Ok(true)
         } else {
             Ok(false)
@@ -2811,6 +3633,29 @@ impl<'a> BytecodeCompiler<'a> {
         DeoptimizationInfo {
             guard_checks: self.guard_checks.clone(),
             trap_info: Vec::new(),
+            local_kinds: (0..self.method.max_locals)
+                .map(|index| {
+                    if index > 0 {
+                        let prev_ty = self.local_var_type(index - 1);
+                        let prev_kind = self.local_var_kind(index - 1);
+                        if prev_kind == StackCategory::Category2
+                            && matches!(prev_ty, types::I64 | types::F64)
+                        {
+                            return DeoptLocalKind::Top;
+                        }
+                    }
+                    match (self.local_var_type(index), self.local_var_kind(index)) {
+                        (types::I32, _) => DeoptLocalKind::Int,
+                        (types::F32, _) => DeoptLocalKind::Float,
+                        (types::F64, _) => DeoptLocalKind::Double,
+                        (types::I64, StackCategory::Category2) => DeoptLocalKind::Long,
+                        (types::I64, StackCategory::Category1) => DeoptLocalKind::Reference,
+                        _ => DeoptLocalKind::Top,
+                    }
+                })
+                .collect(),
+            stack_kinds_by_pc: self.deopt_stack_kinds_by_pc.clone(),
+            max_stack_depth: self.method.max_stack,
         }
     }
 }
@@ -2819,6 +3664,9 @@ pub fn compile_method(
     method: &Method,
     func: &mut cranelift::codegen::ir::Function,
     isa: &dyn TargetIsa,
+    frame_size: usize,
+    stack_slots: Vec<StackSlot>,
+    deopt_info: DeoptimizationInfo,
 ) -> Result<CompiledCode, JitError> {
     let mut ctx = Context::new();
     ctx.func = func.clone();
@@ -2837,16 +3685,17 @@ pub fn compile_method(
 
     Ok(CompiledCode {
         code_buffer,
-        frame_size: 0,
-        stack_slots: Vec::new(),
-        deopt_info: DeoptimizationInfo {
-            guard_checks: Vec::new(),
-            trap_info: Vec::new(),
-        },
+        frame_size,
+        stack_slots,
+        deopt_info,
     })
 }
 
-pub fn compile_bytecode(method: &Method, isa: &dyn TargetIsa) -> Result<CompiledCode, JitError> {
+pub fn compile_bytecode(
+    method: &Method,
+    isa: &dyn TargetIsa,
+    site_fallbacks: std::collections::HashMap<usize, DeoptReason>,
+) -> Result<CompiledCode, JitError> {
     reject_runtime_dependent_bytecode(method)?;
 
     let mut func = cranelift::codegen::ir::Function::new();
@@ -2875,13 +3724,29 @@ pub fn compile_bytecode(method: &Method, isa: &dyn TargetIsa) -> Result<Compiled
             b'V' => {
                 func.signature = signature;
                 let mut fn_ctx = FunctionBuilderContext::new();
-                {
+                let (frame_size, stack_slots, deopt_info) = {
                     let mut builder = FunctionBuilder::new(&mut func, &mut fn_ctx);
-                    let mut compiler =
-                        BytecodeCompiler::new(method, &mut builder, arg_types.clone());
+                    let mut compiler = BytecodeCompiler::new(
+                        method,
+                        &mut builder,
+                        arg_types.clone(),
+                        site_fallbacks.clone(),
+                    );
                     compiler.lower()?;
-                }
-                return compile_method(method, &mut func, isa);
+                    (
+                        compiler.frame_size(),
+                        compiler.stack_slots(),
+                        compiler.deopt_info(),
+                    )
+                };
+                return compile_method(
+                    method,
+                    &mut func,
+                    isa,
+                    frame_size,
+                    stack_slots,
+                    deopt_info,
+                );
             }
             _ => types::I64,
         };
@@ -2891,13 +3756,19 @@ pub fn compile_bytecode(method: &Method, isa: &dyn TargetIsa) -> Result<Compiled
     func.signature = signature;
 
     let mut fn_ctx = FunctionBuilderContext::new();
-    {
+    let (frame_size, stack_slots, deopt_info) = {
         let mut builder = FunctionBuilder::new(&mut func, &mut fn_ctx);
-        let mut compiler = BytecodeCompiler::new(method, &mut builder, arg_types);
+        let mut compiler =
+            BytecodeCompiler::new(method, &mut builder, arg_types, site_fallbacks);
         compiler.lower()?;
-    }
+        (
+            compiler.frame_size(),
+            compiler.stack_slots(),
+            compiler.deopt_info(),
+        )
+    };
 
-    compile_method(method, &mut func, isa)
+    compile_method(method, &mut func, isa, frame_size, stack_slots, deopt_info)
 }
 
 fn reject_runtime_dependent_bytecode(method: &Method) -> Result<(), JitError> {
@@ -2905,16 +3776,17 @@ fn reject_runtime_dependent_bytecode(method: &Method) -> Result<(), JitError> {
     while pc < method.code.len() {
         let opcode = method.code[pc];
         match opcode {
-            0x99..=0xa8 => {
-                let high = method.code[pc + 1] as i16;
-                let low = method.code[pc + 2] as u16;
-                let offset = i16::from_be_bytes([high as u8, low as u8]) as i32;
-                if offset < 0 {
-                    return Err(JitError::CompilationFailed(
-                        "loop backedges stay on the interpreter until block-stack SSA merges are supported"
-                            .to_string(),
-                    ));
-                }
+            0xa8 => {
+                return Err(JitError::CompilationFailed(
+                    "jsr subroutines stay on the interpreter until return-address SSA is supported"
+                        .to_string(),
+                ));
+            }
+            0xa9 => {
+                return Err(JitError::CompilationFailed(
+                    "ret stays on the interpreter until return-address SSA is supported"
+                        .to_string(),
+                ));
             }
             0xb2 => {
                 let cp_index = ((method.code[pc + 1] as usize) << 8) | method.code[pc + 2] as usize;
@@ -2932,31 +3804,29 @@ fn reject_runtime_dependent_bytecode(method: &Method) -> Result<(), JitError> {
                     ));
                 }
             }
-            0xba => {
-                let cp_index = ((method.code[pc + 1] as usize) << 8) | method.code[pc + 2] as usize;
-                if method
-                    .invoke_dynamic_sites
-                    .get(cp_index)
-                    .and_then(|site| site.as_ref())
-                    .is_some_and(|site| {
-                        matches!(
-                            site.kind,
-                            crate::vm::types::InvokeDynamicKind::StringConcat { .. }
-                        )
-                    })
-                {
-                    return Err(JitError::CompilationFailed(
-                        "invokedynamic string concat stays on the interpreter until the JIT helper ABI is verified"
-                            .to_string(),
-                    ));
-                }
-            }
             0xbf | 0xff => {
                 if !method.exception_handlers.is_empty() {
                     return Err(JitError::CompilationFailed(format!(
                         "opcode 0x{opcode:02x} with an exception table stays on the interpreter until JIT frame unwinding is supported"
                     )));
                 }
+            }
+            0xc4 => {
+                let inner = *method.code.get(pc + 1).ok_or_else(|| {
+                    JitError::CompilationFailed("truncated wide".to_string())
+                })?;
+                if inner == 0xa9 {
+                    return Err(JitError::CompilationFailed(
+                        "wide ret stays on the interpreter until return-address SSA is supported"
+                            .to_string(),
+                    ));
+                }
+            }
+            0xc9 => {
+                return Err(JitError::CompilationFailed(
+                    "jsr_w subroutines stay on the interpreter until return-address SSA is supported"
+                        .to_string(),
+                ));
             }
             _ => {}
         }
@@ -2967,8 +3837,15 @@ fn reject_runtime_dependent_bytecode(method: &Method) -> Result<(), JitError> {
 
 fn bytecode_next_pc(code: &[u8], pc: usize, opcode: u8) -> Result<usize, JitError> {
     let next = match opcode {
-        0x10 | 0x12 | 0xbc => pc + 2,
+        0x10 | 0x12 | 0xa9 | 0xbc => pc + 2,
         0x11 | 0x13 | 0x14 | 0x84 | 0x99..=0xa8 | 0xc6 | 0xc7 => pc + 3,
+        0xc4 => {
+            let inner = *code
+                .get(pc + 1)
+                .ok_or_else(|| JitError::CompilationFailed("truncated wide".into()))?;
+            if inner == 0x84 { pc + 6 } else { pc + 4 }
+        }
+        0xc8 | 0xc9 => pc + 5,
         0xb2..=0xb8 | 0xbb | 0xbd | 0xbe | 0xc0 | 0xc1 | 0xfe => pc + 3,
         0xb9 | 0xba => pc + 5,
         0xc5 => pc + 4,

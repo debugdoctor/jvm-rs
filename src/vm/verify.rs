@@ -508,63 +508,181 @@ fn apply_instruction(
             let _ = pop(state, insn.pc)?;
         }
         Opcode::Pop2 => {
-            let _ = pop(state, insn.pc)?;
-            let _ = pop(state, insn.pc)?;
+            let top = pop(state, insn.pc)?;
+            if !is_wide_verify_type(&top) {
+                let second = pop(state, insn.pc)?;
+                if is_wide_verify_type(&second) {
+                    return Err(verification_error(
+                        insn.pc,
+                        "pop2 requires either one category-2 or two category-1 values",
+                    ));
+                }
+            }
         }
         Opcode::Dup => {
             let value = pop(state, insn.pc)?;
+            if is_wide_verify_type(&value) {
+                return Err(verification_error(
+                    insn.pc,
+                    "dup does not support category-2 values",
+                ));
+            }
             push(state, value.clone(), insn.pc, method.max_stack)?;
             push(state, value, insn.pc, method.max_stack)?;
         }
         Opcode::DupX1 => {
             let v1 = pop(state, insn.pc)?;
             let v2 = pop(state, insn.pc)?;
+            if is_wide_verify_type(&v1) || is_wide_verify_type(&v2) {
+                return Err(verification_error(
+                    insn.pc,
+                    "dup_x1 requires two category-1 values",
+                ));
+            }
             push(state, v1.clone(), insn.pc, method.max_stack)?;
             push(state, v2, insn.pc, method.max_stack)?;
             push(state, v1, insn.pc, method.max_stack)?;
         }
         Opcode::Dup2 => {
             let v1 = pop(state, insn.pc)?;
-            let v2 = pop(state, insn.pc)?;
-            push(state, v2.clone(), insn.pc, method.max_stack)?;
-            push(state, v1.clone(), insn.pc, method.max_stack)?;
-            push(state, v2, insn.pc, method.max_stack)?;
-            push(state, v1, insn.pc, method.max_stack)?;
+            if is_wide_verify_type(&v1) {
+                push(state, v1.clone(), insn.pc, method.max_stack)?;
+                push(state, v1, insn.pc, method.max_stack)?;
+            } else {
+                let v2 = pop(state, insn.pc)?;
+                if is_wide_verify_type(&v2) {
+                    return Err(verification_error(
+                        insn.pc,
+                        "dup2 requires either one category-2 or two category-1 values",
+                    ));
+                }
+                push(state, v2.clone(), insn.pc, method.max_stack)?;
+                push(state, v1.clone(), insn.pc, method.max_stack)?;
+                push(state, v2, insn.pc, method.max_stack)?;
+                push(state, v1, insn.pc, method.max_stack)?;
+            }
         }
         Opcode::DupX2 => {
             let v1 = pop(state, insn.pc)?;
+            if is_wide_verify_type(&v1) {
+                return Err(verification_error(
+                    insn.pc,
+                    "dup_x2 requires top value to be category-1",
+                ));
+            }
             let v2 = pop(state, insn.pc)?;
-            let v3 = pop(state, insn.pc)?;
-            push(state, v1.clone(), insn.pc, method.max_stack)?;
-            push(state, v3, insn.pc, method.max_stack)?;
-            push(state, v2, insn.pc, method.max_stack)?;
-            push(state, v1, insn.pc, method.max_stack)?;
+            if is_wide_verify_type(&v2) {
+                push(state, v1.clone(), insn.pc, method.max_stack)?;
+                push(state, v2, insn.pc, method.max_stack)?;
+                push(state, v1, insn.pc, method.max_stack)?;
+            } else {
+                let v3 = pop(state, insn.pc)?;
+                if is_wide_verify_type(&v3) {
+                    return Err(verification_error(
+                        insn.pc,
+                        "dup_x2 requires either [cat1, cat2] or [cat1, cat1, cat1]",
+                    ));
+                }
+                push(state, v1.clone(), insn.pc, method.max_stack)?;
+                push(state, v3, insn.pc, method.max_stack)?;
+                push(state, v2, insn.pc, method.max_stack)?;
+                push(state, v1, insn.pc, method.max_stack)?;
+            }
         }
         Opcode::Dup2X1 => {
             let v1 = pop(state, insn.pc)?;
             let v2 = pop(state, insn.pc)?;
-            let v3 = pop(state, insn.pc)?;
-            push(state, v2.clone(), insn.pc, method.max_stack)?;
-            push(state, v1.clone(), insn.pc, method.max_stack)?;
-            push(state, v3, insn.pc, method.max_stack)?;
-            push(state, v2, insn.pc, method.max_stack)?;
-            push(state, v1, insn.pc, method.max_stack)?;
+            if is_wide_verify_type(&v1) {
+                if is_wide_verify_type(&v2) {
+                    return Err(verification_error(
+                        insn.pc,
+                        "dup2_x1 wide form requires [..., cat1, cat2]",
+                    ));
+                }
+                push(state, v1.clone(), insn.pc, method.max_stack)?;
+                push(state, v2, insn.pc, method.max_stack)?;
+                push(state, v1, insn.pc, method.max_stack)?;
+            } else {
+                if is_wide_verify_type(&v2) {
+                    return Err(verification_error(
+                        insn.pc,
+                        "dup2_x1 narrow form requires top two values category-1",
+                    ));
+                }
+                let v3 = pop(state, insn.pc)?;
+                if is_wide_verify_type(&v3) {
+                    return Err(verification_error(
+                        insn.pc,
+                        "dup2_x1 narrow form requires three category-1 values",
+                    ));
+                }
+                push(state, v2.clone(), insn.pc, method.max_stack)?;
+                push(state, v1.clone(), insn.pc, method.max_stack)?;
+                push(state, v3, insn.pc, method.max_stack)?;
+                push(state, v2, insn.pc, method.max_stack)?;
+                push(state, v1, insn.pc, method.max_stack)?;
+            }
         }
         Opcode::Dup2X2 => {
             let v1 = pop(state, insn.pc)?;
             let v2 = pop(state, insn.pc)?;
-            let v3 = pop(state, insn.pc)?;
-            let v4 = pop(state, insn.pc)?;
-            push(state, v2.clone(), insn.pc, method.max_stack)?;
-            push(state, v1.clone(), insn.pc, method.max_stack)?;
-            push(state, v4, insn.pc, method.max_stack)?;
-            push(state, v3, insn.pc, method.max_stack)?;
-            push(state, v2, insn.pc, method.max_stack)?;
-            push(state, v1, insn.pc, method.max_stack)?;
+            if is_wide_verify_type(&v1) {
+                if is_wide_verify_type(&v2) {
+                    push(state, v1.clone(), insn.pc, method.max_stack)?;
+                    push(state, v2, insn.pc, method.max_stack)?;
+                    push(state, v1, insn.pc, method.max_stack)?;
+                } else {
+                    let v3 = pop(state, insn.pc)?;
+                    if is_wide_verify_type(&v3) {
+                        return Err(verification_error(
+                            insn.pc,
+                            "dup2_x2 wide-top form requires [cat1, cat1, cat2] or [cat2, cat2]",
+                        ));
+                    }
+                    push(state, v1.clone(), insn.pc, method.max_stack)?;
+                    push(state, v3, insn.pc, method.max_stack)?;
+                    push(state, v2, insn.pc, method.max_stack)?;
+                    push(state, v1, insn.pc, method.max_stack)?;
+                }
+            } else if is_wide_verify_type(&v2) {
+                let v3 = pop(state, insn.pc)?;
+                if is_wide_verify_type(&v3) {
+                    return Err(verification_error(
+                        insn.pc,
+                        "dup2_x2 mixed form requires [cat1, cat2, cat1]",
+                    ));
+                }
+                push(state, v2.clone(), insn.pc, method.max_stack)?;
+                push(state, v1.clone(), insn.pc, method.max_stack)?;
+                push(state, v3, insn.pc, method.max_stack)?;
+                push(state, v2, insn.pc, method.max_stack)?;
+                push(state, v1, insn.pc, method.max_stack)?;
+            } else {
+                let v3 = pop(state, insn.pc)?;
+                let v4 = pop(state, insn.pc)?;
+                if is_wide_verify_type(&v3) || is_wide_verify_type(&v4) {
+                    return Err(verification_error(
+                        insn.pc,
+                        "dup2_x2 narrow form requires four category-1 values",
+                    ));
+                }
+                push(state, v2.clone(), insn.pc, method.max_stack)?;
+                push(state, v1.clone(), insn.pc, method.max_stack)?;
+                push(state, v4, insn.pc, method.max_stack)?;
+                push(state, v3, insn.pc, method.max_stack)?;
+                push(state, v2, insn.pc, method.max_stack)?;
+                push(state, v1, insn.pc, method.max_stack)?;
+            }
         }
         Opcode::Swap => {
             let v1 = pop(state, insn.pc)?;
             let v2 = pop(state, insn.pc)?;
+            if is_wide_verify_type(&v1) || is_wide_verify_type(&v2) {
+                return Err(verification_error(
+                    insn.pc,
+                    "swap requires two category-1 values",
+                ));
+            }
             push(state, v1, insn.pc, method.max_stack)?;
             push(state, v2, insn.pc, method.max_stack)?;
         }

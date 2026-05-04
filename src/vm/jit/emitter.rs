@@ -15,6 +15,9 @@ impl CodeEmitter {
             deopt_info: DeoptimizationInfo {
                 guard_checks: Vec::new(),
                 trap_info: Vec::new(),
+                local_kinds: Vec::new(),
+                stack_kinds_by_pc: std::collections::HashMap::new(),
+                max_stack_depth: 0,
             },
         }
     }

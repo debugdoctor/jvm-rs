@@ -7,6 +7,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use jvm_rs::launcher::{self, LaunchOptions};
+use jvm_rs::vm::jit::runtime::DeoptReason;
 use jvm_rs::vm::{ExecutionResult, FieldRef, Method, MethodRef, RuntimeClass, Value, Vm, VmError};
 
 const JAVAC_TIMEOUT: Duration = Duration::from_secs(10);
@@ -104,10 +105,19 @@ struct RunResult {
 }
 
 fn run_with_jit_threshold(root: &Path, main_class: &str, threshold: u32) -> RunResult {
+    run_with_jit_thresholds(root, main_class, threshold, threshold)
+}
+
+fn run_with_jit_thresholds(
+    root: &Path,
+    main_class: &str,
+    invocation_threshold: u32,
+    backedge_threshold: u32,
+) -> RunResult {
     let options = LaunchOptions::new(root, main_class, vec![]);
     let mut vm = Vm::new().expect("failed to create VM");
     vm.set_class_path(options.class_path.clone());
-    vm.set_jit_thresholds(threshold, threshold);
+    vm.set_jit_thresholds(invocation_threshold, backedge_threshold);
     let source = launcher::resolve_class_path(&options.class_path, main_class).unwrap();
     let method = launcher::load_main_method(&source, main_class, &[], &mut vm).unwrap();
     let _ = vm.execute(method).unwrap();
@@ -189,6 +199,40 @@ public class Main {
 }
 "#,
             )],
+        );
+    }
+
+    #[test]
+    fn jit_osr_enters_hot_loop_from_interpreter() {
+        let root = compile_java(
+            "osr_hot_loop",
+            &[(
+                "demo/Main.java",
+                r#"
+package demo;
+public class Main {
+    static int hot(int n) {
+        int sum = 0;
+        for (int i = 0; i < n; i++) {
+            sum += (i * 3) - 1;
+        }
+        return sum;
+    }
+    public static void main(String[] args) {
+        System.out.println(hot(25));
+    }
+}
+"#,
+            )],
+        );
+
+        let interp = run_with_jit_thresholds(root.path(), "demo.Main", u32::MAX, u32::MAX);
+        let osr = run_with_jit_thresholds(root.path(), "demo.Main", u32::MAX, 1);
+
+        assert_eq!(osr.output, interp.output);
+        assert!(
+            osr.jit_executions > 0,
+            "expected OSR to enter the JIT tier from the hot loop"
         );
     }
 
@@ -520,6 +564,39 @@ public class Main {
     }
 
     #[test]
+    fn jit_compiled_method_can_invoke_special_helper_with_long_return() {
+        let root = compile_java(
+            "compiled_invokespecial_helper_long_return",
+            &[(
+                "demo/Main.java",
+                r#"
+package demo;
+public class Main {
+    private long hidden(long value) {
+        return value + 11L;
+    }
+    static long run(Main m) {
+        return m.hidden(31L) + 1L;
+    }
+    public static void main(String[] args) {
+        System.out.println(run(new Main()));
+    }
+}
+"#,
+            )],
+        );
+        let interp = run_with_jit_threshold(&root, "demo.Main", u32::MAX);
+        let jit = run_with_jit_threshold(&root, "demo.Main", 1);
+
+        assert_eq!(jit.output, interp.output);
+        assert!(
+            jit.jit_executions >= 2,
+            "expected top-level JIT/deopt plus compiled run() to reach JIT, got {}",
+            jit.jit_executions
+        );
+    }
+
+    #[test]
     fn jit_compiled_method_can_invoke_interface_helper() {
         let root = compile_java(
             "compiled_invokeinterface_helper",
@@ -538,6 +615,44 @@ public class Main {
     }
     static int run(Adder adder) {
         return adder.add(8) + 4;
+    }
+    public static void main(String[] args) {
+        System.out.println(run(new Impl()));
+    }
+}
+"#,
+            )],
+        );
+        let interp = run_with_jit_threshold(&root, "demo.Main", u32::MAX);
+        let jit = run_with_jit_threshold(&root, "demo.Main", 1);
+
+        assert_eq!(jit.output, interp.output);
+        assert!(
+            jit.jit_executions >= 2,
+            "expected top-level JIT/deopt plus compiled run() to reach JIT, got {}",
+            jit.jit_executions
+        );
+    }
+
+    #[test]
+    fn jit_compiled_method_can_invoke_interface_helper_with_long_return() {
+        let root = compile_java(
+            "compiled_invokeinterface_helper_long_return",
+            &[(
+                "demo/Main.java",
+                r#"
+package demo;
+public class Main {
+    interface Adder {
+        long add(long value);
+    }
+    static class Impl implements Adder {
+        public long add(long value) {
+            return value + 30L;
+        }
+    }
+    static long run(Adder adder) {
+        return adder.add(8L) + 4L;
     }
     public static void main(String[] args) {
         System.out.println(run(new Impl()));
@@ -1780,631 +1895,6 @@ public class Main {
     }
 }
 
-mod targeted_suite {
-    use super::*;
-    #[test]
-    fn jit_simple_array_load() {
-        assert_jit_matches_interpreter(
-            "simple_array_load",
-            &[(
-                "demo/Main.java",
-                r#"
-package demo;
-public class Main {
-    public static void main(String[] args) {
-        int[] arr = new int[3];
-        arr[0] = 42;
-        arr[1] = 100;
-        arr[2] = 7;
-        System.out.println(arr[0]);
-        System.out.println(arr[1]);
-        System.out.println(arr[2]);
-    }
-}
-"#,
-            )],
-        );
-    }
-
-    #[test]
-    fn jit_array_load_from_parameter() {
-        assert_jit_matches_interpreter(
-            "array_load_from_param",
-            &[(
-                "demo/Main.java",
-                r#"
-package demo;
-public class Main {
-    public static void main(String[] args) {
-        int[] arr = new int[3];
-        arr[0] = 42;
-        arr[1] = 100;
-        arr[2] = 7;
-        printArray(arr);
-    }
-    static void printArray(int[] a) {
-        System.out.println(a[0]);
-        System.out.println(a[1]);
-        System.out.println(a[2]);
-    }
-}
-"#,
-            )],
-        );
-    }
-
-    #[test]
-    fn jit_single_loop_array_sum() {
-        assert_jit_matches_interpreter(
-            "single_loop_array_sum",
-            &[(
-                "demo/Main.java",
-                r#"
-package demo;
-public class Main {
-    public static void main(String[] args) {
-        int[] arr = {10, 20, 30, 40, 50};
-        int sum = 0;
-        for (int i = 0; i < 5; i++) {
-            sum = sum + arr[i];
-        }
-        System.out.println(sum);
-    }
-}
-"#,
-            )],
-        );
-    }
-
-    #[test]
-    fn jit_nested_loop_array_access() {
-        assert_jit_matches_interpreter(
-            "nested_loop_array_access",
-            &[(
-                "demo/Main.java",
-                r#"
-package demo;
-public class Main {
-    public static void main(String[] args) {
-        int[] arr = {5, 3, 8, 1, 9};
-        for (int i = 0; i < 4; i++) {
-            for (int j = i + 1; j < 5; j++) {
-                if (arr[i] > arr[j]) {
-                    int tmp = arr[i];
-                    arr[i] = arr[j];
-                    arr[j] = tmp;
-                }
-            }
-        }
-        for (int i = 0; i < 5; i++) {
-            System.out.println(arr[i]);
-        }
-    }
-}
-"#,
-            )],
-        );
-    }
-
-    #[test]
-    fn jit_array_swap() {
-        assert_jit_matches_interpreter(
-            "array_swap",
-            &[(
-                "demo/Main.java",
-                r#"
-package demo;
-public class Main {
-    public static void main(String[] args) {
-        int[] arr = {1, 2, 3, 4, 5};
-        swap(arr, 0, 4);
-        System.out.println(arr[0]);
-        System.out.println(arr[4]);
-    }
-    static void swap(int[] a, int i, int j) {
-        int tmp = a[i];
-        a[i] = a[j];
-        a[j] = tmp;
-    }
-}
-"#,
-            )],
-        );
-    }
-
-    #[test]
-    fn jit_array_length() {
-        assert_jit_matches_interpreter(
-            "array_length",
-            &[(
-                "demo/Main.java",
-                r#"
-package demo;
-public class Main {
-    public static void main(String[] args) {
-        int[] arr = new int[7];
-        System.out.println(arr.length);
-        int[] arr2 = {1, 2, 3};
-        System.out.println(arr2.length);
-    }
-}
-"#,
-            )],
-        );
-    }
-
-    #[test]
-    fn jit_two_dimensional_array() {
-        assert_jit_matches_interpreter(
-            "two_dimensional_array",
-            &[(
-                "demo/Main.java",
-                r#"
-package demo;
-public class Main {
-    public static void main(String[] args) {
-        int[][] matrix = new int[2][3];
-        matrix[0][0] = 1;
-        matrix[0][1] = 2;
-        matrix[0][2] = 3;
-        matrix[1][0] = 4;
-        matrix[1][1] = 5;
-        matrix[1][2] = 6;
-        System.out.println(matrix[0][0]);
-        System.out.println(matrix[1][2]);
-    }
-}
-"#,
-            )],
-        );
-    }
-
-    #[test]
-    fn jit_static_method_call() {
-        assert_jit_matches_interpreter(
-            "static_method_call",
-            &[(
-                "demo/Main.java",
-                r#"
-package demo;
-public class Main {
-    public static void main(String[] args) {
-        int result = add(10, 20);
-        System.out.println(result);
-    }
-    static int add(int a, int b) {
-        return a + b;
-    }
-}
-"#,
-            )],
-        );
-    }
-
-    #[test]
-    fn jit_static_method_with_array_param() {
-        assert_jit_matches_interpreter(
-            "static_method_array_param",
-            &[(
-                "demo/Main.java",
-                r#"
-package demo;
-public class Main {
-    public static void main(String[] args) {
-        int[] arr = {1, 2, 3, 4, 5};
-        int sum = sumArray(arr);
-        System.out.println(sum);
-    }
-    static int sumArray(int[] a) {
-        int sum = 0;
-        for (int i = 0; i < a.length; i++) {
-            sum = sum + a[i];
-        }
-        return sum;
-    }
-}
-"#,
-            )],
-        );
-    }
-
-    #[test]
-    fn jit_find_max_in_array() {
-        assert_jit_matches_interpreter(
-            "find_max_in_array",
-            &[(
-                "demo/Main.java",
-                r#"
-package demo;
-public class Main {
-    public static void main(String[] args) {
-        int[] arr = {3, 7, 2, 9, 4};
-        int max = arr[0];
-        for (int i = 1; i < 5; i++) {
-            if (arr[i] > max) {
-                max = arr[i];
-            }
-        }
-        System.out.println(max);
-    }
-}
-"#,
-            )],
-        );
-    }
-
-    #[test]
-    fn jit_reverse_array() {
-        assert_jit_matches_interpreter(
-            "reverse_array",
-            &[(
-                "demo/Main.java",
-                r#"
-package demo;
-public class Main {
-    public static void main(String[] args) {
-        int[] arr = {1, 2, 3, 4, 5};
-        reverse(arr);
-        for (int i = 0; i < 5; i++) {
-            System.out.println(arr[i]);
-        }
-    }
-    static void reverse(int[] a) {
-        for (int i = 0; i < a.length / 2; i++) {
-            int tmp = a[i];
-            a[i] = a[a.length - 1 - i];
-            a[a.length - 1 - i] = tmp;
-        }
-    }
-}
-"#,
-            )],
-        );
-    }
-
-    #[test]
-    fn jit_linear_search() {
-        assert_jit_matches_interpreter(
-            "linear_search",
-            &[(
-                "demo/Main.java",
-                r#"
-package demo;
-public class Main {
-    public static void main(String[] args) {
-        int[] arr = {10, 20, 30, 40, 50};
-        int idx = linearSearch(arr, 30);
-        System.out.println(idx);
-        idx = linearSearch(arr, 100);
-        System.out.println(idx);
-    }
-    static int linearSearch(int[] a, int target) {
-        for (int i = 0; i < a.length; i++) {
-            if (a[i] == target) {
-                return i;
-            }
-        }
-        return -1;
-    }
-}
-"#,
-            )],
-        );
-    }
-
-    #[test]
-    fn jit_bubble_sort_matches_interpreter() {
-        assert_jit_matches_interpreter(
-            "bubble_sort",
-            &[(
-                "demo/Main.java",
-                r#"
-package demo;
-public class Main {
-    static void bubbleSort(int[] arr) {
-        int n = arr.length;
-        for (int i = 0; i < n - 1; i++) {
-            for (int j = 0; j < n - i - 1; j++) {
-                if (arr[j] > arr[j + 1]) {
-                    int tmp = arr[j];
-                    arr[j] = arr[j + 1];
-                    arr[j + 1] = tmp;
-                }
-            }
-        }
-    }
-    public static void main(String[] args) {
-        int[] data = {64, 34, 25, 12, 22, 11, 90};
-        bubbleSort(data);
-        for (int i = 0; i < data.length; i++) {
-            System.out.println(data[i]);
-        }
-    }
-}
-"#,
-            )],
-        );
-    }
-
-    #[test]
-    fn jit_selection_sort() {
-        assert_jit_matches_interpreter(
-            "selection_sort",
-            &[(
-                "demo/Main.java",
-                r#"
-package demo;
-public class Main {
-    public static void main(String[] args) {
-        int[] arr = {64, 34, 25, 12, 22, 11, 90};
-        selectionSort(arr);
-        for (int i = 0; i < arr.length; i++) {
-            System.out.println(arr[i]);
-        }
-    }
-    static void selectionSort(int[] a) {
-        int n = a.length;
-        for (int i = 0; i < n - 1; i++) {
-            int minIdx = i;
-            for (int j = i + 1; j < n; j++) {
-                if (a[j] < a[minIdx]) {
-                    minIdx = j;
-                }
-            }
-            int tmp = a[minIdx];
-            a[minIdx] = a[i];
-            a[i] = tmp;
-        }
-    }
-}
-"#,
-            )],
-        );
-    }
-
-    #[test]
-    fn jit_insertion_sort() {
-        assert_jit_matches_interpreter(
-            "insertion_sort",
-            &[(
-                "demo/Main.java",
-                r#"
-package demo;
-public class Main {
-    public static void main(String[] args) {
-        int[] arr = {64, 34, 25, 12, 22, 11, 90};
-        insertionSort(arr);
-        for (int i = 0; i < arr.length; i++) {
-            System.out.println(arr[i]);
-        }
-    }
-    static void insertionSort(int[] a) {
-        for (int i = 1; i < a.length; i++) {
-            int key = a[i];
-            int j = i - 1;
-            while (j >= 0 && a[j] > key) {
-                a[j + 1] = a[j];
-                j--;
-            }
-            a[j + 1] = key;
-        }
-    }
-}
-"#,
-            )],
-        );
-    }
-
-    #[test]
-    fn jit_fibonacci_iterative() {
-        assert_jit_matches_interpreter(
-            "fibonacci_iterative",
-            &[(
-                "demo/Main.java",
-                r#"
-package demo;
-public class Main {
-    public static void main(String[] args) {
-        int a = 0, b = 1;
-        System.out.println(a);
-        System.out.println(b);
-        for (int i = 2; i < 10; i++) {
-            int c = a + b;
-            System.out.println(c);
-            a = b;
-            b = c;
-        }
-    }
-}
-"#,
-            )],
-        );
-    }
-
-    #[test]
-    fn jit_dijkstra_matches_interpreter() {
-        assert_jit_matches_interpreter(
-            "dijkstra",
-            &[(
-                "demo/Main.java",
-                r#"
-package demo;
-public class Main {
-    static int[][] graph = {
-        {0, 4, 0, 0, 0, 0, 0, 8, 0},
-        {4, 0, 8, 0, 0, 0, 0, 11, 0},
-        {0, 8, 0, 7, 0, 4, 0, 0, 2},
-        {0, 0, 7, 0, 9, 14, 0, 0, 0},
-        {0, 0, 0, 9, 0, 10, 0, 0, 0},
-        {0, 0, 4, 14, 10, 0, 2, 0, 0},
-        {0, 0, 0, 0, 0, 2, 0, 1, 6},
-        {8, 11, 0, 0, 0, 0, 1, 0, 7},
-        {0, 0, 2, 0, 0, 0, 6, 7, 0}
-    };
-    static int[] dijkstra(int[][] graph, int src) {
-        int V = 9;
-        int[] dist = new int[V];
-        boolean[] sptSet = new boolean[V];
-        for (int i = 0; i < V; i++) {
-            dist[i] = Integer.MAX_VALUE;
-            sptSet[i] = false;
-        }
-        dist[src] = 0;
-        for (int count = 0; count < V - 1; count++) {
-            int u = minDistance(dist, sptSet, V);
-            sptSet[u] = true;
-            for (int v = 0; v < V; v++) {
-                if (!sptSet[v] && graph[u][v] != 0 && dist[u] != Integer.MAX_VALUE
-                    && dist[u] + graph[u][v] < dist[v]) {
-                    dist[v] = dist[u] + graph[u][v];
-                }
-            }
-        }
-        return dist;
-    }
-    static int minDistance(int[] dist, boolean[] sptSet, int V) {
-        int min = Integer.MAX_VALUE, minIndex = 0;
-        for (int v = 0; v < V; v++) {
-            if (!sptSet[v] && dist[v] < min) {
-                min = dist[v];
-                minIndex = v;
-            }
-        }
-        return minIndex;
-    }
-    public static void main(String[] args) {
-        int[] dist = dijkstra(graph, 0);
-        for (int i = 0; i < 9; i++) {
-            System.out.println(i + ":" + dist[i]);
-        }
-    }
-}
-"#,
-            )],
-        );
-    }
-
-    #[test]
-    fn jit_matrix_multiply_matches_interpreter() {
-        assert_jit_matches_interpreter(
-            "matrix_multiply",
-            &[(
-                "demo/Main.java",
-                r#"
-package demo;
-public class Main {
-    static void multiply(int[][] a, int[][] b, int[][] r, int n) {
-        for (int i = 0; i < n; i++) {
-            for (int j = 0; j < n; j++) {
-                for (int k = 0; k < n; k++) {
-                    r[i][j] = r[i][j] + a[i][k] * b[k][j];
-                }
-            }
-        }
-    }
-    public static void main(String[] args) {
-        int n = 2;
-        int[][] a = {{1, 2}, {3, 4}};
-        int[][] b = {{5, 6}, {7, 8}};
-        int[][] r = {{0, 0}, {0, 0}};
-        multiply(a, b, r, n);
-        System.out.println(r[0][0]);
-        System.out.println(r[0][1]);
-        System.out.println(r[1][0]);
-        System.out.println(r[1][1]);
-    }
-}
-"#,
-            )],
-        );
-    }
-
-    #[test]
-    fn jit_array_pass_and_modify() {
-        assert_jit_matches_interpreter(
-            "array_pass_and_modify",
-            &[(
-                "demo/Main.java",
-                r#"
-package demo;
-public class Main {
-    public static void main(String[] args) {
-        int[] arr = {1, 2, 3, 4, 5};
-        doubleAverage(arr);
-        System.out.println(arr[0]);
-        System.out.println(arr[4]);
-    }
-    static void doubleAverage(int[] a) {
-        int sum = 0;
-        for (int i = 0; i < a.length; i++) {
-            sum = sum + a[i];
-        }
-        int avg = sum / a.length;
-        a[0] = avg;
-        a[a.length - 1] = avg;
-    }
-}
-"#,
-            )],
-        );
-    }
-
-    #[test]
-    fn jit_multiple_arrays() {
-        assert_jit_matches_interpreter(
-            "multiple_arrays",
-            &[(
-                "demo/Main.java",
-                r#"
-package demo;
-public class Main {
-    public static void main(String[] args) {
-        int[] a = {1, 2, 3};
-        int[] b = {4, 5, 6};
-        int[] c = new int[3];
-        for (int i = 0; i < 3; i++) {
-            c[i] = a[i] + b[i];
-        }
-        System.out.println(c[0]);
-        System.out.println(c[1]);
-        System.out.println(c[2]);
-    }
-}
-"#,
-            )],
-        );
-    }
-
-    #[test]
-    fn jit_null_array_handling() {
-        assert_jit_matches_interpreter(
-            "null_array_handling",
-            &[(
-                "demo/Main.java",
-                r#"
-package demo;
-public class Main {
-    public static void main(String[] args) {
-        int[] arr = null;
-        if (arr == null) {
-            System.out.println(0);
-        } else {
-            System.out.println(arr.length);
-        }
-        arr = new int[5];
-        if (arr == null) {
-            System.out.println(0);
-        } else {
-            System.out.println(arr.length);
-        }
-    }
-}
-"#,
-            )],
-        );
-    }
-}
-
 mod comprehensive_suite {
     use super::*;
     // ARRAY OPERATIONS - Test iaload, iastore, aload, astore, aaload, aastore
@@ -3221,6 +2711,39 @@ public class Main {
             );
         }
 
+        #[test]
+        fn jit_ifnull_in_helper_method() {
+            let root = compile_java(
+                "jit_ifnull_in_helper_method",
+                &[(
+                    "demo/Main.java",
+                    r#"
+package demo;
+public class Main {
+    static int check(String value) {
+        if (value == null) return 10;
+        if (value != null) return 20;
+        return -1;
+    }
+    public static void main(String[] args) {
+        System.out.println(check(null));
+        System.out.println(check("hello"));
+    }
+}
+"#,
+                )],
+            );
+            let interp = run_with_jit_threshold(&root, "demo.Main", u32::MAX);
+            let jit = run_with_jit_threshold(&root, "demo.Main", 1);
+
+            assert_eq!(jit.output, interp.output);
+            assert!(
+                jit.jit_executions >= 2,
+                "expected top-level JIT/deopt plus compiled check() to reach JIT, got {}",
+                jit.jit_executions
+            );
+        }
+
         // Test ifeq, ifne, iflt, ifge, ifgt, ifle (compare with zero)
         #[test]
         fn jit_compare_with_zero() {
@@ -3536,6 +3059,50 @@ public class Main {
         int b = 2;
         int c = a + b;
         System.out.println(c);
+    }
+}
+"#,
+                )],
+            );
+        }
+
+        #[test]
+        fn jit_pop2_long_return_in_helper() {
+            assert_jit_matches_interpreter(
+                "jit_pop2_long_return_in_helper",
+                &[(
+                    "demo/Main.java",
+                    r#"
+package demo;
+public class Main {
+    static long foo() { return 42L; }
+    static int bar() { return 7; }
+    public static void main(String[] args) {
+        foo();
+        int value = bar();
+        System.out.println(value);
+    }
+}
+"#,
+                )],
+            );
+        }
+
+        #[test]
+        fn jit_dup2_long_post_increment_helper() {
+            assert_jit_matches_interpreter(
+                "jit_dup2_long_post_increment_helper",
+                &[(
+                    "demo/Main.java",
+                    r#"
+package demo;
+public class Main {
+    static long test() {
+        long x = 1L;
+        return x++;
+    }
+    public static void main(String[] args) {
+        System.out.println(test());
     }
 }
 "#,
@@ -3967,6 +3534,68 @@ public class Main {
                 )],
             );
         }
+
+        #[test]
+        fn jit_tableswitch_in_helper_method() {
+            assert_jit_matches_interpreter(
+                "jit_tableswitch_in_helper_method",
+                &[(
+                    "demo/Main.java",
+                    r#"
+package demo;
+public class Main {
+    static int score(int day) {
+        switch(day) {
+            case 1: return 10;
+            case 2: return 20;
+            case 3: return 30;
+            case 4: return 40;
+            case 5: return 50;
+            default: return -1;
+        }
+    }
+
+    public static void main(String[] args) {
+        int sum = 0;
+        for (int i = 1; i <= 5; i++) {
+            sum += score(i);
+        }
+        System.out.println(sum);
+    }
+}
+"#,
+                )],
+            );
+        }
+
+        #[test]
+        fn jit_lookupswitch_in_helper_method() {
+            assert_jit_matches_interpreter(
+                "jit_lookupswitch_in_helper_method",
+                &[(
+                    "demo/Main.java",
+                    r#"
+package demo;
+public class Main {
+    static int map(int code) {
+        switch(code) {
+            case 10: return 1;
+            case 50: return 5;
+            case 100: return 10;
+            case 500: return 50;
+            default: return -1;
+        }
+    }
+
+    public static void main(String[] args) {
+        int total = map(10) + map(50) + map(100) + map(500);
+        System.out.println(total);
+    }
+}
+"#,
+                )],
+            );
+        }
     }
 
     // =============================================================================
@@ -4026,6 +3655,598 @@ public class Main {
 }
 "#,
                 )],
+            );
+        }
+
+        #[test]
+        fn jit_try_catch_in_helper_method() {
+            let root = compile_java(
+                "jit_try_catch_in_helper_method",
+                &[(
+                    "demo/Main.java",
+                    r#"
+package demo;
+public class Main {
+    static int safeLoad() {
+        try {
+            int[] arr = new int[2];
+            return arr[5];
+        } catch (ArrayIndexOutOfBoundsException e) {
+            return -1;
+        }
+    }
+    public static void main(String[] args) {
+        System.out.println(safeLoad());
+    }
+}
+"#,
+                )],
+            );
+            let interp = run_with_jit_threshold(&root, "demo.Main", u32::MAX);
+            let jit = run_with_jit_threshold(&root, "demo.Main", 1);
+
+            assert_eq!(jit.output, interp.output);
+            assert!(
+                jit.jit_executions >= 2,
+                "expected top-level JIT/deopt plus compiled safeLoad() to reach JIT, got {}",
+                jit.jit_executions
+            );
+        }
+
+        #[test]
+        fn jit_checkcast_failure_resumes_via_interpreter() {
+            let root = compile_java(
+                "jit_checkcast_failure_resumes_via_interpreter",
+                &[(
+                    "demo/Main.java",
+                    r#"
+package demo;
+public class Main {
+    static int castCheck() {
+        Object value = new Object();
+        try {
+            String text = (String) value;
+            return 99;
+        } catch (ClassCastException e) {
+            return -7;
+        }
+    }
+    public static void main(String[] args) {
+        System.out.println(castCheck());
+    }
+}
+"#,
+                )],
+            );
+            let interp = run_with_jit_threshold(&root, "demo.Main", u32::MAX);
+            let jit = run_with_jit_threshold(&root, "demo.Main", 1);
+
+            assert_eq!(jit.output, interp.output);
+            assert_eq!(jit.output, vec!["-7".to_string()]);
+            assert!(
+                jit.jit_executions >= 2,
+                "expected top-level JIT/deopt plus compiled castCheck() to reach JIT, got {}",
+                jit.jit_executions
+            );
+        }
+
+        #[test]
+        fn repeated_classcast_deopts_eventually_abandon_jit() {
+            let root = compile_java(
+                "repeated_classcast_deopts_eventually_abandon_jit",
+                &[(
+                    "demo/Main.java",
+                    r#"
+package demo;
+public class Main {
+    static int castCheck() {
+        Object value = new Object();
+        try {
+            String text = (String) value;
+            return 99;
+        } catch (ClassCastException e) {
+            return -7;
+        }
+    }
+    public static void main(String[] args) {
+        System.out.println(castCheck());
+    }
+}
+"#,
+                )],
+            );
+
+            let options = LaunchOptions::new(root.path(), "demo.Main", vec![]);
+            let mut vm = Vm::new().expect("failed to create VM");
+            vm.set_class_path(options.class_path.clone());
+            vm.set_jit_thresholds(1, 1);
+            let source =
+                launcher::resolve_class_path(&options.class_path, "demo.Main").unwrap();
+            let method = launcher::load_main_method(&source, "demo.Main", &[], &mut vm).unwrap();
+
+            vm.execute(method.clone()).unwrap();
+            assert_eq!(vm.take_output(), vec!["-7".to_string()]);
+            assert_eq!(
+                vm.jit_deopt_count("demo/Main", "castCheck", "()I", DeoptReason::ClassCast),
+                1
+            );
+            assert_eq!(
+                vm.jit_interpreter_only_reason("demo/Main", "castCheck", "()I"),
+                None
+            );
+            let (deopt_pc, deopt_hits) = vm
+                .jit_hottest_deopt_site("demo/Main", "castCheck", "()I")
+                .expect("castCheck() should expose its first deopt site");
+            assert_eq!(deopt_hits, 1);
+            assert_eq!(
+                vm.jit_deopt_site_count(
+                    "demo/Main",
+                    "castCheck",
+                    "()I",
+                    deopt_pc,
+                    DeoptReason::ClassCast
+                ),
+                1
+            );
+
+            vm.execute(method.clone()).unwrap();
+            assert_eq!(vm.take_output(), vec!["-7".to_string()]);
+            assert_eq!(
+                vm.jit_deopt_count("demo/Main", "castCheck", "()I", DeoptReason::ClassCast),
+                1
+            );
+            assert_eq!(
+                vm.jit_hottest_deopt_site("demo/Main", "castCheck", "()I"),
+                Some((deopt_pc, 2))
+            );
+            assert_eq!(
+                vm.jit_interpreter_only_reason("demo/Main", "castCheck", "()I"),
+                None
+            );
+            assert_eq!(
+                vm.jit_deopt_count("demo/Main", "castCheck", "()I", DeoptReason::SiteFallback),
+                1
+            );
+
+            vm.execute(method).unwrap();
+            assert_eq!(vm.take_output(), vec!["-7".to_string()]);
+            assert_eq!(
+                vm.jit_deopt_count("demo/Main", "castCheck", "()I", DeoptReason::ClassCast),
+                1
+            );
+            assert_eq!(
+                vm.jit_deopt_count("demo/Main", "castCheck", "()I", DeoptReason::SiteFallback),
+                2
+            );
+            assert_eq!(
+                vm.jit_hottest_deopt_site("demo/Main", "castCheck", "()I"),
+                Some((deopt_pc, 3)),
+                "the same checkcast bytecode site should now be compiled as a planned fallback"
+            );
+            assert_eq!(
+                vm.jit_interpreter_only_reason("demo/Main", "castCheck", "()I"),
+                None
+            );
+        }
+
+        #[test]
+        fn repeated_nullcheck_field_deopts_recompile_to_site_fallback() {
+            let root = compile_java(
+                "repeated_nullcheck_field_deopts_recompile_to_site_fallback",
+                &[(
+                    "demo/Main.java",
+                    r#"
+package demo;
+public class Main {
+    static final class Holder {
+        int value = 7;
+    }
+    static int readNullField() {
+        try {
+            Holder holder = null;
+            return holder.value;
+        } catch (NullPointerException e) {
+            return -1;
+        }
+    }
+    public static void main(String[] args) {
+        System.out.println(readNullField());
+    }
+}
+"#,
+                )],
+            );
+
+            let options = LaunchOptions::new(root.path(), "demo.Main", vec![]);
+            let mut vm = Vm::new().expect("failed to create VM");
+            vm.set_class_path(options.class_path.clone());
+            vm.set_jit_thresholds(1, 1);
+            let source =
+                launcher::resolve_class_path(&options.class_path, "demo.Main").unwrap();
+            let method = launcher::load_main_method(&source, "demo.Main", &[], &mut vm).unwrap();
+
+            vm.execute(method.clone()).unwrap();
+            assert_eq!(vm.take_output(), vec!["-1".to_string()]);
+            assert_eq!(
+                vm.jit_deopt_count("demo/Main", "readNullField", "()I", DeoptReason::NullCheck),
+                1
+            );
+            assert_eq!(
+                vm.jit_deopt_count(
+                    "demo/Main",
+                    "readNullField",
+                    "()I",
+                    DeoptReason::SiteFallback
+                ),
+                0
+            );
+            let (deopt_pc, deopt_hits) = vm
+                .jit_hottest_deopt_site("demo/Main", "readNullField", "()I")
+                .expect("readNullField() should expose its first deopt site");
+            assert_eq!(deopt_hits, 1);
+
+            vm.execute(method.clone()).unwrap();
+            assert_eq!(vm.take_output(), vec!["-1".to_string()]);
+            assert_eq!(
+                vm.jit_deopt_count("demo/Main", "readNullField", "()I", DeoptReason::NullCheck),
+                1
+            );
+            assert_eq!(
+                vm.jit_deopt_count(
+                    "demo/Main",
+                    "readNullField",
+                    "()I",
+                    DeoptReason::SiteFallback
+                ),
+                1
+            );
+            assert_eq!(
+                vm.jit_hottest_deopt_site("demo/Main", "readNullField", "()I"),
+                Some((deopt_pc, 2))
+            );
+            assert_eq!(
+                vm.jit_interpreter_only_reason("demo/Main", "readNullField", "()I"),
+                None
+            );
+
+            vm.execute(method).unwrap();
+            assert_eq!(vm.take_output(), vec!["-1".to_string()]);
+            assert_eq!(
+                vm.jit_deopt_count("demo/Main", "readNullField", "()I", DeoptReason::NullCheck),
+                1
+            );
+            assert_eq!(
+                vm.jit_deopt_count(
+                    "demo/Main",
+                    "readNullField",
+                    "()I",
+                    DeoptReason::SiteFallback
+                ),
+                2
+            );
+            assert_eq!(
+                vm.jit_hottest_deopt_site("demo/Main", "readNullField", "()I"),
+                Some((deopt_pc, 3))
+            );
+            assert_eq!(
+                vm.jit_interpreter_only_reason("demo/Main", "readNullField", "()I"),
+                None
+            );
+        }
+
+        #[test]
+        fn repeated_nullcheck_invokevirtual_deopts_recompile_to_site_fallback() {
+            let root = compile_java(
+                "repeated_nullcheck_invokevirtual_deopts_recompile_to_site_fallback",
+                &[(
+                    "demo/Main.java",
+                    r#"
+package demo;
+public class Main {
+    static final class Holder {
+        int value() { return 7; }
+    }
+    static int callNullVirtual() {
+        try {
+            Holder holder = null;
+            return holder.value();
+        } catch (NullPointerException e) {
+            return -1;
+        }
+    }
+    public static void main(String[] args) {
+        System.out.println(callNullVirtual());
+    }
+}
+"#,
+                )],
+            );
+
+            let options = LaunchOptions::new(root.path(), "demo.Main", vec![]);
+            let mut vm = Vm::new().expect("failed to create VM");
+            vm.set_class_path(options.class_path.clone());
+            vm.set_jit_thresholds(1, 1);
+            let source =
+                launcher::resolve_class_path(&options.class_path, "demo.Main").unwrap();
+            let method = launcher::load_main_method(&source, "demo.Main", &[], &mut vm).unwrap();
+
+            vm.execute(method.clone()).unwrap();
+            assert_eq!(vm.take_output(), vec!["-1".to_string()]);
+            assert_eq!(
+                vm.jit_deopt_count("demo/Main", "callNullVirtual", "()I", DeoptReason::NullCheck),
+                1
+            );
+            assert_eq!(
+                vm.jit_deopt_count(
+                    "demo/Main",
+                    "callNullVirtual",
+                    "()I",
+                    DeoptReason::SiteFallback
+                ),
+                0
+            );
+            let (deopt_pc, deopt_hits) = vm
+                .jit_hottest_deopt_site("demo/Main", "callNullVirtual", "()I")
+                .expect("callNullVirtual() should expose its first deopt site");
+            assert_eq!(deopt_hits, 1);
+
+            vm.execute(method.clone()).unwrap();
+            assert_eq!(vm.take_output(), vec!["-1".to_string()]);
+            assert_eq!(
+                vm.jit_deopt_count("demo/Main", "callNullVirtual", "()I", DeoptReason::NullCheck),
+                1
+            );
+            assert_eq!(
+                vm.jit_deopt_count(
+                    "demo/Main",
+                    "callNullVirtual",
+                    "()I",
+                    DeoptReason::SiteFallback
+                ),
+                1
+            );
+            assert_eq!(
+                vm.jit_hottest_deopt_site("demo/Main", "callNullVirtual", "()I"),
+                Some((deopt_pc, 2))
+            );
+            assert_eq!(
+                vm.jit_interpreter_only_reason("demo/Main", "callNullVirtual", "()I"),
+                None
+            );
+
+            vm.execute(method).unwrap();
+            assert_eq!(vm.take_output(), vec!["-1".to_string()]);
+            assert_eq!(
+                vm.jit_deopt_count("demo/Main", "callNullVirtual", "()I", DeoptReason::NullCheck),
+                1
+            );
+            assert_eq!(
+                vm.jit_deopt_count(
+                    "demo/Main",
+                    "callNullVirtual",
+                    "()I",
+                    DeoptReason::SiteFallback
+                ),
+                2
+            );
+            assert_eq!(
+                vm.jit_hottest_deopt_site("demo/Main", "callNullVirtual", "()I"),
+                Some((deopt_pc, 3))
+            );
+            assert_eq!(
+                vm.jit_interpreter_only_reason("demo/Main", "callNullVirtual", "()I"),
+                None
+            );
+        }
+
+        #[test]
+        fn repeated_exception_invokestatic_records_exception_reason() {
+            let root = compile_java(
+                "repeated_exception_invokestatic_records_exception_reason",
+                &[(
+                    "demo/Main.java",
+                    r#"
+package demo;
+public class Main {
+    static int alwaysThrow() {
+        throw new RuntimeException("boom");
+    }
+    static int callStaticThrow() {
+        try {
+            return alwaysThrow();
+        } catch (RuntimeException e) {
+            return -1;
+        }
+    }
+    public static void main(String[] args) {
+        System.out.println(callStaticThrow());
+    }
+}
+"#,
+                )],
+            );
+
+            let options = LaunchOptions::new(root.path(), "demo.Main", vec![]);
+            let mut vm = Vm::new().expect("failed to create VM");
+            vm.set_class_path(options.class_path.clone());
+            vm.set_jit_thresholds(1, 1);
+            let source =
+                launcher::resolve_class_path(&options.class_path, "demo.Main").unwrap();
+            let method = launcher::load_main_method(&source, "demo.Main", &[], &mut vm).unwrap();
+
+            vm.execute(method.clone()).unwrap();
+            assert_eq!(vm.take_output(), vec!["-1".to_string()]);
+            assert_eq!(
+                vm.jit_deopt_count(
+                    "demo/Main",
+                    "callStaticThrow",
+                    "()I",
+                    DeoptReason::Exception
+                ),
+                1
+            );
+            assert_eq!(
+                vm.jit_deopt_count(
+                    "demo/Main",
+                    "callStaticThrow",
+                    "()I",
+                    DeoptReason::SiteFallback
+                ),
+                0
+            );
+            let (deopt_pc, deopt_hits) = vm
+                .jit_hottest_deopt_site("demo/Main", "callStaticThrow", "()I")
+                .expect("callStaticThrow() should expose its first deopt site");
+            assert_eq!(deopt_hits, 1);
+
+            vm.execute(method.clone()).unwrap();
+            assert_eq!(vm.take_output(), vec!["-1".to_string()]);
+            assert_eq!(
+                vm.jit_deopt_count(
+                    "demo/Main",
+                    "callStaticThrow",
+                    "()I",
+                    DeoptReason::Exception
+                ),
+                2
+            );
+            assert_eq!(
+                vm.jit_deopt_count(
+                    "demo/Main",
+                    "callStaticThrow",
+                    "()I",
+                    DeoptReason::SiteFallback
+                ),
+                0
+            );
+            assert_eq!(
+                vm.jit_hottest_deopt_site("demo/Main", "callStaticThrow", "()I"),
+                Some((deopt_pc, 2))
+            );
+            assert_eq!(
+                vm.jit_interpreter_only_reason("demo/Main", "callStaticThrow", "()I"),
+                None
+            );
+
+            vm.execute(method).unwrap();
+            assert_eq!(vm.take_output(), vec!["-1".to_string()]);
+            assert_eq!(
+                vm.jit_deopt_count(
+                    "demo/Main",
+                    "callStaticThrow",
+                    "()I",
+                    DeoptReason::Exception
+                ),
+                3
+            );
+            assert_eq!(
+                vm.jit_deopt_count(
+                    "demo/Main",
+                    "callStaticThrow",
+                    "()I",
+                    DeoptReason::SiteFallback
+                ),
+                0
+            );
+            assert_eq!(
+                vm.jit_hottest_deopt_site("demo/Main", "callStaticThrow", "()I"),
+                Some((deopt_pc, 3))
+            );
+            assert_eq!(
+                vm.jit_interpreter_only_reason("demo/Main", "callStaticThrow", "()I"),
+                None
+            );
+        }
+
+        #[test]
+        fn repeated_exception_getstatic_records_exception_reason() {
+            let root = compile_java(
+                "repeated_exception_getstatic_records_exception_reason",
+                &[(
+                    "demo/Main.java",
+                    r#"
+package demo;
+public class Main {
+    static final class Bomb {
+        static int VALUE = explode();
+        static int explode() {
+            throw new RuntimeException("boom");
+        }
+    }
+    static int readBomb() {
+        try {
+            return Bomb.VALUE;
+        } catch (Throwable t) {
+            return -1;
+        }
+    }
+    public static void main(String[] args) {
+        System.out.println(readBomb());
+    }
+}
+"#,
+                )],
+            );
+
+            let options = LaunchOptions::new(root.path(), "demo.Main", vec![]);
+            let mut vm = Vm::new().expect("failed to create VM");
+            vm.set_class_path(options.class_path.clone());
+            vm.set_jit_thresholds(1, 1);
+            let source =
+                launcher::resolve_class_path(&options.class_path, "demo.Main").unwrap();
+            let method = launcher::load_main_method(&source, "demo.Main", &[], &mut vm).unwrap();
+
+            vm.execute(method.clone()).unwrap();
+            assert_eq!(vm.take_output(), vec!["-1".to_string()]);
+            assert_eq!(
+                vm.jit_deopt_count("demo/Main", "readBomb", "()I", DeoptReason::Exception),
+                1
+            );
+            assert_eq!(
+                vm.jit_deopt_count("demo/Main", "readBomb", "()I", DeoptReason::SiteFallback),
+                0
+            );
+            let (deopt_pc, deopt_hits) = vm
+                .jit_hottest_deopt_site("demo/Main", "readBomb", "()I")
+                .expect("readBomb() should expose its first deopt site");
+            assert_eq!(deopt_hits, 1);
+
+            vm.execute(method.clone()).unwrap();
+            assert_eq!(vm.take_output(), vec!["-1".to_string()]);
+            assert_eq!(
+                vm.jit_deopt_count("demo/Main", "readBomb", "()I", DeoptReason::Exception),
+                2
+            );
+            assert_eq!(
+                vm.jit_deopt_count("demo/Main", "readBomb", "()I", DeoptReason::SiteFallback),
+                0
+            );
+            assert_eq!(
+                vm.jit_hottest_deopt_site("demo/Main", "readBomb", "()I"),
+                Some((deopt_pc, 2))
+            );
+            assert_eq!(
+                vm.jit_interpreter_only_reason("demo/Main", "readBomb", "()I"),
+                None
+            );
+
+            vm.execute(method).unwrap();
+            assert_eq!(vm.take_output(), vec!["-1".to_string()]);
+            assert_eq!(
+                vm.jit_deopt_count("demo/Main", "readBomb", "()I", DeoptReason::Exception),
+                3
+            );
+            assert_eq!(
+                vm.jit_deopt_count("demo/Main", "readBomb", "()I", DeoptReason::SiteFallback),
+                0
+            );
+            assert_eq!(
+                vm.jit_hottest_deopt_site("demo/Main", "readBomb", "()I"),
+                Some((deopt_pc, 3))
+            );
+            assert_eq!(
+                vm.jit_interpreter_only_reason("demo/Main", "readBomb", "()I"),
+                None
             );
         }
     }

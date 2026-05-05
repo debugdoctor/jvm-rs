@@ -23,6 +23,8 @@ thread_local! {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum DeoptReason {
+    // Legacy catch-all kept only so old snapshots / helper reason encodings
+    // can still be decoded. New JIT paths should prefer a specific reason.
     GuardFailure,
     NullCheck,
     ClassCast,
@@ -91,6 +93,19 @@ fn set_pending_jit_exception(exception: u64) {
     PENDING_JIT_EXCEPTION.with(|cell| unsafe {
         *cell.get() = exception;
     });
+}
+
+fn record_helper_vm_error(ctx: u64, vm: &mut Vm, helper: &str, err: crate::vm::VmError) {
+    match err {
+        crate::vm::VmError::UnhandledException { class_name } => {
+            raise_pending_exception(vm, &class_name);
+            record_deopt_request(ctx, DeoptReason::Exception);
+        }
+        other => {
+            println!("JIT helper {helper} fallback: {:?}", other);
+            record_deopt_request(ctx, DeoptReason::HelperUnsupported);
+        }
+    }
 }
 
 fn raise_pending_exception(vm: &mut Vm, class_name: &str) -> u64 {
@@ -596,75 +611,75 @@ pub fn get_jit_helpers_ptr() -> u64 {
 }
 
 pub fn get_allocate_array_ptr() -> u64 {
-    jit_helper_allocate_array as u64
+    jit_helper_allocate_array as *const () as u64
 }
 
 pub fn get_allocate_object_ptr() -> u64 {
-    jit_helper_allocate_object as u64
+    jit_helper_allocate_object as *const () as u64
 }
 
 pub fn get_checkcast_ptr() -> u64 {
-    jit_helper_checkcast as u64
+    jit_helper_checkcast as *const () as u64
 }
 
 pub fn get_force_deopt_ptr() -> u64 {
-    jit_helper_force_deopt as u64
+    jit_helper_force_deopt as *const () as u64
 }
 
 pub fn get_instanceof_ptr() -> u64 {
-    jit_helper_instanceof as u64
+    jit_helper_instanceof as *const () as u64
 }
 
 pub fn get_athrow_ptr() -> u64 {
-    jit_helper_athrow as u64
+    jit_helper_athrow as *const () as u64
 }
 
 pub fn get_monitor_enter_ptr() -> u64 {
-    jit_helper_monitor_enter as u64
+    jit_helper_monitor_enter as *const () as u64
 }
 
 pub fn get_monitor_exit_ptr() -> u64 {
-    jit_helper_monitor_exit as u64
+    jit_helper_monitor_exit as *const () as u64
 }
 
 pub fn get_invoke_virtual_ptr() -> u64 {
-    jit_helper_invoke_virtual as u64
+    jit_helper_invoke_virtual as *const () as u64
 }
 
 pub fn get_invoke_special_ptr() -> u64 {
-    jit_helper_invoke_special as u64
+    jit_helper_invoke_special as *const () as u64
 }
 
 pub fn get_invoke_static_ptr() -> u64 {
-    jit_helper_invoke_static as u64
+    jit_helper_invoke_static as *const () as u64
 }
 
 pub fn get_invoke_interface_ptr() -> u64 {
-    jit_helper_invoke_interface as u64
+    jit_helper_invoke_interface as *const () as u64
 }
 
 pub fn get_invoke_dynamic_ptr() -> u64 {
-    jit_helper_invoke_dynamic as u64
+    jit_helper_invoke_dynamic as *const () as u64
 }
 
 pub fn get_invoke_native_ptr() -> u64 {
-    jit_helper_invoke_native as u64
+    jit_helper_invoke_native as *const () as u64
 }
 
 pub fn get_get_static_field_ptr() -> u64 {
-    jit_helper_get_static_field as u64
+    jit_helper_get_static_field as *const () as u64
 }
 
 pub fn get_put_static_field_ptr() -> u64 {
-    jit_helper_put_static_field as u64
+    jit_helper_put_static_field as *const () as u64
 }
 
 pub fn get_get_instance_field_ptr() -> u64 {
-    jit_helper_get_instance_field as u64
+    jit_helper_get_instance_field as *const () as u64
 }
 
 pub fn get_put_instance_field_ptr() -> u64 {
-    jit_helper_put_instance_field as u64
+    jit_helper_put_instance_field as *const () as u64
 }
 
 pub fn register_array_descriptor(descriptor: impl Into<String>) -> u64 {
@@ -909,10 +924,14 @@ extern "C" fn jit_helper_get_static_field(
         result
     };
 
-    if result.is_none() {
-        record_deopt_request(ctx, DeoptReason::GuardFailure);
+    match result {
+        Ok(value) => value_to_u64(Some(value)),
+        Err(err) => {
+            let vm = unsafe { &mut *(vm_ptr as *mut Vm) };
+            record_helper_vm_error(ctx, vm, "get_static_field", err);
+            0
+        }
     }
-    value_to_u64(result)
 }
 
 extern "C" fn jit_helper_put_static_field(
@@ -939,12 +958,16 @@ extern "C" fn jit_helper_put_static_field(
         return 0;
     };
 
-    unsafe {
+    let result = unsafe {
         let vm = &mut *(vm_ptr as *mut Vm);
-        if !vm.invoke_jit_put_static_field_ref(&field_ref, value) {
-            record_deopt_request(ctx, DeoptReason::GuardFailure);
-        }
+        let result = vm.invoke_jit_put_static_field_ref(&field_ref, value);
         set_current_vm(vm_ptr);
+        result
+    };
+
+    if let Err(err) = result {
+        let vm = unsafe { &mut *(vm_ptr as *mut Vm) };
+        record_helper_vm_error(ctx, vm, "put_static_field", err);
     }
 
     0
@@ -987,10 +1010,14 @@ extern "C" fn jit_helper_get_instance_field(
         result
     };
 
-    if result.is_none() {
-        record_deopt_request(ctx, DeoptReason::GuardFailure);
+    match result {
+        Ok(value) => value_to_u64(Some(value)),
+        Err(err) => {
+            let vm = unsafe { &mut *(vm_ptr as *mut Vm) };
+            record_helper_vm_error(ctx, vm, "get_instance_field", err);
+            0
+        }
     }
-    value_to_u64(result)
 }
 
 extern "C" fn jit_helper_put_instance_field(
@@ -1023,12 +1050,16 @@ extern "C" fn jit_helper_put_instance_field(
         return 0;
     };
 
-    unsafe {
+    let result = unsafe {
         let vm = &mut *(vm_ptr as *mut Vm);
-        if !vm.invoke_jit_put_instance_field_ref(&field_ref, obj, value) {
-            record_deopt_request(ctx, DeoptReason::GuardFailure);
-        }
+        let result = vm.invoke_jit_put_instance_field_ref(&field_ref, obj, value);
         set_current_vm(vm_ptr);
+        result
+    };
+
+    if let Err(err) = result {
+        let vm = unsafe { &mut *(vm_ptr as *mut Vm) };
+        record_helper_vm_error(ctx, vm, "put_instance_field", err);
     }
 
     0
@@ -1077,10 +1108,14 @@ extern "C" fn jit_helper_invoke_virtual(
         result
     };
 
-    if result.is_none() && !method_ref.descriptor.ends_with('V') {
-        record_deopt_request(ctx, DeoptReason::GuardFailure);
+    match result {
+        Ok(value) => value_to_u64(value),
+        Err(err) => {
+            let vm = unsafe { &mut *(vm_ptr as *mut Vm) };
+            record_helper_vm_error(ctx, vm, "invoke_virtual", err);
+            0
+        }
     }
-    value_to_u64(result)
 }
 
 extern "C" fn jit_helper_invoke_special(
@@ -1126,10 +1161,14 @@ extern "C" fn jit_helper_invoke_special(
         result
     };
 
-    if result.is_none() && !method_ref.descriptor.ends_with('V') {
-        record_deopt_request(ctx, DeoptReason::GuardFailure);
+    match result {
+        Ok(value) => value_to_u64(value),
+        Err(err) => {
+            let vm = unsafe { &mut *(vm_ptr as *mut Vm) };
+            record_helper_vm_error(ctx, vm, "invoke_special", err);
+            0
+        }
     }
-    value_to_u64(result)
 }
 
 extern "C" fn jit_helper_invoke_static(
@@ -1169,10 +1208,14 @@ extern "C" fn jit_helper_invoke_static(
         result
     };
 
-    if result.is_none() && !method_ref.descriptor.ends_with('V') {
-        record_deopt_request(ctx, DeoptReason::GuardFailure);
+    match result {
+        Ok(value) => value_to_u64(value),
+        Err(err) => {
+            let vm = unsafe { &mut *(vm_ptr as *mut Vm) };
+            record_helper_vm_error(ctx, vm, "invoke_static", err);
+            0
+        }
     }
-    value_to_u64(result)
 }
 
 extern "C" fn jit_helper_invoke_interface(
@@ -1218,10 +1261,14 @@ extern "C" fn jit_helper_invoke_interface(
         result
     };
 
-    if result.is_none() && !method_ref.descriptor.ends_with('V') {
-        record_deopt_request(ctx, DeoptReason::GuardFailure);
+    match result {
+        Ok(value) => value_to_u64(value),
+        Err(err) => {
+            let vm = unsafe { &mut *(vm_ptr as *mut Vm) };
+            record_helper_vm_error(ctx, vm, "invoke_interface", err);
+            0
+        }
     }
-    value_to_u64(result)
 }
 
 extern "C" fn jit_helper_invoke_dynamic(
@@ -1258,10 +1305,14 @@ extern "C" fn jit_helper_invoke_dynamic(
         result
     };
 
-    if result.is_none() && !site.descriptor.ends_with('V') {
-        record_deopt_request(ctx, DeoptReason::GuardFailure);
+    match result {
+        Ok(value) => value_to_u64(value),
+        Err(err) => {
+            let vm = unsafe { &mut *(vm_ptr as *mut Vm) };
+            record_helper_vm_error(ctx, vm, "invoke_dynamic", err);
+            0
+        }
     }
-    value_to_u64(result)
 }
 
 extern "C" fn jit_helper_invoke_native(
@@ -1301,10 +1352,14 @@ extern "C" fn jit_helper_invoke_native(
         result
     };
 
-    if result.is_none() && !method_ref.descriptor.ends_with('V') {
-        record_deopt_request(ctx, DeoptReason::GuardFailure);
+    match result {
+        Ok(value) => value_to_u64(value),
+        Err(err) => {
+            let vm = unsafe { &mut *(vm_ptr as *mut Vm) };
+            record_helper_vm_error(ctx, vm, "invoke_native", err);
+            0
+        }
     }
-    value_to_u64(result)
 }
 
 extern "C" fn jit_helper_checkcast(

@@ -732,40 +732,98 @@ impl Vm {
         )
     }
 
+    fn try_execute_osr_method(
+        &mut self,
+        method: Method,
+        locals: Vec<Option<Value>>,
+        entry_pc: usize,
+    ) -> Option<JitInvocationResult> {
+        if !locals.iter().all(|value| {
+            !matches!(value, Some(Value::ReturnAddress(_)))
+        }) {
+            return None;
+        }
+        if method.max_locals > 5 {
+            return None;
+        }
+
+        let method_key = JitCompiler::osr_method_key(&method, entry_pc);
+        let code = self.jit.as_ref()?.get_or_compile_osr(&method, entry_pc)?;
+        let vm_ptr = self as *mut Vm as u64;
+        let jit_context = self.jit_context.as_mut()?;
+        let deopt_local_kinds = code.deopt_info.local_kinds.clone();
+        let deopt_stack_kinds_by_pc = code.deopt_info.stack_kinds_by_pc.clone();
+
+        if jit_context.get_entry(&method_key).is_none()
+            && !jit_context.add_method(method_key.clone(), code)
+        {
+            return None;
+        }
+
+        let args = Self::osr_locals_to_args(locals);
+        let ret = crate::vm::jit::runtime::JitReturn::from_descriptor(&method.descriptor);
+        let result = jit_context.execute_typed(vm_ptr, &method_key, &args, ret)?;
+        self.runtime.lock().unwrap().jit_executions += 1;
+        let snapshot = take_last_deopt_snapshot();
+        self.complete_jit_execution(
+            &method_key,
+            method,
+            &deopt_local_kinds,
+            &deopt_stack_kinds_by_pc,
+            snapshot,
+            take_pending_jit_exception(),
+            Some(Vm::args_to_locals(args)),
+            result,
+            ret,
+        )
+    }
+
+    fn osr_locals_to_args(locals: Vec<Option<Value>>) -> Vec<Value> {
+        locals
+            .into_iter()
+            .map(|value| value.unwrap_or(Value::Int(0)))
+            .collect()
+    }
+
     pub(crate) fn invoke_jit_static_method_ref(
         &mut self,
         method_ref: &MethodRef,
         args_ptr: u64,
         argc: usize,
-    ) -> Option<Value> {
-        let args = unsafe { Vm::jit_raw_args_to_values(&method_ref.descriptor, args_ptr, argc) }?;
-        self.ensure_class_loaded(&method_ref.class_name).ok()?;
-        self.ensure_class_initialized(&method_ref.class_name).ok()?;
+    ) -> Result<Option<Value>, VmError> {
+        let args = unsafe { Vm::jit_raw_args_to_values(&method_ref.descriptor, args_ptr, argc) }
+            .ok_or_else(|| VmError::InvalidDescriptor {
+                descriptor: method_ref.descriptor.clone(),
+            })?;
+        self.ensure_class_loaded(&method_ref.class_name)?;
+        self.ensure_class_initialized(&method_ref.class_name)?;
 
         if self.has_native_override(
             &method_ref.class_name,
             &method_ref.method_name,
             &method_ref.descriptor,
         ) {
-            return self
-                .invoke_native(
-                    &method_ref.class_name,
-                    &method_ref.method_name,
-                    &method_ref.descriptor,
-                    &args,
-                )
-                .ok()
-                .flatten();
+            return self.invoke_native(
+                &method_ref.class_name,
+                &method_ref.method_name,
+                &method_ref.descriptor,
+                &args,
+            );
         }
 
-        let class = self.get_class(&method_ref.class_name).ok()?;
+        let class = self.get_class(&method_ref.class_name)?;
         let class_method = class
             .methods
             .get(&(
                 method_ref.method_name.clone(),
                 method_ref.descriptor.clone(),
             ))
-            .cloned()?;
+            .cloned()
+            .ok_or_else(|| VmError::MethodNotFound {
+                class_name: method_ref.class_name.clone(),
+                method_name: method_ref.method_name.clone(),
+                descriptor: method_ref.descriptor.clone(),
+            })?;
 
         match class_method {
             ClassMethod::Native => self
@@ -775,16 +833,15 @@ impl Vm {
                     &method_ref.descriptor,
                     &args,
                 )
-                .ok()
-                .flatten(),
+                ,
             ClassMethod::Bytecode(method) => {
                 let callee = method.with_initial_locals(Vm::args_to_locals(args));
                 let saved_jit = self.jit.take();
                 let result = self.execute(callee);
                 self.jit = saved_jit;
-                match result.ok()? {
-                    ExecutionResult::Value(value) => Some(value),
-                    ExecutionResult::Void => None,
+                match result? {
+                    ExecutionResult::Value(value) => Ok(Some(value)),
+                    ExecutionResult::Void => Ok(None),
                 }
             }
         }
@@ -796,9 +853,9 @@ impl Vm {
         receiver_raw: u64,
         args_ptr: u64,
         argc: usize,
-    ) -> Option<Value> {
-        let receiver = Vm::jit_raw_reference(receiver_raw)?;
-        let class_name = self.get_object_class(receiver).ok()?;
+    ) -> Result<Option<Value>, VmError> {
+        let receiver = Vm::jit_raw_reference(receiver_raw).ok_or(VmError::NullReference)?;
+        let class_name = self.get_object_class(receiver)?;
         self.invoke_jit_instance_method_ref(&class_name, method_ref, receiver, args_ptr, argc)
     }
 
@@ -808,8 +865,8 @@ impl Vm {
         receiver_raw: u64,
         args_ptr: u64,
         argc: usize,
-    ) -> Option<Value> {
-        let receiver = Vm::jit_raw_reference(receiver_raw)?;
+    ) -> Result<Option<Value>, VmError> {
+        let receiver = Vm::jit_raw_reference(receiver_raw).ok_or(VmError::NullReference)?;
         self.invoke_jit_instance_method_ref(
             &method_ref.class_name,
             method_ref,
@@ -825,9 +882,9 @@ impl Vm {
         receiver_raw: u64,
         args_ptr: u64,
         argc: usize,
-    ) -> Option<Value> {
-        let receiver = Vm::jit_raw_reference(receiver_raw)?;
-        let class_name = self.get_object_class(receiver).ok()?;
+    ) -> Result<Option<Value>, VmError> {
+        let receiver = Vm::jit_raw_reference(receiver_raw).ok_or(VmError::NullReference)?;
+        let class_name = self.get_object_class(receiver)?;
         self.invoke_jit_instance_method_ref(&class_name, method_ref, receiver, args_ptr, argc)
     }
 
@@ -836,16 +893,17 @@ impl Vm {
         method_ref: &MethodRef,
         args_ptr: u64,
         argc: usize,
-    ) -> Option<Value> {
-        let args = unsafe { Vm::jit_raw_args_to_values(&method_ref.descriptor, args_ptr, argc) }?;
+    ) -> Result<Option<Value>, VmError> {
+        let args = unsafe { Vm::jit_raw_args_to_values(&method_ref.descriptor, args_ptr, argc) }
+            .ok_or_else(|| VmError::InvalidDescriptor {
+                descriptor: method_ref.descriptor.clone(),
+            })?;
         self.invoke_native(
             &method_ref.class_name,
             &method_ref.method_name,
             &method_ref.descriptor,
             &args,
         )
-        .ok()
-        .flatten()
     }
 
     pub(crate) fn invoke_jit_dynamic_site(
@@ -853,8 +911,11 @@ impl Vm {
         site: &InvokeDynamicSite,
         args_ptr: u64,
         argc: usize,
-    ) -> Option<Value> {
-        let args = unsafe { Vm::jit_raw_args_to_values(&site.descriptor, args_ptr, argc) }?;
+    ) -> Result<Option<Value>, VmError> {
+        let args = unsafe { Vm::jit_raw_args_to_values(&site.descriptor, args_ptr, argc) }
+            .ok_or_else(|| VmError::InvalidDescriptor {
+                descriptor: site.descriptor.clone(),
+            })?;
         match &site.kind {
             InvokeDynamicKind::LambdaProxy {
                 target_class,
@@ -897,50 +958,59 @@ impl Vm {
                     class_name: format!("__lambda_proxy_{}", site.name),
                     fields,
                 });
-                Some(Value::Reference(proxy))
+                Ok(Some(Value::Reference(proxy)))
             }
             InvokeDynamicKind::StringConcat { recipe, constants } => self
                 .build_string_concat(recipe.as_deref(), constants, &args, &site.descriptor)
-                .ok()
-                .map(|concat| self.new_string(concat)),
-            InvokeDynamicKind::Unknown => Some(Value::Reference(Reference::Null)),
+                .map(|concat| Some(self.new_string(concat)))
+                .map_err(|_| VmError::InvalidDescriptor {
+                    descriptor: site.descriptor.clone(),
+                }),
+            InvokeDynamicKind::Unknown => Ok(Some(Value::Reference(Reference::Null))),
         }
     }
 
     pub(crate) fn invoke_jit_get_static_field_ref(
         &mut self,
         field_ref: &FieldRef,
-    ) -> Option<Value> {
-        self.ensure_class_loaded(&field_ref.class_name).ok()?;
-        self.ensure_class_initialized(&field_ref.class_name).ok()?;
+    ) -> Result<Value, VmError> {
+        self.ensure_class_loaded(&field_ref.class_name)?;
+        self.ensure_class_initialized(&field_ref.class_name)?;
         self.get_static_field(&field_ref.class_name, &field_ref.field_name)
-            .ok()
     }
 
     pub(crate) fn invoke_jit_put_static_field_ref(
         &mut self,
         field_ref: &FieldRef,
         raw_value: u64,
-    ) -> bool {
-        let Some(value) = Vm::jit_raw_field_value_to_value(&field_ref.descriptor, raw_value) else {
-            return false;
-        };
-        self.ensure_class_loaded(&field_ref.class_name).is_ok()
-            && self.ensure_class_initialized(&field_ref.class_name).is_ok()
-            && self
-                .put_static_field(&field_ref.class_name, &field_ref.field_name, value)
-                .is_ok()
+    ) -> Result<(), VmError> {
+        let value = Vm::jit_raw_field_value_to_value(&field_ref.descriptor, raw_value)
+            .ok_or_else(|| VmError::InvalidDescriptor {
+                descriptor: field_ref.descriptor.clone(),
+            })?;
+        self.ensure_class_loaded(&field_ref.class_name)?;
+        self.ensure_class_initialized(&field_ref.class_name)?;
+        self.put_static_field(&field_ref.class_name, &field_ref.field_name, value)
     }
 
     pub(crate) fn invoke_jit_get_instance_field_ref(
         &mut self,
         field_ref: &FieldRef,
         receiver_raw: u64,
-    ) -> Option<Value> {
-        let receiver = Vm::jit_raw_reference(receiver_raw)?;
-        match self.heap.lock().unwrap().get(receiver).ok()? {
-            HeapValue::Object { fields, .. } => fields.get(&field_ref.field_name).copied(),
-            _ => None,
+    ) -> Result<Value, VmError> {
+        let receiver = Vm::jit_raw_reference(receiver_raw).ok_or(VmError::NullReference)?;
+        match self.heap.lock().unwrap().get(receiver)? {
+            HeapValue::Object { fields, .. } => fields
+                .get(&field_ref.field_name)
+                .copied()
+                .ok_or_else(|| VmError::FieldNotFound {
+                    class_name: field_ref.class_name.clone(),
+                    field_name: field_ref.field_name.clone(),
+                }),
+            value => Err(VmError::InvalidHeapValue {
+                expected: "object",
+                actual: value.kind_name(),
+            }),
         }
     }
 
@@ -949,15 +1019,13 @@ impl Vm {
         field_ref: &FieldRef,
         receiver_raw: u64,
         raw_value: u64,
-    ) -> bool {
-        let Some(receiver) = Vm::jit_raw_reference(receiver_raw) else {
-            return false;
-        };
-        let Some(value) = Vm::jit_raw_field_value_to_value(&field_ref.descriptor, raw_value) else {
-            return false;
-        };
+    ) -> Result<(), VmError> {
+        let receiver = Vm::jit_raw_reference(receiver_raw).ok_or(VmError::NullReference)?;
+        let value = Vm::jit_raw_field_value_to_value(&field_ref.descriptor, raw_value)
+            .ok_or_else(|| VmError::InvalidDescriptor {
+                descriptor: field_ref.descriptor.clone(),
+            })?;
         self.set_object_field(receiver, &field_ref.field_name, value)
-            .is_ok()
     }
 
     pub(crate) fn invoke_jit_allocate_object(&mut self, class_name: &str) -> Option<Reference> {
@@ -1084,49 +1152,46 @@ impl Vm {
         receiver: Reference,
         args_ptr: u64,
         argc: usize,
-    ) -> Option<Value> {
+    ) -> Result<Option<Value>, VmError> {
         if class_name.starts_with("__lambda_proxy_") {
-            return None;
+            return Ok(None);
         }
 
-        let args = unsafe { Vm::jit_raw_args_to_values(&method_ref.descriptor, args_ptr, argc) }?;
+        let args = unsafe { Vm::jit_raw_args_to_values(&method_ref.descriptor, args_ptr, argc) }
+            .ok_or_else(|| VmError::InvalidDescriptor {
+                descriptor: method_ref.descriptor.clone(),
+            })?;
         let mut all_args = vec![Value::Reference(receiver)];
         all_args.extend(args);
 
         if self.has_native_override(class_name, &method_ref.method_name, &method_ref.descriptor) {
-            return self
-                .invoke_native(
-                    class_name,
-                    &method_ref.method_name,
-                    &method_ref.descriptor,
-                    &all_args,
-                )
-                .ok()
-                .flatten();
+            return self.invoke_native(
+                class_name,
+                &method_ref.method_name,
+                &method_ref.descriptor,
+                &all_args,
+            );
         }
 
         let (resolved_class, class_method) = self
             .resolve_method(class_name, &method_ref.method_name, &method_ref.descriptor)
-            .ok()?;
+            ?;
 
         match class_method {
-            ClassMethod::Native => self
-                .invoke_native(
-                    &resolved_class,
-                    &method_ref.method_name,
-                    &method_ref.descriptor,
-                    &all_args,
-                )
-                .ok()
-                .flatten(),
+            ClassMethod::Native => self.invoke_native(
+                &resolved_class,
+                &method_ref.method_name,
+                &method_ref.descriptor,
+                &all_args,
+            ),
             ClassMethod::Bytecode(method) => {
                 let callee = method.with_initial_locals(Vm::args_to_locals(all_args));
                 let saved_jit = self.jit.take();
                 let result = self.execute(callee);
                 self.jit = saved_jit;
-                match result.ok()? {
-                    ExecutionResult::Value(value) => Some(value),
-                    ExecutionResult::Void => None,
+                match result? {
+                    ExecutionResult::Value(value) => Ok(Some(value)),
+                    ExecutionResult::Void => Ok(None),
                 }
             }
         }
@@ -2019,9 +2084,60 @@ impl Vm {
                     );
                 }
 
+                let frame_key_before_opcode = thread.current_frame().method_key();
                 match self.execute_opcode(&mut thread, opcode, opcode_pc) {
                     Ok(Some(result)) => return Ok(result),
-                    Ok(None) => {}
+                    Ok(None) => {
+                        if thread.current_frame().method_key() == frame_key_before_opcode {
+                            let osr_entry_pc = thread.current_frame().pc;
+                            if osr_entry_pc <= opcode_pc {
+                                let osr_candidate = {
+                                    let frame = thread.current_frame_mut();
+                                    frame.increment_backedge_count(osr_entry_pc);
+                                    if frame.stack.is_empty()
+                                        && self
+                                            .jit
+                                            .as_ref()
+                                            .is_some_and(|jit| jit.should_osr(frame, osr_entry_pc))
+                                    {
+                                        Some((
+                                            frame.to_method(),
+                                            frame.locals.clone(),
+                                            osr_entry_pc,
+                                        ))
+                                    } else {
+                                        None
+                                    }
+                                };
+
+                                if let Some((method, locals, entry_pc)) = osr_candidate {
+                                    let osr_result =
+                                        self.try_execute_osr_method(method, locals, entry_pc);
+                                    set_current_vm(vm_ptr);
+                                    if let Some(result) = osr_result {
+                                        match result {
+                                            JitInvocationResult::Returned(Some(value)) => {
+                                                if thread.depth() == 1 {
+                                                    return Ok(ExecutionResult::Value(value));
+                                                }
+                                                thread.pop_frame();
+                                                thread.current_frame_mut().push(value)?;
+                                            }
+                                            JitInvocationResult::Returned(None) => {
+                                                if thread.depth() == 1 {
+                                                    return Ok(ExecutionResult::Void);
+                                                }
+                                                thread.pop_frame();
+                                            }
+                                            JitInvocationResult::Threw(exception_ref) => {
+                                                self.throw_exception(&mut thread, exception_ref)?;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     Err(VmError::NullReference) => {
                         self.throw_new_exception(&mut thread, "java/lang/NullPointerException")?;
                     }
@@ -4879,7 +4995,7 @@ mod tests {
         let mut stack_kinds_by_pc = HashMap::new();
         stack_kinds_by_pc.insert(2, vec![DeoptLocalKind::Int, DeoptLocalKind::Int]);
         let snapshot = DeoptSnapshot {
-            reason: Some(DeoptReason::GuardFailure),
+            reason: Some(DeoptReason::HelperUnsupported),
             pc: 2,
             locals: Vec::new(),
             stack: vec![1, 2],

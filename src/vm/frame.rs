@@ -41,6 +41,27 @@ impl Frame {
         )
     }
 
+    pub(super) fn to_method(&self) -> Method {
+        Method {
+            class_name: self.class_name.clone(),
+            name: self.method_name.clone(),
+            descriptor: self.descriptor.clone(),
+            access_flags: 0,
+            code: self.code.clone(),
+            max_locals: self.locals.len(),
+            max_stack: self.max_stack,
+            constants: self.constants.clone(),
+            reference_classes: self.reference_classes.clone(),
+            field_refs: self.field_refs.clone(),
+            method_refs: self.method_refs.clone(),
+            exception_handlers: self.exception_handlers.clone(),
+            line_numbers: self.line_numbers.clone(),
+            stack_map_frames: Vec::new(),
+            invoke_dynamic_sites: self.invoke_dynamic_sites.clone(),
+            initial_locals: Vec::new(),
+        }
+    }
+
     pub(super) fn increment_invocation_count(&mut self) {
         self.invocation_count += 1;
     }

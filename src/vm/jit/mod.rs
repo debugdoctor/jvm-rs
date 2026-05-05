@@ -125,6 +125,15 @@ impl JitCompiler {
         }
     }
 
+    pub fn should_osr(&self, frame: &Frame, backedge_pc: usize) -> bool {
+        frame
+            .backedge_counts
+            .get(&backedge_pc)
+            .copied()
+            .unwrap_or(0)
+            >= self.backedge_threshold
+    }
+
     pub fn set_thresholds(&mut self, invocation: u32, backedge: u32) {
         self.invocation_threshold = invocation;
         self.backedge_threshold = backedge;
@@ -206,20 +215,23 @@ impl JitCompiler {
         pc: usize,
         reason: DeoptReason,
     ) -> bool {
-        matches!(reason, DeoptReason::ClassCast) && self.deopt_site_count(method_key, pc, reason) >= 1
+        matches!(
+            reason,
+            DeoptReason::ClassCast | DeoptReason::NullCheck
+        ) && self.deopt_site_count(method_key, pc, reason) >= 1
     }
 
     pub fn site_fallbacks_for_method(&self, method_key: &str) -> HashMap<usize, DeoptReason> {
         let mut fallbacks = HashMap::new();
         if let Some(per_method) = self.deopt_site_counts.read().unwrap().get(method_key) {
             for (&pc, per_site) in per_method {
-                if per_site
-                    .get(&DeoptReason::ClassCast)
-                    .copied()
-                    .unwrap_or(0)
-                    >= 1
-                {
+                if per_site.get(&DeoptReason::ClassCast).copied().unwrap_or(0) >= 1 {
                     fallbacks.insert(pc, DeoptReason::ClassCast);
+                    continue;
+                }
+                if per_site.get(&DeoptReason::NullCheck).copied().unwrap_or(0) >= 1 {
+                    fallbacks.insert(pc, DeoptReason::NullCheck);
+                    continue;
                 }
             }
         }
@@ -234,10 +246,10 @@ impl JitCompiler {
     ) -> bool {
         match reason {
             DeoptReason::HelperUnsupported => true,
-            DeoptReason::GuardFailure => self.deopt_site_count(method_key, pc, reason) >= 3,
             DeoptReason::ClassCast | DeoptReason::MonitorFailure => {
                 self.deopt_site_count(method_key, pc, reason) >= 2
             }
+            DeoptReason::GuardFailure => false,
             DeoptReason::NullCheck
             | DeoptReason::AllocationFailure
             | DeoptReason::Exception
@@ -248,10 +260,10 @@ impl JitCompiler {
     pub fn should_abandon_jit(&self, method_key: &str, reason: DeoptReason) -> bool {
         match reason {
             DeoptReason::HelperUnsupported => true,
-            DeoptReason::GuardFailure => self.deopt_count(method_key, reason) >= 3,
             DeoptReason::ClassCast | DeoptReason::MonitorFailure => {
                 self.deopt_count(method_key, reason) >= 2
             }
+            DeoptReason::GuardFailure => false,
             DeoptReason::NullCheck
             | DeoptReason::AllocationFailure
             | DeoptReason::Exception
@@ -285,6 +297,24 @@ impl JitCompiler {
             .map_err(|e| format!("JIT compilation failed: {:?}", e))
     }
 
+    pub fn compile_osr(&self, method: &Method, entry_pc: usize) -> Result<CompiledCode, String> {
+        let method_key = Self::osr_method_key(method, entry_pc);
+        compiler::compile_bytecode_osr(
+            method,
+            self.isa(),
+            entry_pc,
+            self.site_fallbacks_for_method(&method_key),
+        )
+        .map_err(|e| format!("JIT OSR compilation failed: {:?}", e))
+    }
+
+    pub fn osr_method_key(method: &Method, entry_pc: usize) -> String {
+        format!(
+            "{}.{}{}@osr:{}",
+            method.class_name, method.name, method.descriptor, entry_pc
+        )
+    }
+
     pub fn get_or_compile(&self, method: &Method) -> Option<CompiledCode> {
         let key = format!("{}.{}{}", method.class_name, method.name, method.descriptor);
         if self.interpreter_only_reason(&key).is_some() {
@@ -308,6 +338,35 @@ impl JitCompiler {
             }
             Err(_) => {
                 println!("JIT compilation panicked for {}", key);
+                None
+            }
+        }
+    }
+
+    pub fn get_or_compile_osr(&self, method: &Method, entry_pc: usize) -> Option<CompiledCode> {
+        let key = Self::osr_method_key(method, entry_pc);
+        if self.interpreter_only_reason(&key).is_some() {
+            return None;
+        }
+        if let Some(code) = self.get_compiled_code(&key) {
+            return Some(code);
+        }
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.compile_osr(method, entry_pc)
+        }));
+
+        match result {
+            Ok(Ok(code)) => {
+                self.install_code(key, code.clone());
+                Some(code)
+            }
+            Ok(Err(e)) => {
+                println!("JIT OSR compilation error: {}", e);
+                None
+            }
+            Err(_) => {
+                println!("JIT OSR compilation panicked for {}", key);
                 None
             }
         }
@@ -387,16 +446,12 @@ mod tests {
         let compiler = JitCompiler::new().expect("failed to create JIT compiler");
         let key = "jit/Test.guardy()I";
 
-        assert_eq!(compiler.record_deopt(key, DeoptReason::GuardFailure), 1);
-        assert!(!compiler.should_abandon_jit(key, DeoptReason::GuardFailure));
-        assert_eq!(compiler.record_deopt(key, DeoptReason::GuardFailure), 2);
-        assert!(!compiler.should_abandon_jit(key, DeoptReason::GuardFailure));
-        assert_eq!(compiler.record_deopt(key, DeoptReason::GuardFailure), 3);
-        assert!(compiler.should_abandon_jit(key, DeoptReason::GuardFailure));
+        assert_eq!(compiler.record_deopt(key, DeoptReason::HelperUnsupported), 1);
+        assert!(compiler.should_abandon_jit(key, DeoptReason::HelperUnsupported));
 
         assert_eq!(compiler.record_deopt(key, DeoptReason::NullCheck), 1);
         assert!(!compiler.should_abandon_jit(key, DeoptReason::NullCheck));
-        assert_eq!(compiler.total_deopt_count(key), 4);
+        assert_eq!(compiler.total_deopt_count(key), 2);
     }
 
     #[test]
@@ -414,29 +469,42 @@ mod tests {
     }
 
     #[test]
-    fn abandon_policy_prefers_repeated_same_site_failures() {
+    fn site_fallbacks_only_include_specific_reason_classes() {
         let compiler = JitCompiler::new().expect("failed to create JIT compiler");
-        let key = "jit/Test.guards()I";
+        let key = "jit/Test.siteFallbacks()I";
+
+        compiler.record_deopt(key, DeoptReason::ClassCast);
+        compiler.record_deopt_site(key, 10, DeoptReason::ClassCast);
+        compiler.record_deopt(key, DeoptReason::NullCheck);
+        compiler.record_deopt_site(key, 20, DeoptReason::NullCheck);
+        compiler.record_deopt(key, DeoptReason::GuardFailure);
+        compiler.record_deopt_site(key, 30, DeoptReason::GuardFailure);
+
+        let fallbacks = compiler.site_fallbacks_for_method(key);
+        assert_eq!(fallbacks.get(&10), Some(&DeoptReason::ClassCast));
+        assert_eq!(fallbacks.get(&20), Some(&DeoptReason::NullCheck));
+        assert_eq!(fallbacks.get(&30), None);
+    }
+
+    #[test]
+    fn guardfailure_is_legacy_only_and_does_not_drive_new_policy() {
+        let compiler = JitCompiler::new().expect("failed to create JIT compiler");
+        let key = "jit/Test.legacyGuard()I";
 
         compiler.record_deopt(key, DeoptReason::GuardFailure);
         compiler.record_deopt_site(key, 10, DeoptReason::GuardFailure);
+        compiler.record_deopt(key, DeoptReason::GuardFailure);
+        compiler.record_deopt_site(key, 10, DeoptReason::GuardFailure);
+        compiler.record_deopt(key, DeoptReason::GuardFailure);
+        compiler.record_deopt_site(key, 10, DeoptReason::GuardFailure);
+
+        assert!(!compiler.should_recompile_with_site_fallback(
+            key,
+            10,
+            DeoptReason::GuardFailure
+        ));
         assert!(!compiler.should_abandon_jit_at_site(key, 10, DeoptReason::GuardFailure));
-
-        compiler.record_deopt(key, DeoptReason::GuardFailure);
-        compiler.record_deopt_site(key, 20, DeoptReason::GuardFailure);
-        assert!(!compiler.should_abandon_jit_at_site(key, 20, DeoptReason::GuardFailure));
-        assert!(
-            !compiler.should_abandon_jit(key, DeoptReason::GuardFailure),
-            "method-wide total should no longer be the preferred trigger when failures are spread across sites"
-        );
-
-        compiler.record_deopt(key, DeoptReason::GuardFailure);
-        compiler.record_deopt_site(key, 10, DeoptReason::GuardFailure);
-        assert!(!compiler.should_abandon_jit_at_site(key, 10, DeoptReason::GuardFailure));
-
-        compiler.record_deopt(key, DeoptReason::GuardFailure);
-        compiler.record_deopt_site(key, 10, DeoptReason::GuardFailure);
-        assert!(compiler.should_abandon_jit_at_site(key, 10, DeoptReason::GuardFailure));
+        assert!(!compiler.should_abandon_jit(key, DeoptReason::GuardFailure));
     }
 
     #[test]

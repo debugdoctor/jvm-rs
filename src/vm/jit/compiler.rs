@@ -37,6 +37,8 @@ pub struct BytecodeCompiler<'a> {
     deopt_stack_kinds_by_pc: std::collections::HashMap<usize, Vec<DeoptLocalKind>>,
     branch_targets: std::collections::HashSet<usize>,
     site_fallbacks: std::collections::HashMap<usize, DeoptReason>,
+    entry_pc: usize,
+    osr_entry: bool,
 }
 
 impl<'a> BytecodeCompiler<'a> {
@@ -45,6 +47,17 @@ impl<'a> BytecodeCompiler<'a> {
         builder: &'a mut FunctionBuilder<'a>,
         arg_types: Vec<u8>,
         site_fallbacks: std::collections::HashMap<usize, DeoptReason>,
+    ) -> Self {
+        Self::new_with_entry(method, builder, arg_types, site_fallbacks, 0, false)
+    }
+
+    fn new_with_entry(
+        method: &'a Method,
+        builder: &'a mut FunctionBuilder<'a>,
+        arg_types: Vec<u8>,
+        site_fallbacks: std::collections::HashMap<usize, DeoptReason>,
+        entry_pc: usize,
+        osr_entry: bool,
     ) -> Self {
         Self {
             method,
@@ -65,6 +78,8 @@ impl<'a> BytecodeCompiler<'a> {
             deopt_stack_kinds_by_pc: std::collections::HashMap::new(),
             branch_targets: std::collections::HashSet::new(),
             site_fallbacks,
+            entry_pc,
+            osr_entry,
         }
     }
 
@@ -76,9 +91,9 @@ impl<'a> BytecodeCompiler<'a> {
 
     fn collect_branch_targets(&mut self) {
         self.branch_targets.clear();
-        self.branch_targets.insert(0);
+        self.branch_targets.insert(self.entry_pc);
         let code = &self.method.code;
-        let mut pc = 0;
+        let mut pc = self.entry_pc;
 
         while pc < code.len() {
             let opcode = code[pc];
@@ -182,11 +197,15 @@ impl<'a> BytecodeCompiler<'a> {
     fn lower_with_blocks(&mut self) -> Result<(), JitError> {
         self.initialize_local_vars()?;
 
-        let entry_block = *self.block_map.get(&0).unwrap();
+        let entry_block = *self.block_map.get(&self.entry_pc).unwrap();
 
         let code = &self.method.code;
-        let mut pc = 0;
-        let mut current_block = Some(entry_block);
+        let mut pc = self.entry_pc;
+        let mut current_block = if self.osr_entry {
+            None
+        } else {
+            Some(entry_block)
+        };
 
         while pc < code.len() {
             if let Some(&block) = self.block_map.get(&pc) {
@@ -646,6 +665,12 @@ impl<'a> BytecodeCompiler<'a> {
         stack_values: &[Value],
         stack_kinds: &[StackCategory],
     ) -> Result<(), JitError> {
+        if target_pc < self.entry_pc {
+            return Err(JitError::CompilationFailed(format!(
+                "OSR entry at pc {} cannot branch to earlier pc {}",
+                self.entry_pc, target_pc
+            )));
+        }
         let block = self.create_block_for_pc(target_pc);
         self.ensure_block_stack_signature(target_pc, block, &stack_values, stack_kinds)?;
         let stack_args = Self::stack_args_from_values(&stack_values);
@@ -1692,10 +1717,14 @@ impl<'a> BytecodeCompiler<'a> {
 
     fn initialize_local_vars(&mut self) -> Result<(), JitError> {
         let num_locals = self.method.max_locals;
-        let entry_block = *self
-            .block_map
-            .get(&0)
-            .expect("Entry block at PC 0 must exist");
+        let entry_block = if self.osr_entry {
+            self.builder.create_block()
+        } else {
+            *self
+                .block_map
+                .get(&self.entry_pc)
+                .expect("Entry block must exist")
+        };
         self.builder.switch_to_block(entry_block);
         self.builder
             .append_block_params_for_function_params(entry_block);
@@ -1715,25 +1744,39 @@ impl<'a> BytecodeCompiler<'a> {
             self.local_vars.push(var);
         }
 
-        let mut local_index = 0;
-        let arg_types = self.arg_types.clone();
-        for (arg_index, arg_type) in arg_types.iter().enumerate() {
-            if local_index >= num_locals {
-                break;
+        if self.osr_entry {
+            for local_index in 0..num_locals {
+                let block_param_index = local_index + 1;
+                if let Some(&param) = block_params.get(block_param_index) {
+                    let param =
+                        self.coerce_entry_param_for_type(param, self.local_var_type(local_index));
+                    let var = self.local_var(local_index)?;
+                    self.builder.def_var(var, param);
+                    self.emit_deopt_local_store(local_index, param);
+                    initialized_locals[local_index] = true;
+                }
             }
-            let block_param_index = arg_index + 1;
-            if let Some(&param) = block_params.get(block_param_index) {
-                let param = self.coerce_entry_param(param, *arg_type);
-                let var = self.local_var(local_index)?;
-                self.builder.def_var(var, param);
-                self.emit_deopt_local_store(local_index, param);
-                initialized_locals[local_index] = true;
+        } else {
+            let mut local_index = 0;
+            let arg_types = self.arg_types.clone();
+            for (arg_index, arg_type) in arg_types.iter().enumerate() {
+                if local_index >= num_locals {
+                    break;
+                }
+                let block_param_index = arg_index + 1;
+                if let Some(&param) = block_params.get(block_param_index) {
+                    let param = self.coerce_entry_param(param, *arg_type);
+                    let var = self.local_var(local_index)?;
+                    self.builder.def_var(var, param);
+                    self.emit_deopt_local_store(local_index, param);
+                    initialized_locals[local_index] = true;
+                }
+                local_index += if matches!(arg_type, b'J' | b'D') {
+                    2
+                } else {
+                    1
+                };
             }
-            local_index += if matches!(arg_type, b'J' | b'D') {
-                2
-            } else {
-                1
-            };
         }
 
         for i in 0..num_locals {
@@ -1752,6 +1795,12 @@ impl<'a> BytecodeCompiler<'a> {
         }
 
         self.local_vars_initialized = true;
+        if self.osr_entry {
+            self.value_stack.clear();
+            self.value_stack_kinds.clear();
+            self.branch_to_pc(self.entry_pc)?;
+            self.builder.seal_block(entry_block);
+        }
         Ok(())
     }
 
@@ -1778,6 +1827,31 @@ impl<'a> BytecodeCompiler<'a> {
                 self.builder.ins().stack_load(types::F64, slot, 0)
             }
             _ => raw,
+        }
+    }
+
+    fn coerce_entry_param_for_type(&mut self, raw: Value, ty: Type) -> Value {
+        if ty == types::I32 {
+            self.builder.ins().ireduce(types::I32, raw)
+        } else if ty == types::F32 {
+            let bits = self.builder.ins().ireduce(types::I32, raw);
+            let slot = self.builder.create_sized_stack_slot(StackSlotData::new(
+                StackSlotKind::ExplicitSlot,
+                8,
+                3,
+            ));
+            self.builder.ins().stack_store(bits, slot, 0);
+            self.builder.ins().stack_load(types::F32, slot, 0)
+        } else if ty == types::F64 {
+            let slot = self.builder.create_sized_stack_slot(StackSlotData::new(
+                StackSlotKind::ExplicitSlot,
+                8,
+                3,
+            ));
+            self.builder.ins().stack_store(raw, slot, 0);
+            self.builder.ins().stack_load(types::F64, slot, 0)
+        } else {
+            raw
         }
     }
 
@@ -2627,6 +2701,12 @@ impl<'a> BytecodeCompiler<'a> {
         field_ref: crate::vm::types::FieldRef,
         field_desc: &str,
     ) -> Result<Value, JitError> {
+        if matches!(
+            self.site_fallbacks.get(&self.pc_offset),
+            Some(DeoptReason::NullCheck)
+        ) {
+            self.emit_site_fallback(obj)?;
+        }
         let field_ref_id = crate::vm::jit::runtime::register_field_ref(field_ref);
         let obj = self.coerce_helper_arg(obj);
         let zero = self.builder.ins().iconst(types::I64, 0);
@@ -2668,6 +2748,13 @@ impl<'a> BytecodeCompiler<'a> {
         field_ref: crate::vm::types::FieldRef,
         _field_desc: &str,
     ) -> Result<(), JitError> {
+        if matches!(
+            self.site_fallbacks.get(&self.pc_offset),
+            Some(DeoptReason::NullCheck)
+        ) {
+            self.emit_site_fallback(obj)?;
+            return Ok(());
+        }
         let field_ref_id = crate::vm::jit::runtime::register_field_ref(field_ref);
         let obj = self.coerce_helper_arg(obj);
         let raw_value = self.coerce_helper_arg(value);
@@ -2725,6 +2812,12 @@ impl<'a> BytecodeCompiler<'a> {
         method_desc: &str,
         args: Vec<Value>,
     ) -> Result<bool, JitError> {
+        if matches!(
+            self.site_fallbacks.get(&self.pc_offset),
+            Some(DeoptReason::NullCheck)
+        ) {
+            self.emit_site_fallback(receiver)?;
+        }
         self.emit_instance_invoke_helper(
             crate::vm::jit::runtime::get_invoke_virtual_ptr(),
             method_ref,
@@ -2780,6 +2873,12 @@ impl<'a> BytecodeCompiler<'a> {
         method_desc: &str,
         args: Vec<Value>,
     ) -> Result<bool, JitError> {
+        if matches!(
+            self.site_fallbacks.get(&self.pc_offset),
+            Some(DeoptReason::NullCheck)
+        ) {
+            self.emit_site_fallback(receiver)?;
+        }
         self.emit_instance_invoke_helper(
             crate::vm::jit::runtime::get_invoke_special_ptr(),
             method_ref,
@@ -2996,6 +3095,16 @@ impl<'a> BytecodeCompiler<'a> {
         self.builder.seal_block(continue_block);
     }
 
+    fn emit_site_fallback(&mut self, passthrough: Value) -> Result<(), JitError> {
+        let reason = self.builder.ins().iconst(types::I64, 8);
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        let _ = self.emit_field_helper_call(
+            crate::vm::jit::runtime::get_force_deopt_ptr(),
+            [reason, passthrough, zero, zero, zero],
+        )?;
+        Ok(())
+    }
+
     fn emit_typed_array_store(
         &mut self,
         array_ref: Value,
@@ -3158,6 +3267,12 @@ impl<'a> BytecodeCompiler<'a> {
         method_desc: &str,
         args: Vec<Value>,
     ) -> Result<bool, JitError> {
+        if matches!(
+            self.site_fallbacks.get(&self.pc_offset),
+            Some(DeoptReason::NullCheck)
+        ) {
+            self.emit_site_fallback(receiver)?;
+        }
         self.emit_instance_invoke_helper(
             crate::vm::jit::runtime::get_invoke_interface_ptr(),
             method_ref,
@@ -3467,12 +3582,7 @@ impl<'a> BytecodeCompiler<'a> {
             guard_type: GuardType::TypeCheck(target_class.clone()),
         });
         if self.site_fallbacks.get(&self.pc_offset) == Some(&DeoptReason::ClassCast) {
-            let reason = self.builder.ins().iconst(types::I64, 8);
-            let zero = self.builder.ins().iconst(types::I64, 0);
-            let _ = self.emit_field_helper_call(
-                crate::vm::jit::runtime::get_force_deopt_ptr(),
-                [reason, obj_ref, zero, zero, zero],
-            )?;
+            self.emit_site_fallback(obj_ref)?;
             self.push(obj_ref);
             return Ok(());
         }
@@ -3760,6 +3870,98 @@ pub fn compile_bytecode(
         let mut builder = FunctionBuilder::new(&mut func, &mut fn_ctx);
         let mut compiler =
             BytecodeCompiler::new(method, &mut builder, arg_types, site_fallbacks);
+        compiler.lower()?;
+        (
+            compiler.frame_size(),
+            compiler.stack_slots(),
+            compiler.deopt_info(),
+        )
+    };
+
+    compile_method(method, &mut func, isa, frame_size, stack_slots, deopt_info)
+}
+
+pub fn compile_bytecode_osr(
+    method: &Method,
+    isa: &dyn TargetIsa,
+    entry_pc: usize,
+    site_fallbacks: std::collections::HashMap<usize, DeoptReason>,
+) -> Result<CompiledCode, JitError> {
+    reject_runtime_dependent_bytecode(method)?;
+    if entry_pc >= method.code.len() {
+        return Err(JitError::CompilationFailed(format!(
+            "OSR entry pc {entry_pc} is outside bytecode"
+        )));
+    }
+
+    let mut func = cranelift::codegen::ir::Function::new();
+    func.name = UserFuncName::user(0, entry_pc as u32);
+
+    let arg_types = crate::vm::types::parse_arg_types(&method.descriptor)
+        .ok_or_else(|| JitError::CompilationFailed("Invalid method descriptor".to_string()))?;
+    let return_type = crate::vm::types::parse_return_type(&method.descriptor)
+        .map_err(|e| JitError::CompilationFailed(format!("Invalid descriptor: {}", e)))?;
+
+    let mut signature = cranelift::codegen::ir::Signature::new(isa.default_call_conv());
+    signature.params.insert(0, AbiParam::new(types::I64));
+    for _ in 0..method.max_locals {
+        signature.params.push(AbiParam::new(types::I64));
+    }
+
+    if let Some(ret) = return_type {
+        let clif_type = match ret {
+            b'B' | b'C' | b'I' | b'S' | b'Z' => types::I32,
+            b'J' => types::I64,
+            b'F' => types::F32,
+            b'D' => types::F64,
+            b'L' | b'[' => types::I64,
+            b'V' => {
+                func.signature = signature;
+                let mut fn_ctx = FunctionBuilderContext::new();
+                let (frame_size, stack_slots, deopt_info) = {
+                    let mut builder = FunctionBuilder::new(&mut func, &mut fn_ctx);
+                    let mut compiler = BytecodeCompiler::new_with_entry(
+                        method,
+                        &mut builder,
+                        arg_types,
+                        site_fallbacks,
+                        entry_pc,
+                        true,
+                    );
+                    compiler.lower()?;
+                    (
+                        compiler.frame_size(),
+                        compiler.stack_slots(),
+                        compiler.deopt_info(),
+                    )
+                };
+                return compile_method(
+                    method,
+                    &mut func,
+                    isa,
+                    frame_size,
+                    stack_slots,
+                    deopt_info,
+                );
+            }
+            _ => types::I64,
+        };
+        signature.returns.push(AbiParam::new(clif_type));
+    }
+
+    func.signature = signature;
+
+    let mut fn_ctx = FunctionBuilderContext::new();
+    let (frame_size, stack_slots, deopt_info) = {
+        let mut builder = FunctionBuilder::new(&mut func, &mut fn_ctx);
+        let mut compiler = BytecodeCompiler::new_with_entry(
+            method,
+            &mut builder,
+            arg_types,
+            site_fallbacks,
+            entry_pc,
+            true,
+        );
         compiler.lower()?;
         (
             compiler.frame_size(),

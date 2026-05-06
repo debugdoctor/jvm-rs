@@ -1,6 +1,6 @@
 # jvm-rs TODO
 
-Updated: 2026-05-05
+Updated: 2026-05-06
 
 The goal is not to clone every layer of HotSpot. The goal is to keep jvm-rs small, understandable, fast to start, and memory-conscious while steadily closing the compatibility and performance gaps that matter for real Java programs.
 
@@ -16,7 +16,7 @@ HotSpot is the comparison point: it has a complete JDK surface, mature GC implem
 - [x] GC: configurable mark-and-sweep with manual triggering and stats.
 - [x] Standard library: practical subset through built-ins, Rust natives, and selected JDK bytecode for `java.lang`, `java.util`, regex/time/text/io/nio/concurrent/reflection.
 - [x] JIT: Cranelift backend, method compilation, OSR, helper-backed calls/fields/arrays/type checks/synchronization/exceptions, deopt, and interpreter fallback.
-- [x] Tests: `tests/jit.rs` contains 146 `jit_` cases covering many interpreter-vs-JIT differential scenarios.
+- [x] Tests: `tests/jit.rs` contains 146 `jit_` cases covering many interpreter-vs-JIT differential scenarios; `tests/complex_scenarios.rs` has 24 end-to-end tests covering reflection, exceptions, arrays, classloading, recursion, lambdas, and HashMap.
 
 ## HotSpot Gap Summary
 
@@ -41,15 +41,17 @@ HotSpot is the comparison point: it has a complete JDK surface, mature GC implem
 - [x] Add a runtime fail-fast mode for dangerous native stubs.
 - [x] Extend `invokedynamic` bootstrap support beyond lambda and StringConcat based on real workload failures. (Infrastructure added: `BootstrapMethodHandle` variant in `InvokeDynamicKind`, JIT and interpreter paths for custom bootstrap methods. Full resolution of method handle arguments still needed for complete CallSite bootstraps.)
 - [x] Add at least one end-to-end real JAR test, not only tests that compile tiny Java sources dynamically.
+- [x] `tests/complex_scenarios.rs`: 24 passing tests covering reflection, classloading, exceptions (finally, suppressed), arrays, recursion, lambdas, HashMap collision handling, strings, switch, and concurrency.
 
 ### P1: JDK Surface Area
 
-- [ ] Create a built-in/native compatibility table: class, method signature, implementation type, semantic completeness, test coverage.
-- [ ] Improve `java.lang.Class` and reflection: annotations, modifiers, constructors, primitive/array class metadata, and method invocation error semantics.
+- [x] Create a built-in/native compatibility table: class, method signature, implementation type, semantic completeness, test coverage.
+- [x] Improve `java.lang.Class` and reflection: annotations, modifiers, constructors, primitive/array class metadata, and method invocation error semantics.
 - [ ] Improve `java.lang.Thread`: interrupt, daemon flag, name, priority, context class loader, uncaught exception handler.
 - [ ] Implement `ServiceLoader`, resource loading, system properties, and environment access behavior needed by common libraries.
 - [ ] Move `java.io` and `java.nio.file` from stubs toward real file IO, error handling, and path normalization.
 - [ ] Expand `java.util.stream`: map/filter/reduce/collect pipelines instead of only selected native collector/stream shortcuts.
+- [ ] Implement `String.intern()` with proper string pool for deduplication.
 
 ### P3: Specification And Ecosystem
 

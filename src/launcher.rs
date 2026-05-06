@@ -591,7 +591,7 @@ fn extract_runtime_constants(class_file: &ClassFile, vm: &mut Vm) -> Vec<Option<
                 .constant_pool
                 .utf8(*string_index)
                 .ok()
-                .map(|value| vm.new_string(value.to_string())),
+                .map(|value| vm.intern_string(value.to_string())),
             Ok(ConstantPoolEntry::Class { name_index }) => {
                 match class_file.constant_pool.utf8(*name_index) {
                     Ok(name) => {

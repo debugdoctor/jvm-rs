@@ -387,6 +387,20 @@ pub(super) fn invoke_lang(
         ("java/lang/String", "valueOf", "(F)Ljava/lang/String;") => Ok(Some(vm.new_string(
             crate::vm::builtin::format::format_float(args[0].as_float()? as f64),
         ))),
+        ("java/lang/String", "intern", "()Ljava/lang/String;") => {
+            let s_ref = args[0].as_reference()?;
+            let s_str = match vm.heap.lock().unwrap().get(s_ref)? {
+                HeapValue::String(s) => s.clone(),
+                _ => return Ok(Some(args[0].clone())),
+            };
+            let mut pool = vm.string_pool.lock().unwrap();
+            if let Some(existing) = pool.get(&s_str) {
+                Ok(Some(Value::Reference(*existing)))
+            } else {
+                pool.insert(s_str, s_ref);
+                Ok(Some(Value::Reference(s_ref)))
+            }
+        }
         ("java/lang/Integer", "numberOfLeadingZeros", "(I)I") => {
             Ok(Some(Value::Int(args[0].as_int()?.leading_zeros() as i32)))
         }

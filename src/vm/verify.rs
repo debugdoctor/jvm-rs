@@ -10,7 +10,7 @@
 use std::collections::{BTreeMap, VecDeque};
 
 use crate::bytecode::Opcode;
-use crate::classfile::VerificationTypeInfo;
+use crate::classfile::{StackMapFrame, StackMapFrameKind, VerificationTypeInfo};
 
 use super::{Method, Value, VmError};
 
@@ -207,7 +207,6 @@ fn validate_stack_map_frames(
     }
 
     let mut previous = None::<usize>;
-    let mut previous_parsed_locals = Vec::new();
     let mut previous_normalized_locals = initial_stack_map_locals(method)?;
     for frame in &method.stack_map_frames {
         let pc = match previous {
@@ -226,11 +225,8 @@ fn validate_stack_map_frames(
             .iter()
             .map(|info| stack_map_type(method, info))
             .collect::<Result<Vec<_>, _>>()?;
-        let normalized_locals = normalize_stack_map_locals(
-            &previous_parsed_locals,
-            &previous_normalized_locals,
-            &parsed_locals,
-        );
+        let normalized_locals =
+            normalize_stack_map_locals(frame, &previous_normalized_locals, &parsed_locals);
         let expected_locals = expand_stack_map_locals(normalized_locals.clone());
         let expected_stack = frame
             .stack
@@ -240,7 +236,6 @@ fn validate_stack_map_frames(
 
         compare_stack_map(pc, &state.locals, &expected_locals, "locals")?;
         compare_stack_map(pc, &state.stack, &expected_stack, "stack")?;
-        previous_parsed_locals = parsed_locals;
         previous_normalized_locals = normalized_locals;
     }
 
@@ -1730,32 +1725,51 @@ fn initial_stack_map_locals(method: &Method) -> Result<Vec<VerifyType>, VmError>
 }
 
 fn normalize_stack_map_locals(
-    previous_parsed: &[VerifyType],
+    frame: &StackMapFrame,
     previous_normalized: &[VerifyType],
     parsed: &[VerifyType],
 ) -> Vec<VerifyType> {
-    if parsed == previous_parsed {
-        return previous_normalized.to_vec();
+    match frame.kind {
+        StackMapFrameKind::Same
+        | StackMapFrameKind::SameLocals1StackItem
+        | StackMapFrameKind::SameExtended => previous_normalized.to_vec(),
+        StackMapFrameKind::Append(append) => {
+            let split_at = parsed.len().saturating_sub(append);
+            let mut normalized = previous_normalized.to_vec();
+            normalized.extend_from_slice(&parsed[split_at..]);
+            normalized
+        }
+        StackMapFrameKind::Chop(chop) => truncate_stack_map_locals(previous_normalized, chop),
+        StackMapFrameKind::Full => parsed.to_vec(),
+    }
+}
+
+fn truncate_stack_map_locals(locals: &[VerifyType], count: usize) -> Vec<VerifyType> {
+    let mut kept = Vec::with_capacity(locals.len());
+    let mut remaining = count;
+    let mut index = locals.len();
+
+    while index > 0 {
+        index -= 1;
+        let ty = &locals[index];
+
+        if matches!(ty, VerifyType::Top)
+            && index > 0
+            && is_wide_verify_type(&locals[index - 1])
+        {
+            continue;
+        }
+
+        if remaining > 0 {
+            remaining -= 1;
+            continue;
+        }
+
+        kept.push(ty.clone());
     }
 
-    if parsed.len() > previous_parsed.len()
-        && parsed.starts_with(previous_parsed)
-        && parsed.len() - previous_parsed.len() <= 3
-    {
-        let mut normalized = previous_normalized.to_vec();
-        normalized.extend_from_slice(&parsed[previous_parsed.len()..]);
-        return normalized;
-    }
-
-    if parsed.len() < previous_parsed.len()
-        && previous_parsed.starts_with(parsed)
-        && previous_parsed.len() - parsed.len() <= 3
-    {
-        return previous_normalized[..previous_normalized.len() - (previous_parsed.len() - parsed.len())]
-            .to_vec();
-    }
-
-    parsed.to_vec()
+    kept.reverse();
+    kept
 }
 
 fn push(
@@ -1860,7 +1874,7 @@ fn verification_error(pc: usize, reason: impl Into<String>) -> VmError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::classfile::StackMapFrame;
+    use crate::classfile::{StackMapFrame, StackMapFrameKind};
     use crate::vm::Method;
 
     #[test]
@@ -1881,6 +1895,7 @@ mod tests {
         let method = Method::new(vec![0x03, 0x99, 0x00, 0x05, 0x04, 0xac, 0x05, 0xac], 0, 1)
             .with_metadata("Main", "f", "()I", 0x0009)
             .with_stack_map_frames(vec![StackMapFrame {
+                kind: StackMapFrameKind::Full,
                 offset_delta: 6,
                 locals: vec![],
                 stack: vec![],
@@ -1914,5 +1929,19 @@ mod tests {
         .with_metadata("Main", "f", "(IDZ)I", 0x0009);
 
         verify_method(&method).unwrap();
+    }
+
+    #[test]
+    fn stack_map_chop_truncates_logical_wide_locals() {
+        let locals = vec![
+            VerifyType::Reference(Some("Main".to_string())),
+            VerifyType::Long,
+            VerifyType::Top,
+            VerifyType::Int,
+        ];
+        assert_eq!(
+            truncate_stack_map_locals(&locals, 2),
+            vec![VerifyType::Reference(Some("Main".to_string()))]
+        );
     }
 }

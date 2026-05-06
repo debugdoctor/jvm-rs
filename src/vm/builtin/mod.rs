@@ -156,6 +156,44 @@ impl Vm {
                 let msg = self.get_object_field(obj_ref, "message")?;
                 Ok(Some(msg))
             }
+            (cls, "addSuppressed", "(Ljava/lang/Throwable;)V")
+                if crate::vm::builtin::helpers::is_throwable_class(self, cls)? =>
+            {
+                let obj_ref = args[0].as_reference()?;
+                let suppressed_ref = args[1].as_reference()?;
+                let current = self.get_object_field(obj_ref, "suppressedExceptions")?;
+                let current_array = match current {
+                    Value::Reference(r) if r != Reference::Null => r,
+                    _ => {
+                        let empty = self.heap.lock().unwrap()
+                            .allocate_reference_array("java/lang/Throwable".to_string(), vec![]);
+                        self.set_object_field(obj_ref, "suppressedExceptions", Value::Reference(empty))?;
+                        empty
+                    }
+                };
+                let mut heap = self.heap.lock().unwrap();
+                match heap.get_mut(current_array) {
+                    Ok(crate::vm::HeapValue::ReferenceArray { values, .. }) => {
+                        values.push(suppressed_ref);
+                    }
+                    _ => {}
+                }
+                Ok(None)
+            }
+            (cls, "getSuppressed", "()[Ljava/lang/Throwable;")
+                if crate::vm::builtin::helpers::is_throwable_class(self, cls)? =>
+            {
+                let obj_ref = args[0].as_reference()?;
+                let suppressed = self.get_object_field(obj_ref, "suppressedExceptions")?;
+                match suppressed {
+                    Value::Reference(r) if r != Reference::Null => Ok(Some(Value::Reference(r))),
+                    _ => {
+                        let empty = self.heap.lock().unwrap()
+                            .allocate_reference_array("java/lang/Throwable".to_string(), vec![]);
+                        Ok(Some(Value::Reference(empty)))
+                    }
+                }
+            }
             (_, "<init>", _) => Ok(None),
             _ => Err(VmError::UnsupportedNativeMethod {
                 class_name: class_name.to_string(),

@@ -76,6 +76,7 @@ pub(super) fn bootstrap_java_lang(vm: &mut Vm) {
         ("valueOf", "(C)Ljava/lang/String;"),
         ("valueOf", "(D)Ljava/lang/String;"),
         ("valueOf", "(F)Ljava/lang/String;"),
+        ("intern", "()Ljava/lang/String;"),
     ] {
         string_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
@@ -374,15 +375,24 @@ pub(super) fn bootstrap_java_lang(vm: &mut Vm) {
             ("<init>", "(Ljava/lang/String;Ljava/lang/Throwable;)V"),
             ("<init>", "(Ljava/lang/Throwable;)V"),
             ("getMessage", "()Ljava/lang/String;"),
+            ("addSuppressed", "(Ljava/lang/Throwable;)V"),
+            ("getSuppressed", "()[Ljava/lang/Throwable;"),
         ] {
             methods.insert((mname.to_string(), mdesc.to_string()), ClassMethod::Native);
+        }
+        let mut instance_fields = vec![("message".to_string(), "Ljava/lang/String;".to_string())];
+        if name == "java/lang/Throwable" {
+            instance_fields.push((
+                "suppressedExceptions".to_string(),
+                "[Ljava/lang/Throwable;".to_string(),
+            ));
         }
         vm.register_class(RuntimeClass {
             name: name.to_string(),
             super_class: Some(parent.to_string()),
             methods,
             static_fields: HashMap::new(),
-            instance_fields: vec![("message".to_string(), "Ljava/lang/String;".to_string())],
+            instance_fields,
             interfaces: vec![],
         });
     }

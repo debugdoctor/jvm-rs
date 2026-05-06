@@ -286,20 +286,33 @@ pub(super) fn compare_with(
 }
 
 pub(super) fn class_internal_name(vm: &Vm, reference: Reference) -> Result<String, VmError> {
-    match vm.heap.lock().unwrap().get(reference)? {
-        HeapValue::Object { fields, class_name } => {
-            if let Some(Value::Reference(name_ref)) = fields.get("__name") {
-                if let HeapValue::String(s) = vm.heap.lock().unwrap().get(*name_ref)? {
-                    return Ok(s.clone());
-                }
+    let (name_ref, class_name) = {
+        let heap = vm.heap.lock().unwrap();
+        match heap.get(reference)? {
+            HeapValue::Object { fields, class_name } => (
+                fields.get("__name").and_then(|value| match value {
+                    Value::Reference(name_ref) => Some(*name_ref),
+                    _ => None,
+                }),
+                class_name.clone(),
+            ),
+            value => {
+                return Err(VmError::InvalidHeapValue {
+                    expected: "object",
+                    actual: value.kind_name(),
+                });
             }
-            Ok(class_name.clone())
         }
-        value => Err(VmError::InvalidHeapValue {
-            expected: "object",
-            actual: value.kind_name(),
-        }),
+    };
+
+    if let Some(name_ref) = name_ref {
+        let heap = vm.heap.lock().unwrap();
+        if let HeapValue::String(s) = heap.get(name_ref)? {
+            return Ok(s.clone());
+        }
     }
+
+    Ok(class_name)
 }
 
 pub(super) fn is_throwable_class(vm: &mut Vm, class_name: &str) -> Result<bool, VmError> {

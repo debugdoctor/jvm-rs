@@ -44,8 +44,12 @@ fn compile_and_run_with_javac_args(
         String::from_utf8_lossy(&output.stderr)
     );
 
-    // Derive main class from the first file name (e.g., "demo/Main.java" -> "demo.Main")
-    let main_file = files[0].0;
+    let main_file = files
+        .iter()
+        .find(|(_, source)| source.contains("public static void main(String[] args)"))
+        .or_else(|| files.iter().find(|(name, _)| name.ends_with("/Main.java")))
+        .map(|(name, _)| *name)
+        .unwrap_or(files[0].0);
     let main_class = main_file.trim_end_matches(".java").replace('/', ".");
 
     let options = LaunchOptions::new(&root, &main_class, vec![]);

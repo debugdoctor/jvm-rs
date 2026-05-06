@@ -72,6 +72,7 @@ pub struct Vm {
     output: Arc<Mutex<Vec<String>>>,
     jit: Option<JitCompiler>,
     jit_context: Option<JitContext>,
+    string_pool: Arc<Mutex<HashMap<String, Reference>>>,
 }
 
 impl fmt::Debug for Vm {
@@ -105,6 +106,7 @@ impl Clone for Vm {
             output: self.output.clone(),
             jit: None,
             jit_context: None,
+            string_pool: self.string_pool.clone(),
         }
     }
 }
@@ -136,6 +138,7 @@ impl Vm {
             output: Arc::new(Mutex::new(Vec::new())),
             jit,
             jit_context,
+            string_pool: Arc::new(Mutex::new(HashMap::new())),
         };
         vm.bootstrap();
         Ok(vm)
@@ -932,45 +935,9 @@ impl Vm {
                 target_class,
                 target_method,
                 target_descriptor,
-            } => {
-                let mut fields = HashMap::new();
-                fields.insert(
-                    "__target_class".to_string(),
-                    Value::Reference(
-                        self.heap
-                            .lock()
-                            .unwrap()
-                            .allocate_string(target_class.clone()),
-                    ),
-                );
-                fields.insert(
-                    "__target_method".to_string(),
-                    Value::Reference(
-                        self.heap
-                            .lock()
-                            .unwrap()
-                            .allocate_string(target_method.clone()),
-                    ),
-                );
-                fields.insert(
-                    "__target_desc".to_string(),
-                    Value::Reference(
-                        self.heap
-                            .lock()
-                            .unwrap()
-                            .allocate_string(target_descriptor.clone()),
-                    ),
-                );
-                for (i, val) in args.into_iter().enumerate() {
-                    fields.insert(format!("__capture_{i}"), val);
-                }
-
-                let proxy = self.heap.lock().unwrap().allocate(HeapValue::Object {
-                    class_name: format!("__lambda_proxy_{}", site.name),
-                    fields,
-                });
-                Ok(Some(Value::Reference(proxy)))
-            }
+            } => self
+                .allocate_lambda_proxy(site, target_class, target_method, target_descriptor, args)
+                .map(|proxy| Some(Value::Reference(proxy))),
             InvokeDynamicKind::StringConcat { recipe, constants } => self
                 .build_string_concat(recipe.as_deref(), constants, &args, &site.descriptor)
                 .map(|concat| Some(self.new_string(concat)))
@@ -1249,7 +1216,10 @@ impl Vm {
         args_ptr: u64,
         argc: usize,
     ) -> Result<Option<Value>, VmError> {
-        if class_name.starts_with("__lambda_proxy_") {
+        if class_name.starts_with("__lambda_proxy_")
+            && method_ref.method_name
+                == class_name.trim_start_matches("__lambda_proxy_")
+        {
             return Ok(None);
         }
 
@@ -1583,6 +1553,11 @@ impl Vm {
         }
     }
 
+    pub(super) fn ensure_class(&mut self, class_name: &str) -> Result<(), VmError> {
+        self.ensure_class_loaded(class_name)?;
+        self.ensure_class_initialized(class_name)
+    }
+
     /// Register a synthesized array class (e.g., [I, [Ljava/lang/String;)
     fn register_synthetic_array_class(&mut self, class_name: &str) -> Result<(), VmError> {
         // Determine element type and array dimensions
@@ -1710,7 +1685,7 @@ impl Vm {
             })
     }
 
-    fn get_static_field(&self, class_name: &str, field_name: &str) -> Result<Value, VmError> {
+    pub(super) fn get_static_field(&self, class_name: &str, field_name: &str) -> Result<Value, VmError> {
         let runtime = self.runtime.lock().unwrap();
         let class = runtime
             .classes
@@ -1745,7 +1720,7 @@ impl Vm {
         Ok(())
     }
 
-    fn get_object_field(&self, reference: Reference, field_name: &str) -> Result<Value, VmError> {
+    pub(super) fn get_instance_field(&self, reference: Reference, field_name: &str) -> Result<Value, VmError> {
         let heap = self.heap.lock().unwrap();
         match heap.get(reference)? {
             HeapValue::Object { fields, .. } => Ok(*fields
@@ -1756,6 +1731,10 @@ impl Vm {
                 actual: value.kind_name(),
             }),
         }
+    }
+
+    fn get_object_field(&self, reference: Reference, field_name: &str) -> Result<Value, VmError> {
+        self.get_instance_field(reference, field_name)
     }
 
     fn set_object_field(
@@ -2056,6 +2035,17 @@ impl Vm {
         Value::Reference(self.heap.lock().unwrap().allocate_string(value))
     }
 
+    pub fn intern_string(&mut self, value: impl Into<String>) -> Value {
+        let value = value.into();
+        if let Some(existing) = self.string_pool.lock().unwrap().get(&value).copied() {
+            return Value::Reference(existing);
+        }
+
+        let reference = self.heap.lock().unwrap().allocate_string(value.clone());
+        self.string_pool.lock().unwrap().insert(value, reference);
+        Value::Reference(reference)
+    }
+
     pub fn new_string_array(&mut self, values: &[String]) -> Value {
         let references = values
             .iter()
@@ -2088,6 +2078,79 @@ impl Vm {
             HeapValue::DoubleArray { .. } => Ok("[D".to_string()),
             HeapValue::ReferenceArray { component_type, .. } => Ok(format!("[L{component_type};")),
         }
+    }
+
+    pub(super) fn reflect_invoke_method(
+        &mut self,
+        declaring_class: &str,
+        method_name: &str,
+        descriptor: &str,
+        receiver: Option<Reference>,
+        args: Vec<Value>,
+    ) -> Result<Option<Value>, VmError> {
+        self.ensure_class_loaded(declaring_class)?;
+        self.ensure_class_initialized(declaring_class)?;
+
+        if let Some(receiver) = receiver {
+            let receiver_class = self.get_object_class(receiver)?;
+            let (resolved_class, class_method) =
+                self.resolve_method(&receiver_class, method_name, descriptor)?;
+            let mut all_args = vec![Value::Reference(receiver)];
+            all_args.extend(args);
+            match class_method {
+                ClassMethod::Native => self.invoke_native(
+                    &resolved_class,
+                    method_name,
+                    descriptor,
+                    &all_args,
+                ),
+                ClassMethod::Bytecode(method) => {
+                    let callee = method.with_initial_locals(Vm::args_to_locals(all_args));
+                    let saved_jit = self.jit.take();
+                    let result = self.execute(callee);
+                    self.jit = saved_jit;
+                    match result? {
+                        ExecutionResult::Value(value) => Ok(Some(value)),
+                        ExecutionResult::Void => Ok(None),
+                    }
+                }
+            }
+        } else {
+            let (resolved_class, class_method) =
+                self.resolve_method(declaring_class, method_name, descriptor)?;
+            match class_method {
+                ClassMethod::Native => {
+                    self.invoke_native(&resolved_class, method_name, descriptor, &args)
+                }
+                ClassMethod::Bytecode(method) => {
+                    let callee = method.with_initial_locals(Vm::args_to_locals(args));
+                    let saved_jit = self.jit.take();
+                    let result = self.execute(callee);
+                    self.jit = saved_jit;
+                    match result? {
+                        ExecutionResult::Value(value) => Ok(Some(value)),
+                        ExecutionResult::Void => Ok(None),
+                    }
+                }
+            }
+        }
+    }
+
+    pub(super) fn reflect_new_instance(
+        &mut self,
+        class_name: &str,
+        constructor_descriptor: &str,
+        args: Vec<Value>,
+    ) -> Result<Reference, VmError> {
+        let object = self
+            .invoke_jit_allocate_object(class_name)
+            .ok_or_else(|| VmError::ClassNotFound {
+                class_name: class_name.to_string(),
+            })?;
+        let mut ctor_args = vec![Value::Reference(object)];
+        ctor_args.extend(args);
+        self.reflect_invoke_method(class_name, "<init>", constructor_descriptor, None, ctor_args)?;
+        Ok(object)
     }
 
     /// Verify a method's bytecode structure before execution.
@@ -3462,44 +3525,13 @@ impl Vm {
                         target_method,
                         target_descriptor,
                     } => {
-                        // LambdaMetafactory: create a lambda proxy object that stores the
-                        // target method reference and any captured arguments.
-                        let mut fields = HashMap::new();
-                        fields.insert(
-                            "__target_class".to_string(),
-                            Value::Reference(
-                                self.heap
-                                    .lock()
-                                    .unwrap()
-                                    .allocate_string(target_class.clone()),
-                            ),
-                        );
-                        fields.insert(
-                            "__target_method".to_string(),
-                            Value::Reference(
-                                self.heap
-                                    .lock()
-                                    .unwrap()
-                                    .allocate_string(target_method.clone()),
-                            ),
-                        );
-                        fields.insert(
-                            "__target_desc".to_string(),
-                            Value::Reference(
-                                self.heap
-                                    .lock()
-                                    .unwrap()
-                                    .allocate_string(target_descriptor.clone()),
-                            ),
-                        );
-                        for (i, val) in args.into_iter().enumerate() {
-                            fields.insert(format!("__capture_{i}"), val);
-                        }
-
-                        let proxy = self.heap.lock().unwrap().allocate(HeapValue::Object {
-                            class_name: format!("__lambda_proxy_{}", site.name),
-                            fields,
-                        });
+                        let proxy = self.allocate_lambda_proxy(
+                            &site,
+                            target_class,
+                            target_method,
+                            target_descriptor,
+                            args,
+                        )?;
                         thread.current_frame_mut().push(Value::Reference(proxy))?;
                     }
                     InvokeDynamicKind::StringConcat { recipe, constants } => {
@@ -3808,6 +3840,75 @@ InvokeDynamicKind::Unknown => {
         Ok(reference)
     }
 
+    fn allocate_lambda_proxy(
+        &mut self,
+        site: &InvokeDynamicSite,
+        target_class: &str,
+        target_method: &str,
+        target_descriptor: &str,
+        captures: Vec<Value>,
+    ) -> Result<Reference, VmError> {
+        let class_name = format!("__lambda_proxy_{}", site.name);
+        self.ensure_lambda_proxy_class(&class_name, &site.descriptor)?;
+
+        let mut fields = HashMap::new();
+        fields.insert(
+            "__target_class".to_string(),
+            Value::Reference(self.heap.lock().unwrap().allocate_string(target_class.to_string())),
+        );
+        fields.insert(
+            "__target_method".to_string(),
+            Value::Reference(self.heap.lock().unwrap().allocate_string(target_method.to_string())),
+        );
+        fields.insert(
+            "__target_desc".to_string(),
+            Value::Reference(self.heap.lock().unwrap().allocate_string(target_descriptor.to_string())),
+        );
+        for (i, val) in captures.into_iter().enumerate() {
+            fields.insert(format!("__capture_{i}"), val);
+        }
+
+        Ok(self
+            .heap
+            .lock()
+            .unwrap()
+            .allocate(HeapValue::Object { class_name, fields }))
+    }
+
+    fn ensure_lambda_proxy_class(
+        &mut self,
+        class_name: &str,
+        site_descriptor: &str,
+    ) -> Result<(), VmError> {
+        if self.runtime.lock().unwrap().classes.contains_key(class_name) {
+            return Ok(());
+        }
+
+        let interfaces = Self::lambda_proxy_interfaces(site_descriptor)?;
+        self.register_class(RuntimeClass {
+            name: class_name.to_string(),
+            super_class: Some("java/lang/Object".to_string()),
+            methods: HashMap::new(),
+            static_fields: HashMap::new(),
+            instance_fields: vec![],
+            interfaces,
+        });
+        Ok(())
+    }
+
+    fn lambda_proxy_interfaces(site_descriptor: &str) -> Result<Vec<String>, VmError> {
+        let Some(end) = site_descriptor.find(')') else {
+            return Err(VmError::InvalidDescriptor {
+                descriptor: site_descriptor.to_string(),
+            });
+        };
+        let return_descriptor = &site_descriptor[end + 1..];
+        if return_descriptor.starts_with('L') && return_descriptor.ends_with(';') {
+            return Ok(vec![return_descriptor[1..return_descriptor.len() - 1].to_string()]);
+        }
+        Ok(vec![])
+    }
+
     fn array_component_name(component_descriptor: &str) -> String {
         if component_descriptor.starts_with('L') && component_descriptor.ends_with(';') {
             component_descriptor[1..component_descriptor.len() - 1].to_string()
@@ -3987,7 +4088,10 @@ InvokeDynamicKind::Unknown => {
         args: Vec<Value>,
     ) -> Result<(), VmError> {
         // Lambda proxy dispatch: redirect to the captured target method.
-        if class_name.starts_with("__lambda_proxy_") {
+        if class_name.starts_with("__lambda_proxy_")
+            && method_ref.method_name
+                == class_name.trim_start_matches("__lambda_proxy_")
+        {
             return self.dispatch_lambda_proxy(thread, receiver, args);
         }
 

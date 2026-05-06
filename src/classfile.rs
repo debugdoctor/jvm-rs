@@ -395,9 +395,20 @@ pub struct EnclosingMethodInfo {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StackMapFrame {
+    pub kind: StackMapFrameKind,
     pub offset_delta: u16,
     pub locals: Vec<VerificationTypeInfo>,
     pub stack: Vec<VerificationTypeInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StackMapFrameKind {
+    Same,
+    SameLocals1StackItem,
+    Chop(usize),
+    SameExtended,
+    Append(usize),
+    Full,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -622,16 +633,19 @@ fn parse_attributes(
                 let frame_type = smt_reader.read_u1()?;
                 let frame = match frame_type {
                     0..=63 => StackMapFrame {
+                        kind: StackMapFrameKind::Same,
                         offset_delta: frame_type as u16,
                         locals: previous_locals.clone(),
                         stack: Vec::new(),
                     },
                     64..=127 => StackMapFrame {
+                        kind: StackMapFrameKind::SameLocals1StackItem,
                         offset_delta: (frame_type - 64) as u16,
                         locals: previous_locals.clone(),
                         stack: vec![parse_verification_type_info(&mut smt_reader)?],
                     },
                     247 => StackMapFrame {
+                        kind: StackMapFrameKind::SameLocals1StackItem,
                         offset_delta: smt_reader.read_u2()?,
                         locals: previous_locals.clone(),
                         stack: vec![parse_verification_type_info(&mut smt_reader)?],
@@ -650,12 +664,14 @@ fn parse_attributes(
                         }
                         let locals = previous_locals[..previous_locals.len() - chop].to_vec();
                         StackMapFrame {
+                            kind: StackMapFrameKind::Chop(chop),
                             offset_delta,
                             locals,
                             stack: Vec::new(),
                         }
                     }
                     251 => StackMapFrame {
+                        kind: StackMapFrameKind::SameExtended,
                         offset_delta: smt_reader.read_u2()?,
                         locals: previous_locals.clone(),
                         stack: Vec::new(),
@@ -668,6 +684,7 @@ fn parse_attributes(
                             locals.push(parse_verification_type_info(&mut smt_reader)?);
                         }
                         StackMapFrame {
+                            kind: StackMapFrameKind::Append(append),
                             offset_delta,
                             locals,
                             stack: Vec::new(),
@@ -686,6 +703,7 @@ fn parse_attributes(
                             stack.push(parse_verification_type_info(&mut smt_reader)?);
                         }
                         StackMapFrame {
+                            kind: StackMapFrameKind::Full,
                             offset_delta,
                             locals,
                             stack,

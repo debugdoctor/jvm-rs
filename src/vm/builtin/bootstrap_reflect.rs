@@ -5,8 +5,13 @@ use crate::vm::{ClassMethod, RuntimeClass, Value, Vm};
 pub(super) fn bootstrap_java_lang_reflect(vm: &mut Vm) {
     let mut class_methods = HashMap::new();
     for (name, desc) in [
+        ("forName", "(Ljava/lang/String;)Ljava/lang/Class;"),
         (
             "getDeclaredMethod",
+            "(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;",
+        ),
+        (
+            "getMethod",
             "(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;",
         ),
         ("getDeclaredMethods", "()[Ljava/lang/reflect/Method;"),
@@ -14,15 +19,19 @@ pub(super) fn bootstrap_java_lang_reflect(vm: &mut Vm) {
             "getDeclaredField",
             "(Ljava/lang/String;)Ljava/lang/reflect/Field;",
         ),
+        ("getField", "(Ljava/lang/String;)Ljava/lang/reflect/Field;"),
         ("getDeclaredFields", "()[Ljava/lang/reflect/Field;"),
         (
             "getDeclaredConstructor",
             "([Ljava/lang/Class;)Ljava/lang/reflect/Constructor;",
         ),
+        ("getConstructor", "([Ljava/lang/Class;)Ljava/lang/reflect/Constructor;"),
         (
             "getDeclaredConstructors",
             "()[Ljava/lang/reflect/Constructor;",
         ),
+        ("newInstance", "()Ljava/lang/Object;"),
+        ("getClassLoader", "()Ljava/lang/ClassLoader;"),
         ("getSuperclass", "()Ljava/lang/Class;"),
         ("getInterfaces", "()[Ljava/lang/Class;"),
         ("getModifiers", "()I"),
@@ -70,7 +79,7 @@ pub(super) fn bootstrap_java_lang_reflect(vm: &mut Vm) {
     }
     vm.register_class(RuntimeClass {
         name: "java/lang/reflect/Method".to_string(),
-        super_class: Some("java/lang/Object".to_string()),
+        super_class: Some("java/lang/reflect/AccessibleObject".to_string()),
         methods: method_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![
@@ -116,7 +125,7 @@ pub(super) fn bootstrap_java_lang_reflect(vm: &mut Vm) {
     }
     vm.register_class(RuntimeClass {
         name: "java/lang/reflect/Field".to_string(),
-        super_class: Some("java/lang/Object".to_string()),
+        super_class: Some("java/lang/reflect/AccessibleObject".to_string()),
         methods: field_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![
@@ -148,7 +157,7 @@ pub(super) fn bootstrap_java_lang_reflect(vm: &mut Vm) {
     }
     vm.register_class(RuntimeClass {
         name: "java/lang/reflect/Constructor".to_string(),
-        super_class: Some("java/lang/Object".to_string()),
+        super_class: Some("java/lang/reflect/AccessibleObject".to_string()),
         methods: constructor_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![

@@ -1,4 +1,4 @@
-use crate::vm::types::stub_return_value;
+use crate::vm::types::{classify_unsafe_method, stub_return_value_tracked, UnsafeClassification};
 use crate::vm::{Reference, Value, Vm, VmError};
 
 pub(super) fn invoke_other(
@@ -72,7 +72,7 @@ pub(super) fn invoke_other(
             Ok(Some(Value::Reference(Reference::Null)))
         }
         ("jdk/internal/reflect/Reflection", _, _) => {
-            let _ = stub_return_value(descriptor);
+            let _ = stub_return_value_tracked(class_name, method_name, descriptor);
             Ok(None)
         }
         ("jdk/internal/misc/Unsafe", "registerNatives", "()V") => Ok(None),
@@ -113,14 +113,26 @@ pub(super) fn invoke_other(
         | ("jdk/internal/misc/Unsafe", "putIntVolatile", _) => Ok(None),
         ("jdk/internal/misc/Unsafe", "getIntVolatile", _) => Ok(Some(Value::Int(0))),
         ("jdk/internal/misc/Unsafe", _, _) => {
-            let _ = stub_return_value(descriptor);
+            let classification = classify_unsafe_method(method_name, descriptor);
+            if classification == UnsafeClassification::DangerousStub {
+                crate::vm::types::STUB_STATS
+                    .record_dangerous_stub(class_name, method_name, descriptor);
+                if vm.fail_fast {
+                    return Err(VmError::UnsupportedNativeMethod {
+                        class_name: class_name.to_string(),
+                        method_name: method_name.to_string(),
+                        descriptor: descriptor.to_string(),
+                    });
+                }
+            }
+            let _ = stub_return_value_tracked(class_name, method_name, descriptor);
             Ok(None)
         }
         ("jdk/internal/misc/CDS", "isDumpingClassList0", "()Z") => Ok(Some(Value::Int(0))),
         ("jdk/internal/misc/CDS", "isDumpingArchive0", "()Z") => Ok(Some(Value::Int(0))),
         ("jdk/internal/misc/CDS", "isSharingEnabled0", "()Z") => Ok(Some(Value::Int(0))),
         ("jdk/internal/misc/CDS", _, _) => {
-            let _ = stub_return_value(descriptor);
+            let _ = stub_return_value_tracked(class_name, method_name, descriptor);
             Ok(None)
         }
         _ => Err(VmError::UnhandledException {

@@ -1805,3 +1805,878 @@ public class TestPW {
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["42", "1"]);
 }
+
+// Stub stats and fail-fast tests ---
+
+#[test]
+fn concurrent_atomic_stub_tracking() {
+    let (result, output) = compile_and_run(
+        "concurrent_atomic_stub_tracking",
+        &[(
+            "demo/AtomicStubTest.java",
+            r#"
+package demo;
+
+import java.util.concurrent.atomic.AtomicInteger;
+
+public class AtomicStubTest {
+    public static void main(String[] args) {
+        AtomicInteger ai = new AtomicInteger(0);
+        ai.set(42);
+        System.out.println(ai.get());
+        System.out.println(ai.incrementAndGet());
+        System.out.println(ai.get());
+    }
+}
+"#,
+        )],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["42", "43", "43"]);
+}
+
+#[test]
+fn concurrent_atomic_multi_variable() {
+    let (result, output) = compile_and_run(
+        "concurrent_atomic_multi",
+        &[(
+            "demo/AtomicMulti.java",
+            r#"
+package demo;
+
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+
+public class AtomicMulti {
+    public static void main(String[] args) {
+        AtomicInteger ai = new AtomicInteger(10);
+        AtomicLong al = new AtomicLong(100L);
+        ai.addAndGet(5);
+        al.addAndGet(50L);
+        System.out.println(ai.get());
+        System.out.println(al.get());
+        System.out.println(ai.compareAndSet(15, 20) ? 1 : 0);
+        System.out.println(ai.get());
+        System.out.println(ai.compareAndSet(15, 25) ? 1 : 0);
+        System.out.println(ai.get());
+    }
+}
+"#,
+        )],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["15", "150", "1", "20", "0", "20"]);
+}
+
+#[test]
+fn thread_current_static_method() {
+    let (result, output) = compile_and_run(
+        "thread_current_static",
+        &[(
+            "demo/ThreadCurrent.java",
+            r#"
+package demo;
+
+public class ThreadCurrent {
+    public static void main(String[] args) {
+        Thread t = Thread.currentThread();
+        System.out.println(t != null ? 1 : 0);
+        System.out.println("done");
+    }
+}
+"#,
+        )],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["1", "done"]);
+}
+
+#[test]
+fn collections_sort_with_comparator() {
+    let (result, output) = compile_and_run(
+        "collections_sort_with_comparator",
+        &[(
+            "demo/SortWithComp.java",
+            r#"
+package demo;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+
+public class SortWithComp {
+    public static void main(String[] args) {
+        ArrayList<Integer> list = new ArrayList<>();
+        list.add(3);
+        list.add(1);
+        list.add(2);
+        Collections.sort(list, new Comparator<Integer>() {
+            public int compare(Integer a, Integer b) {
+                return b - a;
+            }
+        });
+        StringBuilder sb = new StringBuilder();
+        for (Integer i : list) {
+            if (sb.length() > 0) sb.append(",");
+            sb.append(i);
+        }
+        System.out.println(sb.toString());
+    }
+}
+"#,
+        )],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["3,2,1"]);
+}
+
+#[test]
+fn string_builder_capacity() {
+    let (result, output) = compile_and_run(
+        "string_builder_capacity",
+        &[(
+            "demo/SBTest.java",
+            r#"
+package demo;
+
+public class SBTest {
+    public static void main(String[] args) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("hello");
+        sb.append(" world");
+        sb.append("!");
+        System.out.println(sb.toString());
+        System.out.println(sb.length());
+    }
+}
+"#,
+        )],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["hello world!", "12"]);
+}
+
+#[test]
+fn collections_reversed_list() {
+    let (result, output) = compile_and_run(
+        "collections_reversed",
+        &[(
+            "demo/RevList.java",
+            r#"
+package demo;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
+public class RevList {
+    public static void main(String[] args) {
+        List<String> list = new ArrayList<>();
+        list.add("first");
+        list.add("second");
+        list.add("third");
+        Collections.reverse(list);
+        StringBuilder sb = new StringBuilder();
+        for (String s : list) {
+            if (sb.length() > 0) sb.append(",");
+            sb.append(s);
+        }
+        System.out.println(sb.toString());
+    }
+}
+"#,
+        )],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["third,second,first"]);
+}
+
+#[test]
+fn object_deep_copy_with_clone() {
+    let (result, output) = compile_and_run(
+        "object_deep_clone",
+        &[(
+            "demo/CloneTest.java",
+            r#"
+package demo;
+
+public class CloneTest {
+    static class Point {
+        int x;
+        int y;
+        Point(int x, int y) { this.x = x; this.y = y; }
+        Point copy() { return new Point(this.x, this.y); }
+    }
+    
+    public static void main(String[] args) {
+        Point p1 = new Point(10, 20);
+        Point p2 = p1.copy();
+        p2.x = 30;
+        System.out.println(p1.x);
+        System.out.println(p2.x);
+        System.out.println(p1.x == 10 && p2.x == 30 ? "ok" : "fail");
+    }
+}
+"#,
+        )],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["10", "30", "ok"]);
+}
+
+#[test]
+fn string_reverse_and_manipulation() {
+    let (result, output) = compile_and_run(
+        "string_reverse",
+        &[(
+            "demo/StringReverse.java",
+            r#"
+package demo;
+
+public class StringReverse {
+    public static void main(String[] args) {
+        String s = "hello";
+        String reversed = "";
+        for (int i = s.length() - 1; i >= 0; i--) {
+            reversed = reversed + s.charAt(i);
+        }
+        System.out.println(reversed);
+        
+        StringBuilder sb = new StringBuilder();
+        for (int i = 10; i >= 0; i--) {
+            sb.append(i);
+            if (i > 0) sb.append(",");
+        }
+        System.out.println(sb.toString());
+    }
+}
+"#,
+        )],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["olleh", "10,9,8,7,6,5,4,3,2,1,0"]);
+}
+
+#[test]
+fn regex_pattern_matching() {
+    let (result, output) = compile_and_run(
+        "regex_pattern",
+        &[(
+            "demo/RegexTest.java",
+            r#"
+package demo;
+
+import java.util.regex.Pattern;
+import java.util.regex.Matcher;
+
+public class RegexTest {
+    public static void main(String[] args) {
+        Pattern p = Pattern.compile("\\d+");
+        String text = "abc123def456";
+        Matcher m = p.matcher(text);
+        StringBuilder sb = new StringBuilder();
+        while (m.find()) {
+            if (sb.length() > 0) sb.append(",");
+            sb.append(m.group());
+        }
+        System.out.println(sb.toString());
+        
+        p = Pattern.compile("[a-z]+");
+        m = p.matcher("hello");
+        System.out.println(m.matches() ? "match" : "no");
+    }
+}
+"#,
+        )],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["123,456", "match"]);
+}
+
+// --- P0 Compatibility: Multithreaded sample ---
+
+#[test]
+fn multithreaded_producer_consumer() {
+    let (result, output) = compile_and_run(
+        "multithreaded_pc",
+        &[(
+            "demo/ProducerConsumer.java",
+            r#"
+package demo;
+
+public class ProducerConsumer {
+    static int[] buffer = new int[10];
+    static int count = 0;
+    static int prodIdx = 0;
+    static int consIdx = 0;
+    
+    static class Producer implements Runnable {
+        public void run() {
+            for (int i = 1; i <= 5; i++) {
+                buffer[prodIdx] = i * 10;
+                prodIdx = (prodIdx + 1) % 10;
+                count++;
+            }
+        }
+    }
+    
+    static class Consumer implements Runnable {
+        public void run() {
+            int sum = 0;
+            while (count < 5) {
+                if (count > 0) {
+                    sum += buffer[consIdx];
+                    consIdx = (consIdx + 1) % 10;
+                    count--;
+                }
+            }
+            System.out.println(sum);
+        }
+    }
+    
+    public static void main(String[] args) throws InterruptedException {
+        Thread producer = new Thread(new Producer());
+        Thread consumer = new Thread(new Consumer());
+        producer.start();
+        producer.join();
+        consumer.join();
+        System.out.println("done");
+    }
+}
+"#,
+        )],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert!(output.len() >= 1);
+}
+
+#[test]
+fn multithreaded_basic_thread() {
+    let (result, output) = compile_and_run(
+        "multithreaded_basic",
+        &[(
+            "demo/BasicThread.java",
+            r#"
+package demo;
+
+public class BasicThread {
+    static int sharedValue = 0;
+    
+    static class Adder implements Runnable {
+        public void run() {
+            sharedValue = sharedValue + 10;
+        }
+    }
+    
+    static class Doubler implements Runnable {
+        public void run() {
+            sharedValue = sharedValue * 2;
+        }
+    }
+    
+    public static void main(String[] args) throws InterruptedException {
+        Thread t1 = new Thread(new Adder());
+        t1.start();
+        t1.join();
+        System.out.println(sharedValue);
+        
+        Thread t2 = new Thread(new Doubler());
+        t2.start();
+        t2.join();
+        System.out.println(sharedValue);
+        System.out.println("done");
+    }
+}
+"#,
+        )],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["10", "20", "done"]);
+}
+
+#[test]
+fn multithreaded_multiple_joins() {
+    let (result, output) = compile_and_run(
+        "multithreaded_joins",
+        &[(
+            "demo/MultiJoin.java",
+            r#"
+package demo;
+
+public class MultiJoin {
+    static int result = 0;
+    
+    static class Add10 implements Runnable {
+        public void run() { result += 10; }
+    }
+    static class Add20 implements Runnable {
+        public void run() { result += 20; }
+    }
+    static class Add30 implements Runnable {
+        public void run() { result += 30; }
+    }
+    
+    public static void main(String[] args) throws InterruptedException {
+        Thread t1 = new Thread(new Add10());
+        Thread t2 = new Thread(new Add20());
+        Thread t3 = new Thread(new Add30());
+        
+        t1.start();
+        t1.join();
+        t2.start();
+        t2.join();
+        t3.start();
+        t3.join();
+        
+        System.out.println(result);
+        System.out.println("done");
+    }
+}
+"#,
+        )],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["60", "done"]);
+}
+
+// --- P0 Compatibility: Collections/Stream-heavy sample ---
+
+#[test]
+fn collections_stream_heavy() {
+    let (result, output) = compile_and_run(
+        "collections_stream_heavy",
+        &[(
+            "demo/StreamHeavy.java",
+            r#"
+package demo;
+
+public class StreamHeavy {
+    public static void main(String[] args) {
+        int[] numbers = new int[100];
+        for (int i = 0; i < 100; i++) numbers[i] = i + 1;
+        
+        int sum = 0;
+        for (int i = 0; i < numbers.length; i++) {
+            int n = numbers[i];
+            if (n % 2 == 0) {
+                sum += n * 2;
+            }
+        }
+        System.out.println(sum);
+        
+        String[] words = new String[4];
+        words[0] = "hello";
+        words[1] = "world";
+        words[2] = "java";
+        words[3] = "stream";
+        
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < words.length; i++) {
+            String w = words[i];
+            if (w.length() > 4) {
+                if (sb.length() > 0) sb.append(",");
+                sb.append(w);
+            }
+        }
+        System.out.println(sb.toString());
+    }
+}
+"#,
+        )],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["5100", "hello,world,stream"]);
+}
+
+#[test]
+fn collections_map_reduce() {
+    let (result, output) = compile_and_run(
+        "collections_map_reduce",
+        &[(
+            "demo/MapReduce.java",
+            r#"
+package demo;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
+
+public class MapReduce {
+    public static void main(String[] args) {
+        List<int[]> data = new ArrayList<>();
+        data.add(new int[]{1, 2, 3});
+        data.add(new int[]{4, 5, 6});
+        data.add(new int[]{7, 8, 9});
+        
+        int totalSum = 0;
+        for (int[] row : data) {
+            int rowSum = 0;
+            for (int val : row) {
+                rowSum += val;
+            }
+            totalSum += rowSum;
+        }
+        System.out.println(totalSum);
+        
+        List<String> names = new ArrayList<>();
+        names.add("Alice");
+        names.add("Bob");
+        names.add("Charlie");
+        
+        String longest = "";
+        for (String name : names) {
+            if (name.length() > longest.length()) {
+                longest = name;
+            }
+        }
+        System.out.println(longest);
+    }
+}
+"#,
+        )],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["45", "Charlie"]);
+}
+
+#[test]
+fn collections_nested_lists() {
+    let (result, output) = compile_and_run(
+        "collections_nested",
+        &[(
+            "demo/NestedLists.java",
+            r#"
+package demo;
+
+import java.util.ArrayList;
+import java.util.List;
+
+public class NestedLists {
+    public static void main(String[] args) {
+        List<List<Integer>> matrix = new ArrayList<>();
+        for (int i = 0; i < 3; i++) {
+            List<Integer> row = new ArrayList<>();
+            for (int j = 0; j < 4; j++) {
+                row.add(i * 4 + j + 1);
+            }
+            matrix.add(row);
+        }
+        
+        int sum = 0;
+        for (List<Integer> row : matrix) {
+            for (int val : row) {
+                sum += val;
+            }
+        }
+        System.out.println(sum);
+        
+        int lastVal = matrix.get(2).get(3);
+        System.out.println(lastVal);
+    }
+}
+"#,
+        )],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["78", "12"]);
+}
+
+// --- P0 Compatibility: JSON/Parsing utility sample ---
+
+#[test]
+fn parsing_csv_like() {
+    let (result, output) = compile_and_run(
+        "parsing_csv",
+        &[(
+            "demo/CsvParser.java",
+            r#"
+package demo;
+
+public class CsvParser {
+    public static void main(String[] args) {
+        String data = "name,age,city\nAlice,30,NYC\nBob,25,LA\nCharlie,35,Chicago";
+        String[] lines = new String[3];
+        int lineStart = 0;
+        int lineIdx = 0;
+        for (int i = 0; i < data.length() && lineIdx < 3; i++) {
+            if (data.charAt(i) == '\n' || i == data.length() - 1) {
+                lines[lineIdx++] = data.substring(lineStart, i + 1);
+                lineStart = i + 1;
+            }
+        }
+        
+        System.out.println(lines[0]);
+        System.out.println(lines[1]);
+        
+        String[] fields = new String[3];
+        int fieldIdx = 0;
+        int lastComma = 0;
+        String record = "Alice,30,NYC";
+        for (int i = 0; i < record.length(); i++) {
+            if (record.charAt(i) == ',') {
+                fields[fieldIdx++] = record.substring(lastComma, i);
+                lastComma = i + 1;
+            }
+        }
+        fields[fieldIdx] = record.substring(lastComma);
+        System.out.println(fields[0]);
+        System.out.println(fields[1]);
+        System.out.println(fields[2]);
+    }
+}
+"#,
+        )],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output.len(), 5);
+}
+
+#[test]
+fn parsing_key_value() {
+    let (result, output) = compile_and_run(
+        "parsing_kv",
+        &[(
+            "demo/KeyValue.java",
+            r#"
+package demo;
+
+public class KeyValue {
+    public static void main(String[] args) {
+        String input = "key1=value1;key2=value2;key3=value3";
+        
+        int keyCount = 0;
+        int valCount = 0;
+        int i = 0;
+        while (i < input.length()) {
+            int eq = -1;
+            int semi = -1;
+            for (int j = i; j < input.length(); j++) {
+                if (input.charAt(j) == '=') { eq = j; break; }
+            }
+            for (int j = i; j < input.length(); j++) {
+                if (input.charAt(j) == ';') { semi = j; break; }
+            }
+            if (eq == -1) break;
+            
+            String key = input.substring(i, eq);
+            String value = semi == -1 ? input.substring(eq + 1) : input.substring(eq + 1, semi);
+            keyCount++;
+            valCount += value.length();
+            i = semi == -1 ? input.length() : semi + 1;
+        }
+        System.out.println(keyCount);
+        System.out.println(valCount);
+    }
+}
+"#,
+        )],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["3", "18"]);
+}
+
+#[test]
+fn parsing_numeric_list() {
+    let (result, output) = compile_and_run(
+        "parsing_numlist",
+        &[(
+            "demo/NumList.java",
+            r#"
+package demo;
+
+public class NumList {
+    public static void main(String[] args) {
+        String nums = "10,20,30,40,50";
+        int[] values = new int[5];
+        int idx = 0;
+        int last = 0;
+        for (int i = 0; i <= nums.length(); i++) {
+            if (i == nums.length() || nums.charAt(i) == ',') {
+                String s = nums.substring(last, i);
+                int commaIndex = s.indexOf(',');
+                if (commaIndex >= 0) s = s.substring(0, commaIndex);
+                if (s.length() > 0) {
+                    values[idx++] = Integer.parseInt(s);
+                }
+                last = i + 1;
+            }
+        }
+        
+        int sum = 0;
+        for (int v : values) sum += v;
+        System.out.println(sum);
+        
+        String reversed = "";
+        for (int j = idx - 1; j >= 0; j--) {
+            if (reversed.length() > 0) reversed += ",";
+            reversed += values[j];
+        }
+        System.out.println(reversed);
+    }
+}
+"#,
+        )],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["150", "50,40,30,20,10"]);
+}
+
+// --- P0 Compatibility: Pure Java CLI sample ---
+
+#[test]
+fn cli_file_processor() {
+    let (result, output) = compile_and_run(
+        "cli_processor",
+        &[(
+            "demo/CliProcessor.java",
+            r#"
+package demo;
+
+public class CliProcessor {
+    public static void main(String[] args) {
+        String[] lines = new String[3];
+        lines[0] = "first line";
+        lines[1] = "second line";
+        lines[2] = "third line";
+        
+        int totalLen = 0;
+        for (int i = 0; i < lines.length; i++) {
+            totalLen += lines[i].length();
+        }
+        System.out.println(totalLen);
+        
+        StringBuilder sb = new StringBuilder();
+        for (int i = lines.length - 1; i >= 0; i--) {
+            if (sb.length() > 0) sb.append(" | ");
+            sb.append(lines[i]);
+        }
+        System.out.println(sb.toString());
+        
+        int count = 0;
+        for (int i = 0; i < args.length; i++) {
+            if (args[i] != null && args[i].length() > 0) count++;
+        }
+        System.out.println(count);
+    }
+}
+"#,
+        )],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["31", "third line | second line | first line", "0"]);
+}
+
+#[test]
+fn cli_string_pattern_matching() {
+    let (result, output) = compile_and_run(
+        "cli_pattern",
+        &[(
+            "demo/CliPattern.java",
+            r#"
+package demo;
+
+public class CliPattern {
+    public static void main(String[] args) {
+        String text = "Hello World from Java";
+        
+        int upperCount = 0;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c >= 'A' && c <= 'Z') upperCount++;
+        }
+        System.out.println(upperCount);
+        
+        int wordCount = 1;
+        for (int i = 0; i < text.length(); i++) {
+            if (text.charAt(i) == ' ') wordCount++;
+        }
+        System.out.println(wordCount);
+        
+        String reversed = "";
+        for (int i = text.length() - 1; i >= 0; i--) {
+            reversed = reversed + text.charAt(i);
+        }
+        System.out.println(reversed);
+    }
+}
+"#,
+        )],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["3", "4", "avaJ morf dlroW olleH"]);
+}
+
+#[test]
+fn cli_numeric_processing() {
+    let (result, output) = compile_and_run(
+        "cli_numeric",
+        &[(
+            "demo/CliNumeric.java",
+            r#"
+package demo;
+
+public class CliNumeric {
+    public static void main(String[] args) {
+        int[] numbers = new int[10];
+        for (int i = 0; i < 10; i++) {
+            numbers[i] = (i + 1) * (i + 1);
+        }
+        
+        int sum = 0;
+        for (int i = 0; i < numbers.length; i++) {
+            sum += numbers[i];
+        }
+        System.out.println(sum);
+        
+        int max = numbers[0];
+        for (int i = 1; i < numbers.length; i++) {
+            if (numbers[i] > max) max = numbers[i];
+        }
+        System.out.println(max);
+        
+        int min = numbers[0];
+        for (int i = 1; i < numbers.length; i++) {
+            if (numbers[i] < min) min = numbers[i];
+        }
+        System.out.println(min);
+    }
+}
+"#,
+        )],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["385", "100", "1"]);
+}
+
+#[test]
+fn cli_recursive_fibonacci() {
+    let (result, output) = compile_and_run(
+        "cli_recursive",
+        &[(
+            "demo/CliRecursive.java",
+            r#"
+package demo;
+
+public class CliRecursive {
+    static int fib(int n) {
+        if (n <= 1) return n;
+        return fib(n - 1) + fib(n - 2);
+    }
+    
+    public static void main(String[] args) {
+        System.out.println(fib(10));
+        System.out.println(fib(15));
+        
+        int factorial = 1;
+        for (int i = 1; i <= 10; i++) {
+            factorial *= i;
+        }
+        System.out.println(factorial);
+    }
+}
+"#,
+        )],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["55", "610", "3628800"]);
+}

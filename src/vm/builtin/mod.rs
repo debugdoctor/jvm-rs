@@ -17,7 +17,6 @@ pub(super) mod invoke_util;
 
 use std::collections::HashMap;
 
-use crate::vm::types::stub_return_value;
 use crate::vm::{ClassMethod, HeapValue, Reference, RuntimeClass, Value, Vm, VmError};
 
 fn is_not_handled(e: &VmError) -> bool {

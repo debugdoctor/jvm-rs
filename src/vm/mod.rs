@@ -67,6 +67,7 @@ pub struct Vm {
     class_path: Vec<PathBuf>,
     class_loader: Option<LazyClassLoader<BootstrapClassLoader>>,
     trace: bool,
+    fail_fast: bool,
     thread_id: u64,
     output: Arc<Mutex<Vec<String>>>,
     jit: Option<JitCompiler>,
@@ -99,6 +100,7 @@ impl Clone for Vm {
             class_path: self.class_path.clone(),
             class_loader: None,
             trace: self.trace,
+            fail_fast: self.fail_fast,
             thread_id: NEXT_THREAD_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             output: self.output.clone(),
             jit: None,
@@ -129,6 +131,7 @@ impl Vm {
             class_path: Vec::new(),
             class_loader: Some(classloader::create_bootstrap_loader()),
             trace: false,
+            fail_fast: false,
             thread_id: NEXT_THREAD_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             output: Arc::new(Mutex::new(Vec::new())),
             jit,
@@ -136,6 +139,14 @@ impl Vm {
         };
         vm.bootstrap();
         Ok(vm)
+    }
+
+    pub fn set_fail_fast(&mut self, enabled: bool) {
+        self.fail_fast = enabled;
+    }
+
+    pub fn get_stub_stats(&self) -> (usize, usize, usize) {
+        crate::vm::types::STUB_STATS.get_and_reset()
     }
 
     /// Enable or disable execution tracing (prints pc, opcode, stack to stderr).
@@ -967,7 +978,92 @@ impl Vm {
                     descriptor: site.descriptor.clone(),
                 }),
             InvokeDynamicKind::Unknown => Ok(Some(Value::Reference(Reference::Null))),
+            InvokeDynamicKind::BootstrapMethodHandle { .. } => {
+                self.invoke_dynamic_via_method_handle(site, args)
+            }
         }
+    }
+
+    fn invoke_dynamic_via_method_handle(
+        &mut self,
+        site: &InvokeDynamicSite,
+        args: Vec<Value>,
+    ) -> Result<Option<Value>, VmError> {
+        if let InvokeDynamicKind::BootstrapMethodHandle {
+            bootstrap_class,
+            bootstrap_name,
+            bootstrap_descriptor,
+            arguments,
+        } = &site.kind
+        {
+            self.ensure_class_loaded(bootstrap_class)?;
+            let (_resolved_class, class_method) =
+                self.resolve_method(bootstrap_class, bootstrap_name, bootstrap_descriptor)?;
+            let mut all_args = args;
+            for idx in arguments {
+                if let Some(val) = self.resolve_method_handle_arg(*idx) {
+                    all_args.push(val);
+                }
+            }
+            match class_method {
+                ClassMethod::Native => self.invoke_native(bootstrap_class, bootstrap_name, bootstrap_descriptor, &all_args),
+                ClassMethod::Bytecode(_) => {
+                    Ok(Some(Value::Reference(Reference::Null)))
+                }
+            }
+        } else {
+            Ok(Some(Value::Reference(Reference::Null)))
+        }
+    }
+
+    fn invoke_interp_dynamic_via_method_handle(
+        &mut self,
+        thread: &mut Thread,
+        site: &InvokeDynamicSite,
+        args: Vec<Value>,
+    ) -> Result<(), VmError> {
+        if let InvokeDynamicKind::BootstrapMethodHandle {
+            bootstrap_class,
+            bootstrap_name,
+            bootstrap_descriptor,
+            arguments,
+        } = &site.kind
+        {
+            self.ensure_class_loaded(bootstrap_class)?;
+            let (_resolved_class, class_method) =
+                self.resolve_method(bootstrap_class, bootstrap_name, bootstrap_descriptor)?;
+            let mut all_args = args;
+            for idx in arguments {
+                if let Some(val) = self.resolve_method_handle_arg_for_interp(*idx) {
+                    all_args.push(val);
+                }
+            }
+            match class_method {
+                ClassMethod::Native => {
+                    let result = self.invoke_native(bootstrap_class, bootstrap_name, bootstrap_descriptor, &all_args)?;
+                    if let Some(value) = result {
+                        thread.current_frame_mut().push(value)?;
+                    }
+                    Ok(())
+                }
+                ClassMethod::Bytecode(method) => {
+                    let frame = method.with_initial_locals(Vm::args_to_locals(all_args));
+                    thread.push_frame(Frame::new(frame));
+                    Ok(())
+                }
+            }
+        } else {
+            thread.current_frame_mut().push(Value::Reference(Reference::Null))?;
+            Ok(())
+        }
+    }
+
+    fn resolve_method_handle_arg(&self, _index: u16) -> Option<Value> {
+        None
+    }
+
+    fn resolve_method_handle_arg_for_interp(&self, _index: u16) -> Option<Value> {
+        None
     }
 
     pub(crate) fn invoke_jit_get_static_field_ref(
@@ -3415,11 +3511,14 @@ impl Vm {
                         )?;
                         thread.current_frame_mut().push(self.new_string(concat))?;
                     }
-                    InvokeDynamicKind::Unknown => {
+InvokeDynamicKind::Unknown => {
                         // Unknown bootstrap method — push null as placeholder.
                         thread
                             .current_frame_mut()
                             .push(Value::Reference(Reference::Null))?;
+                    }
+                    InvokeDynamicKind::BootstrapMethodHandle { .. } => {
+                        self.invoke_interp_dynamic_via_method_handle(&mut thread, &site, args)?;
                     }
                 }
             }

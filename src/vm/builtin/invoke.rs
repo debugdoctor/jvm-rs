@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::vm::types::stub_return_value;
+use crate::vm::types::stub_return_value_tracked;
 use crate::vm::{ClassMethod, HeapValue, Reference, RuntimeClass, Value, Vm, VmError};
 
 pub(super) fn invoke_io(
@@ -973,11 +973,11 @@ pub(super) fn invoke_lang(
             Ok(None)
         }
         ("java/lang/Thread", _, _) => {
-            let _ = stub_return_value(descriptor);
+            let _ = stub_return_value_tracked(class_name, method_name, descriptor);
             Ok(None)
         }
         ("java/lang/ThreadGroup", _, _) => {
-            let _ = stub_return_value(descriptor);
+            let _ = stub_return_value_tracked(class_name, method_name, descriptor);
             Ok(None)
         }
         ("java/lang/Class", "desiredAssertionStatus", "()Z") => Ok(Some(Value::Int(0))),

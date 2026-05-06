@@ -5,6 +5,118 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
+
+pub struct StubStats {
+    pub stub_return_hits: AtomicUsize,
+    pub unknown_native_hits: AtomicUsize,
+    pub dangerous_stub_hits: AtomicUsize,
+    pub last_stub_method: Mutex<Option<(String, String, String)>>,
+}
+
+unsafe impl Send for StubStats {}
+unsafe impl Sync for StubStats {}
+
+impl Default for StubStats {
+    fn default() -> Self {
+        Self {
+            stub_return_hits: AtomicUsize::new(0),
+            unknown_native_hits: AtomicUsize::new(0),
+            dangerous_stub_hits: AtomicUsize::new(0),
+            last_stub_method: Mutex::new(None),
+        }
+    }
+}
+
+impl StubStats {
+    pub fn record_stub_hit(&self, class: &str, method: &str, descriptor: &str) {
+        self.stub_return_hits.fetch_add(1, Ordering::Relaxed);
+        *self.last_stub_method.lock().unwrap() = Some((
+            class.to_string(),
+            method.to_string(),
+            descriptor.to_string(),
+        ));
+    }
+
+    pub fn record_unknown_native(&self, class: &str, method: &str, descriptor: &str) {
+        self.unknown_native_hits.fetch_add(1, Ordering::Relaxed);
+        *self.last_stub_method.lock().unwrap() = Some((
+            class.to_string(),
+            method.to_string(),
+            descriptor.to_string(),
+        ));
+    }
+
+    pub fn record_dangerous_stub(&self, class: &str, method: &str, descriptor: &str) {
+        self.dangerous_stub_hits.fetch_add(1, Ordering::Relaxed);
+        *self.last_stub_method.lock().unwrap() = Some((
+            class.to_string(),
+            method.to_string(),
+            descriptor.to_string(),
+        ));
+    }
+
+    pub fn get_and_reset(&self) -> (usize, usize, usize) {
+        (
+            self.stub_return_hits.swap(0, Ordering::Relaxed),
+            self.unknown_native_hits.swap(0, Ordering::Relaxed),
+            self.dangerous_stub_hits.swap(0, Ordering::Relaxed),
+        )
+    }
+}
+
+pub static STUB_STATS: std::sync::LazyLock<StubStats> =
+    std::sync::LazyLock::new(|| StubStats {
+        stub_return_hits: AtomicUsize::new(0),
+        unknown_native_hits: AtomicUsize::new(0),
+        dangerous_stub_hits: AtomicUsize::new(0),
+        last_stub_method: Mutex::new(None),
+    });
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnsafeClassification {
+    Real,
+    ConservativeStub,
+    DangerousStub,
+}
+
+pub fn classify_unsafe_method(method_name: &str, descriptor: &str) -> UnsafeClassification {
+    match (method_name, descriptor) {
+        ("registerNatives", _) => UnsafeClassification::Real,
+        ("getUnsafe", _) => UnsafeClassification::ConservativeStub,
+        ("arrayBaseOffset", _) => UnsafeClassification::Real,
+        ("arrayIndexScale", _) => UnsafeClassification::Real,
+        ("addressSize", _) => UnsafeClassification::Real,
+        ("isBigEndian", _) => UnsafeClassification::Real,
+        ("pageSize", _) => UnsafeClassification::Real,
+        ("objectFieldOffset", _) => UnsafeClassification::Real,
+        ("staticFieldOffset", _) => UnsafeClassification::Real,
+        ("staticFieldBase", _) => UnsafeClassification::ConservativeStub,
+        ("storeFence", _) => UnsafeClassification::Real,
+        ("loadFence", _) => UnsafeClassification::Real,
+        ("fullFence", _) => UnsafeClassification::Real,
+        ("compareAndSetInt", _)
+        | ("compareAndSetLong", _)
+        | ("compareAndSetReference", _)
+        | ("compareAndSetObject", _) => UnsafeClassification::ConservativeStub,
+        ("getReferenceVolatile", _)
+        | ("putReferenceVolatile", _)
+        | ("putIntVolatile", _)
+        | ("getIntVolatile", _) => UnsafeClassification::ConservativeStub,
+        ("getInt", _) | ("putInt", _) => UnsafeClassification::DangerousStub,
+        ("getLong", _) | ("putLong", _) => UnsafeClassification::DangerousStub,
+        ("getObject", _) | ("putObject", _) => UnsafeClassification::DangerousStub,
+        ("getBoolean", _) | ("putBoolean", _) => UnsafeClassification::DangerousStub,
+        ("getByte", _) | ("putByte", _) => UnsafeClassification::DangerousStub,
+        ("getChar", _) | ("putChar", _) => UnsafeClassification::DangerousStub,
+        ("getShort", _) | ("putShort", _) => UnsafeClassification::DangerousStub,
+        ("getFloat", _) | ("putFloat", _) => UnsafeClassification::DangerousStub,
+        ("getDouble", _) | ("putDouble", _) => UnsafeClassification::DangerousStub,
+        ("allocateInstance", _) => UnsafeClassification::DangerousStub,
+        _ => UnsafeClassification::DangerousStub,
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Value {
@@ -150,6 +262,12 @@ pub enum InvokeDynamicKind {
     StringConcat {
         recipe: Option<String>,
         constants: Vec<String>,
+    },
+    BootstrapMethodHandle {
+        bootstrap_class: String,
+        bootstrap_name: String,
+        bootstrap_descriptor: String,
+        arguments: Vec<u16>,
     },
 }
 
@@ -547,6 +665,15 @@ pub(super) fn stub_return_value(descriptor: &str) -> Option<Value> {
         b'L' | b'[' => Some(Value::Reference(Reference::Null)),
         _ => Some(Value::Int(0)),
     }
+}
+
+pub(super) fn stub_return_value_tracked(
+    class_name: &str,
+    method_name: &str,
+    descriptor: &str,
+) -> Option<Value> {
+    STUB_STATS.record_stub_hit(class_name, method_name, descriptor);
+    stub_return_value(descriptor)
 }
 
 /// Parse the leading descriptor byte for every parameter in a method descriptor.

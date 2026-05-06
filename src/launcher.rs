@@ -720,7 +720,7 @@ fn resolve_invoke_dynamic_kind(
     class_file: &ClassFile,
     bootstrap_method: &crate::classfile::BootstrapMethod,
 ) -> InvokeDynamicKind {
-    let Ok((bootstrap_class, bootstrap_name, _)) =
+    let Ok((bootstrap_class, bootstrap_name, bootstrap_descriptor)) =
         resolve_bootstrap_method(class_file, bootstrap_method.method_ref)
     else {
         return InvokeDynamicKind::Unknown;
@@ -752,7 +752,12 @@ fn resolve_invoke_dynamic_kind(
                 .collect();
             InvokeDynamicKind::StringConcat { recipe, constants }
         }
-        _ => InvokeDynamicKind::Unknown,
+        _ => InvokeDynamicKind::BootstrapMethodHandle {
+            bootstrap_class,
+            bootstrap_name,
+            bootstrap_descriptor,
+            arguments: bootstrap_method.arguments.clone(),
+        },
     }
 }
 

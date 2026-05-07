@@ -4833,9 +4833,14 @@ public class Main {
                     r#"
 package demo;
 public class Main {
+    static int andValues(int a, int b) {
+        return a & b;
+    }
     public static void main(String[] args) {
-        System.out.println(10 & 6);
-        System.out.println(15 & 7);
+        int a = args.length + 10;
+        int b = args.length + 6;
+        System.out.println(andValues(a, b));
+        System.out.println(andValues(a + 5, b + 1));
     }
 }
 "#,
@@ -4853,9 +4858,14 @@ public class Main {
                     r#"
 package demo;
 public class Main {
+    static int orValues(int a, int b) {
+        return a | b;
+    }
     public static void main(String[] args) {
-        System.out.println(10 | 6);
-        System.out.println(8 | 1);
+        int a = args.length + 10;
+        int b = args.length + 6;
+        System.out.println(orValues(a, b));
+        System.out.println(orValues(a - 2, b - 5));
     }
 }
 "#,
@@ -4873,9 +4883,14 @@ public class Main {
                     r#"
 package demo;
 public class Main {
+    static int xorValues(int a, int b) {
+        return a ^ b;
+    }
     public static void main(String[] args) {
-        System.out.println(10 ^ 6);
-        System.out.println(15 ^ 7);
+        int a = args.length + 10;
+        int b = args.length + 6;
+        System.out.println(xorValues(a, b));
+        System.out.println(xorValues(a + 5, b + 1));
     }
 }
 "#,

@@ -67,6 +67,9 @@ fn usage_text() -> &'static str {
 
 Options:
   -cp, -classpath <path>    Set the class path root.
+  -Xint                     Force interpreter-only execution.
+  -Xjit:off                 Disable JIT compilation.
+  -Xjit:threshold=<n>       Compile after <n> invocations/backedges.
   -h, --help                Show this help message.
 
 Example:
@@ -88,6 +91,9 @@ fn format_launch_error(error: LaunchError) -> String {
             format!("{}\n\n{}", error, usage_text())
         }
         LaunchError::MissingClassPathValue => {
+            format!("{}\n\n{}", error, usage_text())
+        }
+        LaunchError::InvalidJitThreshold(_) => {
             format!("{}\n\n{}", error, usage_text())
         }
         LaunchError::UnsupportedOption(option)

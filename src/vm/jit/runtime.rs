@@ -1710,13 +1710,31 @@ impl JitEntry {
     pub fn deopt_stack_count(&self) -> usize {
         self.deopt_stack_count
     }
+
+    #[cfg(test)]
+    fn from_fn_ptr(
+        fn_ptr: usize,
+        deopt_local_count: usize,
+        deopt_stack_count: usize,
+    ) -> Self {
+        Self {
+            code_ptr: fn_ptr,
+            alloc_size: 0,
+            frame_size: 0,
+            num_slots: 0,
+            deopt_local_count,
+            deopt_stack_count,
+        }
+    }
 }
 
 impl Drop for JitEntry {
     fn drop(&mut self) {
         #[cfg(unix)]
         unsafe {
-            libc::munmap(self.code_ptr as *mut libc::c_void, self.alloc_size);
+            if self.alloc_size != 0 {
+                libc::munmap(self.code_ptr as *mut libc::c_void, self.alloc_size);
+            }
         }
     }
 }
@@ -1981,5 +1999,206 @@ impl JitReturn {
 impl Default for JitContext {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+    use std::sync::OnceLock;
+
+    use crate::vm::{Reference, Value};
+
+    use super::{JitContext, JitEntry, JitReturn};
+
+    static VOID_CALL_ARGS: OnceLock<Mutex<Vec<u64>>> = OnceLock::new();
+
+    fn void_call_args() -> &'static Mutex<Vec<u64>> {
+        VOID_CALL_ARGS.get_or_init(|| Mutex::new(Vec::new()))
+    }
+
+    extern "C" fn abi_void_recorder(ctx: u64, a: u64, b: u64, c: u64, d: u64, e: u64) {
+        *void_call_args().lock().unwrap() = vec![ctx, a, b, c, d, e];
+    }
+
+    extern "C" fn abi_int_sum(_: u64, a: u64, b: u64, c: u64, d: u64, e: u64) -> u64 {
+        ((a as i32) + (b as i32) + (c as i32) + (d as i32) + (e as i32)) as u64
+    }
+
+    extern "C" fn abi_long_mix(_: u64, a: u64, b: u64, _: u64, _: u64, _: u64) -> u64 {
+        ((a as i64) - (b as i64)) as u64
+    }
+
+    extern "C" fn abi_float_mix(_: u64, a: u64, b: u64, _: u64, _: u64, _: u64) -> f32 {
+        f32::from_bits(a as u32) * 2.0 + f32::from_bits(b as u32)
+    }
+
+    extern "C" fn abi_double_mix(_: u64, a: u64, b: u64, c: u64, _: u64, _: u64) -> f64 {
+        f64::from_bits(a) + f64::from_bits(b) + c as i64 as f64
+    }
+
+    extern "C" fn abi_reference_echo(_: u64, a: u64, _: u64, _: u64, _: u64, _: u64) -> u64 {
+        a
+    }
+
+    fn install_test_entry(
+        context: &mut JitContext,
+        key: &str,
+        fn_ptr: usize,
+        deopt_local_count: usize,
+        deopt_stack_count: usize,
+    ) {
+        context.entries.insert(
+            key.to_string(),
+            JitEntry::from_fn_ptr(fn_ptr, deopt_local_count, deopt_stack_count),
+        );
+    }
+
+    #[test]
+    fn execute_typed_passes_context_and_void_args() {
+        let mut context = JitContext::new();
+        install_test_entry(
+            &mut context,
+            "jit/Test.void()V",
+            abi_void_recorder as *const () as usize,
+            0,
+            0,
+        );
+
+        *void_call_args().lock().unwrap() = Vec::new();
+        let result = context
+            .execute_typed(
+                0,
+                "jit/Test.void()V",
+                &[
+                    Value::Int(7),
+                    Value::Long(11),
+                    Value::Float(3.5),
+                    Value::Double(9.25),
+                    Value::Reference(Reference::Heap(4)),
+                ],
+                JitReturn::Void,
+            )
+            .expect("void call should return sentinel value");
+
+        assert_eq!(result, Value::Int(0));
+        let args = void_call_args().lock().unwrap().clone();
+        assert_ne!(args[0], 0);
+        assert_eq!(args[1], 7);
+        assert_eq!(args[2], 11);
+        assert_eq!(args[3], 3.5f32.to_bits() as u64);
+        assert_eq!(args[4], 9.25f64.to_bits());
+        assert_eq!(args[5], 5);
+    }
+
+    #[test]
+    fn execute_typed_decodes_primitive_returns_and_mixed_args() {
+        let mut context = JitContext::new();
+        install_test_entry(
+            &mut context,
+            "jit/Test.int()I",
+            abi_int_sum as *const () as usize,
+            0,
+            0,
+        );
+        install_test_entry(
+            &mut context,
+            "jit/Test.long()J",
+            abi_long_mix as *const () as usize,
+            0,
+            0,
+        );
+        install_test_entry(
+            &mut context,
+            "jit/Test.float()F",
+            abi_float_mix as *const () as usize,
+            0,
+            0,
+        );
+        install_test_entry(
+            &mut context,
+            "jit/Test.double()D",
+            abi_double_mix as *const () as usize,
+            0,
+            0,
+        );
+
+        let int_result = context
+            .execute_typed(
+                0,
+                "jit/Test.int()I",
+                &[
+                    Value::Int(1),
+                    Value::Int(2),
+                    Value::Int(3),
+                    Value::Int(4),
+                    Value::Int(5),
+                ],
+                JitReturn::Int,
+            )
+            .expect("int result should exist");
+        assert_eq!(int_result, Value::Int(15));
+
+        let long_result = context
+            .execute_typed(
+                0,
+                "jit/Test.long()J",
+                &[Value::Long(90), Value::Long(17)],
+                JitReturn::Long,
+            )
+            .expect("long result should exist");
+        assert_eq!(long_result, Value::Long(73));
+
+        let float_result = context
+            .execute_typed(
+                0,
+                "jit/Test.float()F",
+                &[Value::Float(1.5), Value::Float(2.25)],
+                JitReturn::Float,
+            )
+            .expect("float result should exist");
+        assert_eq!(float_result, Value::Float(5.25));
+
+        let double_result = context
+            .execute_typed(
+                0,
+                "jit/Test.double()D",
+                &[Value::Double(1.25), Value::Double(2.5), Value::Long(4)],
+                JitReturn::Double,
+            )
+            .expect("double result should exist");
+        assert_eq!(double_result, Value::Double(7.75));
+    }
+
+    #[test]
+    fn execute_typed_round_trips_reference_returns() {
+        let mut context = JitContext::new();
+        install_test_entry(
+            &mut context,
+            "jit/Test.ref()Ljava/lang/Object;",
+            abi_reference_echo as *const () as usize,
+            0,
+            0,
+        );
+
+        let result = context
+            .execute_typed(
+                0,
+                "jit/Test.ref()Ljava/lang/Object;",
+                &[Value::Reference(Reference::Heap(9))],
+                JitReturn::Reference,
+            )
+            .expect("reference result should exist");
+        assert_eq!(result, Value::Reference(Reference::Heap(9)));
+
+        let null_result = context
+            .execute_typed(
+                0,
+                "jit/Test.ref()Ljava/lang/Object;",
+                &[Value::Reference(Reference::Null)],
+                JitReturn::Reference,
+            )
+            .expect("null reference result should exist");
+        assert_eq!(null_result, Value::Reference(Reference::Null));
     }
 }

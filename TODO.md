@@ -65,11 +65,35 @@ HotSpot is the comparison point: it has a complete JDK surface, mature GC implem
 
 ### P0: Correctness And Support Matrix
 
-- [ ] Publish a JIT opcode matrix: native-lowered, helper-backed, deopt fallback, or interpreter-only.
-- [ ] Audit suspicious opcode lowering mappings and add regression tests, especially int bitwise `iand`/`ior`/`ixor`.
+- [x] Publish a JIT opcode matrix: native-lowered, helper-backed, deopt fallback, or interpreter-only.
+- [x] Audit suspicious opcode lowering mappings and add regression tests, especially int bitwise `iand`/`ior`/`ixor`.
+
+Current support matrix, derived from `src/vm/jit/compiler.rs` as of 2026-05-07:
+
+| Status | Opcodes | Notes |
+| --- | --- | --- |
+| Native-lowered | `nop`, `aconst_null`, `iconst_*`, `lconst_*`, `fconst_*`, `dconst_*`, `bipush`, `sipush`, `ldc*` | `ldc*` currently supports primitive and pre-resolved reference constants handled by `load_constant`. |
+| Native-lowered | `iload*`, `lload*`, `fload*`, `dload*`, `aload*`, `istore*`, `lstore*`, `fstore*`, `dstore*`, `astore*`, `iinc`, `wide` variants for those opcodes | `wide ret` is still interpreter-only. |
+| Native-lowered | `pop`, `pop2`, `dup*`, `swap` | Stack shuffles are implemented directly in SSA form. |
+| Native-lowered | `iadd`, `ladd`, `fadd`, `dadd`, `isub`, `lsub`, `fsub`, `dsub`, `imul`, `lmul`, `fmul`, `dmul`, `idiv`, `ldiv`, `fdiv`, `ddiv`, `irem`, `lrem`, `frem`, `drem`, `ineg`, `lneg`, `fneg`, `dneg` | Integer divide/remainder emit explicit `ArithmeticException` paths inside compiled code. |
+| Native-lowered | `ishl`, `lshl`, `ishr`, `lshr`, `iushr`, `lushr`, `iand`, `land`, `ior`, `lor`, `ixor`, `lxor` | The `iand`/`ior`/`ixor` opcode mapping was corrected and regression-tested. |
+| Native-lowered | `i2l`, `i2f`, `i2d`, `l2i`, `l2f`, `l2d`, `f2i`, `f2l`, `f2d`, `d2i`, `d2l`, `d2f`, `i2b`, `i2c`, `i2s`, `lcmp`, `fcmpl`, `fcmpg`, `dcmpl`, `dcmpg` | Implemented with Cranelift integer/float conversion and compare ops. |
+| Native-lowered | `ifeq`, `ifne`, `iflt`, `ifge`, `ifgt`, `ifle`, `if_icmpeq`, `if_icmpne`, `if_icmplt`, `if_icmpge`, `if_icmpgt`, `if_icmple`, `if_acmpeq`, `if_acmpne`, `goto`, `goto_w`, `ifnull`, `ifnonnull`, `tableswitch`, `lookupswitch` | Lowered to Cranelift branches/switch dispatch with deopt state snapshots at each bytecode PC. |
+| Native-lowered | `ireturn`, `lreturn`, `freturn`, `dreturn`, `areturn`, `return` | Direct compiled returns. |
+| Helper-backed | `iaload`, `laload`, `faload`, `daload`, `aaload`, `baload`, `caload`, `saload`, `iastore`, `lastore`, `fastore`, `dastore`, `aastore`, `bastore`, `castore`, `sastore`, `arraylength` | Bounds checks, null checks, element coercion, and pending-exception plumbing live in runtime helpers. |
+| Helper-backed | `getstatic`, `putstatic`, `getfield`, `putfield` | Field resolution and heap access are routed through runtime helper ABI. |
+| Helper-backed | `invokevirtual`, `invokespecial`, `invokestatic`, `invokeinterface`, `invokedynamic`, `invokenative` | Calls use helper-mediated resolution and marshaling; helper ABI supports inline and stack-buffer argument passing. |
+| Helper-backed | `new`, `newarray`, `anewarray`, `multianewarray`, `athrow`, `checkcast`, `monitorenter`, `monitorexit` | Allocation, throws, type checks, and monitor operations currently stay helper-mediated. |
+| Deopt fallback at hot sites | `getfield`, `putfield`, `invokevirtual`, `invokespecial`, `invokeinterface` | If a site is marked with `NullCheck`, compiled code forces deopt before re-entering the interpreter path for that bytecode. |
+| Deopt fallback at hot sites | `checkcast` | A repeated `ClassCastException` marks the site for forced deopt fallback. |
+| Semantically incomplete native lowering | `instanceof` | Current JIT lowering only distinguishes null vs non-null and does not yet consult the target type; treat this as a known correctness gap, not full support. |
+| Interpreter-only | `jsr`, `ret`, `jsr_w`, `wide ret` | Rejected until return-address SSA support exists. |
+| Interpreter-only | `getstatic java/lang/System.out` | Kept out of JIT until `println` side effects are made JIT-safe. |
+| Interpreter-only | `athrow`/synthetic `0xff` in methods with exception tables | Compiled-frame unwinding is not implemented yet, so these methods stay on the interpreter. |
+| Interpreter-only | Any unknown or structurally invalid opcode stream | `compile_bytecode` rejects truncated or unsupported bytecode before codegen. |
 - [ ] Add JIT helper ABI property tests for many args, wide values, floats/doubles, references, void returns, primitive returns, and reference returns.
 - [ ] Add JIT cache invalidation tests for site fallback, interpreter-only marking, OSR keys, and normal method keys.
-- [ ] Make deopt snapshot invariants explicit and tested: pc, locals, operand stack, reference kinds, and pending exception object.
+- [x] Make deopt snapshot invariants explicit and tested: pc, locals, operand stack, reference kinds, and pending exception object.
 
 ### P1: Deoptimization And OSR
 

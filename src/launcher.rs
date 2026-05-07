@@ -18,6 +18,8 @@ pub struct LaunchOptions {
     pub main_class: String,
     pub args: Vec<String>,
     pub trace: bool,
+    pub jit_enabled: bool,
+    pub jit_threshold: Option<u32>,
 }
 
 impl LaunchOptions {
@@ -31,6 +33,8 @@ impl LaunchOptions {
             main_class: main_class.into(),
             args,
             trace: false,
+            jit_enabled: true,
+            jit_threshold: None,
         }
     }
 
@@ -44,6 +48,8 @@ impl LaunchOptions {
             main_class: main_class.into(),
             args,
             trace: false,
+            jit_enabled: true,
+            jit_threshold: None,
         }
     }
 }
@@ -52,6 +58,7 @@ impl LaunchOptions {
 pub enum LaunchError {
     MissingMainClassArgument,
     MissingClassPathValue,
+    InvalidJitThreshold(String),
     UnsupportedOption(String),
     MainArgumentsNotSupported {
         count: usize,
@@ -93,6 +100,9 @@ impl fmt::Display for LaunchError {
         match self {
             Self::MissingMainClassArgument => write!(f, "missing main class name"),
             Self::MissingClassPathValue => write!(f, "missing value for -cp/-classpath"),
+            Self::InvalidJitThreshold(value) => {
+                write!(f, "invalid value for -Xjit:threshold: {value}")
+            }
             Self::UnsupportedOption(option) => write!(f, "unsupported option: {option}"),
             Self::MainArgumentsNotSupported { count } => {
                 write!(f, "main arguments are not supported yet (received {count})")
@@ -138,6 +148,8 @@ pub fn parse_launch_options(args: &[String]) -> Result<LaunchOptions, LaunchErro
     let mut main_class = None;
     let mut program_args = Vec::new();
     let mut trace = false;
+    let mut jit_enabled = true;
+    let mut jit_threshold = None;
 
     let mut index = 0;
     while index < args.len() {
@@ -148,8 +160,21 @@ pub fn parse_launch_options(args: &[String]) -> Result<LaunchOptions, LaunchErro
                 let value = args.get(index).ok_or(LaunchError::MissingClassPathValue)?;
                 class_path = value.split(':').map(PathBuf::from).collect();
             }
+            "-Xint" => {
+                jit_enabled = false;
+            }
             "-Xtrace" => {
                 trace = true;
+            }
+            "-Xjit:off" => {
+                jit_enabled = false;
+            }
+            option if option.starts_with("-Xjit:threshold=") => {
+                let value = option.trim_start_matches("-Xjit:threshold=");
+                let threshold = value
+                    .parse::<u32>()
+                    .map_err(|_| LaunchError::InvalidJitThreshold(value.to_string()))?;
+                jit_threshold = Some(threshold);
             }
             "-h" | "--help" | "help" => {
                 return Err(LaunchError::UnsupportedOption(arg.clone()));
@@ -170,6 +195,8 @@ pub fn parse_launch_options(args: &[String]) -> Result<LaunchOptions, LaunchErro
 
     let mut options = LaunchOptions::with_class_path(class_path, main_class, program_args);
     options.trace = trace;
+    options.jit_enabled = jit_enabled;
+    options.jit_threshold = jit_threshold;
     Ok(options)
 }
 
@@ -181,10 +208,19 @@ pub fn launch(options: &LaunchOptions) -> Result<ExecutionResult, LaunchError> {
         }
     })?;
     let mut vm = Vm::new().map_err(|e| LaunchError::VmInitFailed(e))?;
-    vm.set_class_path(options.class_path.clone());
-    vm.set_trace(options.trace);
+    configure_vm_for_launch(&mut vm, options);
     let method = load_main_method(&source, &options.main_class, &options.args, &mut vm)?;
     vm.execute(method).map_err(LaunchError::from)
+}
+
+fn configure_vm_for_launch(vm: &mut Vm, options: &LaunchOptions) {
+    vm.set_class_path(options.class_path.clone());
+    vm.set_trace(options.trace);
+    if !options.jit_enabled {
+        vm.set_jit_thresholds(u32::MAX, u32::MAX);
+    } else if let Some(threshold) = options.jit_threshold {
+        vm.set_jit_thresholds(threshold, threshold);
+    }
 }
 
 /// Build the relative `.class` file path for a fully-qualified class name.
@@ -936,7 +972,7 @@ mod tests {
     use crate::vm::{ExecutionResult, Value, Vm};
 
     use super::{
-        LaunchError, LaunchOptions, launch, load_main_method, main_class_path,
+        LaunchError, LaunchOptions, configure_vm_for_launch, launch, load_main_method, main_class_path,
         parse_launch_options, resolve_class_path,
     };
 
@@ -952,6 +988,49 @@ mod tests {
         assert_eq!(options.class_path, vec![PathBuf::from("examples")]);
         assert_eq!(options.main_class, "demo.Main");
         assert!(options.args.is_empty());
+        assert!(options.jit_enabled);
+        assert_eq!(options.jit_threshold, None);
+    }
+
+    #[test]
+    fn parses_jit_launcher_options() {
+        let args = vec![
+            "-cp".to_string(),
+            "examples".to_string(),
+            "-Xint".to_string(),
+            "-Xjit:threshold=7".to_string(),
+            "demo.Main".to_string(),
+        ];
+
+        let options = parse_launch_options(&args).unwrap();
+        assert_eq!(options.class_path, vec![PathBuf::from("examples")]);
+        assert_eq!(options.main_class, "demo.Main");
+        assert!(!options.jit_enabled);
+        assert_eq!(options.jit_threshold, Some(7));
+    }
+
+    #[test]
+    fn parses_jit_off_launcher_option() {
+        let args = vec![
+            "-Xjit:off".to_string(),
+            "demo.Main".to_string(),
+        ];
+
+        let options = parse_launch_options(&args).unwrap();
+        assert_eq!(options.main_class, "demo.Main");
+        assert!(!options.jit_enabled);
+        assert_eq!(options.jit_threshold, None);
+    }
+
+    #[test]
+    fn rejects_invalid_jit_threshold() {
+        let args = vec![
+            "-Xjit:threshold=abc".to_string(),
+            "demo.Main".to_string(),
+        ];
+
+        let error = parse_launch_options(&args).unwrap_err();
+        assert!(matches!(error, LaunchError::InvalidJitThreshold(value) if value == "abc"));
     }
 
     #[test]
@@ -1075,6 +1154,124 @@ public class Main {
         let options = LaunchOptions::new(&jar_path, "demo.Main", vec![]);
         let result = launch(&options).unwrap();
         assert_eq!(result, ExecutionResult::Void);
+    }
+
+    #[test]
+    fn jit_off_disables_compilation_even_with_low_threshold() {
+        let root = temp_dir("jit_off_disables_compilation_even_with_low_threshold");
+        let source_dir = root.join("demo");
+        fs::create_dir_all(&source_dir).unwrap();
+        let source_file = source_dir.join("HotLoop.java");
+        fs::write(
+            &source_file,
+            r#"package demo;
+
+public class HotLoop {
+    static int helper(int x) {
+        return x + 1;
+    }
+
+    public static void main(String[] args) {
+        int sum = 0;
+        for (int i = 0; i < 50; i++) {
+            sum += helper(i);
+        }
+        System.out.println(sum);
+    }
+}
+"#,
+        )
+        .unwrap();
+
+        let output = Command::new("javac")
+            .arg("--release")
+            .arg("8")
+            .arg("-d")
+            .arg(&root)
+            .arg(&source_file)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "javac failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let source = resolve_class_path(&[root.clone()], "demo.HotLoop").unwrap();
+        let mut options = LaunchOptions::new(&root, "demo.HotLoop", vec![]);
+        options.jit_threshold = Some(1);
+        let mut vm = Vm::new().unwrap();
+        configure_vm_for_launch(&mut vm, &options);
+        let method = load_main_method(&source, "demo.HotLoop", &[], &mut vm).unwrap();
+        let result = vm.execute(method).unwrap();
+        assert_eq!(result, ExecutionResult::Void);
+        assert!(
+            vm.jit_executions() > 0,
+            "expected JIT execution with threshold=1"
+        );
+
+        let mut options = LaunchOptions::new(&root, "demo.HotLoop", vec![]);
+        options.jit_enabled = false;
+        options.jit_threshold = Some(1);
+        let mut vm = Vm::new().unwrap();
+        configure_vm_for_launch(&mut vm, &options);
+        let method = load_main_method(&source, "demo.HotLoop", &[], &mut vm).unwrap();
+        let result = vm.execute(method).unwrap();
+        assert_eq!(result, ExecutionResult::Void);
+        assert_eq!(vm.jit_executions(), 0);
+    }
+
+    #[test]
+    fn xint_disables_compilation_even_with_low_threshold() {
+        let root = temp_dir("xint_disables_compilation_even_with_low_threshold");
+        let source_dir = root.join("demo");
+        fs::create_dir_all(&source_dir).unwrap();
+        let source_file = source_dir.join("HotLoop.java");
+        fs::write(
+            &source_file,
+            r#"package demo;
+
+public class HotLoop {
+    static int helper(int x) {
+        return x + 1;
+    }
+
+    public static void main(String[] args) {
+        int sum = 0;
+        for (int i = 0; i < 50; i++) {
+            sum += helper(i);
+        }
+        System.out.println(sum);
+    }
+}
+"#,
+        )
+        .unwrap();
+
+        let output = Command::new("javac")
+            .arg("--release")
+            .arg("8")
+            .arg("-d")
+            .arg(&root)
+            .arg(&source_file)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "javac failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let source = resolve_class_path(&[root.clone()], "demo.HotLoop").unwrap();
+        let mut options = LaunchOptions::new(&root, "demo.HotLoop", vec![]);
+        options.jit_enabled = false;
+        options.jit_threshold = Some(1);
+        let mut vm = Vm::new().unwrap();
+        configure_vm_for_launch(&mut vm, &options);
+        let method = load_main_method(&source, "demo.HotLoop", &[], &mut vm).unwrap();
+        let result = vm.execute(method).unwrap();
+        assert_eq!(result, ExecutionResult::Void);
+        assert_eq!(vm.jit_executions(), 0);
     }
 
     #[test]

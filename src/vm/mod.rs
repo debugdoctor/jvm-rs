@@ -4226,10 +4226,17 @@ mod tests {
     use crate::vm::jit::runtime::DeoptReason;
 
     use super::{
-        DeoptLocalKind, DeoptSnapshot, ExecutionResult, FieldRef, HeapValue,
+        DeoptLocalKind, DeoptSnapshot, ExceptionHandler, ExecutionResult, FieldRef, HeapValue,
         InterpreterFallbackResult, Method, MethodRef, NEXT_THREAD_ID, Reference, RuntimeClass,
         Value, Vm, VmError,
     };
+
+    fn raw_deopt_ref(reference: Reference) -> u64 {
+        match reference {
+            Reference::Null => 0,
+            Reference::Heap(index) => index as u64 + 1,
+        }
+    }
 
     #[test]
     fn executes_basic_integer_bytecode() {
@@ -5215,6 +5222,152 @@ mod tests {
         match resumed {
             Some(InterpreterFallbackResult::Returned(ExecutionResult::Value(Value::Int(value)))) => {
                 assert_eq!(value, 3);
+            }
+            _ => panic!("unexpected deopt resume result"),
+        }
+    }
+
+    #[test]
+    fn resumes_interpreter_from_deopt_restores_pc_and_mixed_locals() {
+        let mut vm = Vm::new().expect("failed to create VM");
+        let object_ref = vm.heap.lock().unwrap().allocate(HeapValue::Object {
+            class_name: "demo/Holder".to_string(),
+            fields: HashMap::new(),
+        });
+        let method = Method::new(
+            [
+                0x2a, // aload_0
+                0xc6, 0x00, 0x03, // ifnull +3
+                0x1b, // iload_1
+                0xac, // ireturn
+                0x02, // iconst_m1
+                0xac, // ireturn
+            ],
+            2,
+            1,
+        )
+        .with_metadata("jit/Test", "resumeLocals", "()I", 0);
+        let snapshot = DeoptSnapshot {
+            reason: Some(DeoptReason::HelperUnsupported),
+            pc: 0,
+            locals: vec![raw_deopt_ref(object_ref), 42],
+            stack: Vec::new(),
+        };
+
+        let resumed = vm.resume_interpreter_from_deopt(
+            method,
+            &[DeoptLocalKind::Reference, DeoptLocalKind::Int],
+            &HashMap::new(),
+            &snapshot,
+            None,
+        );
+
+        match resumed {
+            Some(InterpreterFallbackResult::Returned(ExecutionResult::Value(Value::Int(value)))) => {
+                assert_eq!(value, 42);
+            }
+            _ => panic!("unexpected deopt resume result"),
+        }
+    }
+
+    #[test]
+    fn resumes_interpreter_from_deopt_restores_reference_operand_stack() {
+        let mut vm = Vm::new().expect("failed to create VM");
+        let object_ref = vm.heap.lock().unwrap().allocate(HeapValue::Object {
+            class_name: "demo/Holder".to_string(),
+            fields: HashMap::new(),
+        });
+        let method = Method::new(
+            [
+                0x2a, // aload_0
+                0xc7, 0x00, 0x05, // ifnonnull +5
+                0x02, // iconst_m1
+                0xac, // ireturn
+                0x10, 0x07, // bipush 7
+                0xac, // ireturn
+            ],
+            1,
+            1,
+        )
+        .with_metadata("jit/Test", "resumeStackRef", "()I", 0);
+        let mut stack_kinds_by_pc = HashMap::new();
+        stack_kinds_by_pc.insert(1, vec![DeoptLocalKind::Reference]);
+        let snapshot = DeoptSnapshot {
+            reason: Some(DeoptReason::NullCheck),
+            pc: 1,
+            locals: vec![raw_deopt_ref(object_ref)],
+            stack: vec![raw_deopt_ref(object_ref)],
+        };
+
+        let resumed = vm.resume_interpreter_from_deopt(
+            method,
+            &[DeoptLocalKind::Reference],
+            &stack_kinds_by_pc,
+            &snapshot,
+            None,
+        );
+
+        match resumed {
+            Some(InterpreterFallbackResult::Returned(ExecutionResult::Value(Value::Int(value)))) => {
+                assert_eq!(value, 7);
+            }
+            _ => panic!("unexpected deopt resume result"),
+        }
+    }
+
+    #[test]
+    fn resumes_interpreter_from_deopt_preserves_pending_exception_object() {
+        let mut vm = Vm::new().expect("failed to create VM");
+        let exception_ref = vm.heap.lock().unwrap().allocate(HeapValue::Object {
+            class_name: "java/lang/RuntimeException".to_string(),
+            fields: HashMap::new(),
+        });
+        let method = Method::new(
+            [
+                0x00, // nop
+                0x00, // nop
+                0x00, // nop
+                0x4d, // astore_2
+                0x2a, // aload_0
+                0x2c, // aload_2
+                0xa6, 0x00, 0x05, // if_acmpne +5
+                0x1b, // iload_1
+                0xac, // ireturn
+                0x02, // iconst_m1
+                0xac, // ireturn
+            ],
+            3,
+            2,
+        )
+        .with_metadata("jit/Test", "resumeException", "()I", 0)
+        .with_exception_handlers(vec![ExceptionHandler {
+            start_pc: 0,
+            end_pc: 3,
+            handler_pc: 3,
+            catch_class: Some("java/lang/RuntimeException".to_string()),
+        }]);
+        let snapshot = DeoptSnapshot {
+            reason: Some(DeoptReason::Exception),
+            pc: 1,
+            locals: vec![raw_deopt_ref(exception_ref), 99, 0],
+            stack: Vec::new(),
+        };
+
+        let resumed = vm.resume_interpreter_from_deopt(
+            method,
+            &[
+                DeoptLocalKind::Reference,
+                DeoptLocalKind::Int,
+                DeoptLocalKind::Top,
+            ],
+            &HashMap::new(),
+            &snapshot,
+            Some(exception_ref),
+        );
+
+        match resumed {
+            Some(InterpreterFallbackResult::Returned(ExecutionResult::Value(Value::Int(value)))) => {
+                assert_eq!(value, 99);
             }
             _ => panic!("unexpected deopt resume result"),
         }

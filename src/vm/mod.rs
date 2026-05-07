@@ -1111,7 +1111,7 @@ impl Vm {
             }
         }
 
-        let mut fields = HashMap::new();
+        let mut fields: HashMap<String, Value> = HashMap::new();
         for (name, descriptor) in all_instance_fields {
             fields.insert(name, default_value_for_descriptor(&descriptor));
         }
@@ -1743,7 +1743,26 @@ impl Vm {
         field_name: &str,
         value: Value,
     ) -> Result<(), VmError> {
+        let object_slot = match reference {
+            Reference::Heap(i) => i,
+            Reference::Null => return Err(VmError::NullReference),
+        };
+
+        let target_slot_for_barrier = if let Value::Reference(target_ref) = &value {
+            if let Reference::Heap(slot) = target_ref {
+                Some(*slot)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         let mut heap = self.heap.lock().unwrap();
+        if let Some(target_slot) = target_slot_for_barrier {
+            heap.write_barrier(object_slot, target_slot);
+        }
+
         match heap.get_mut(reference)? {
             HeapValue::Object { fields, .. } => {
                 fields.insert(field_name.to_string(), value);
@@ -1832,18 +1851,24 @@ impl Vm {
                     HeapValue::String(s) => s.clone(),
                     HeapValue::StringBuilder(s) => s.clone(),
                     HeapValue::Object { class_name, fields } => match class_name.as_str() {
-                        "java/lang/Integer" => match fields.get("value") {
-                            Some(Value::Int(i)) => i.to_string(),
-                            _ => "0".to_string(),
-                        },
-                        "java/lang/Long" => match fields.get("value") {
-                            Some(Value::Long(i)) => i.to_string(),
-                            _ => "0".to_string(),
-                        },
-                        "java/lang/Boolean" => match fields.get("value") {
-                            Some(Value::Int(i)) if *i != 0 => "true".to_string(),
-                            _ => "false".to_string(),
-                        },
+                        "java/lang/Integer" => {
+                            match fields.get("value") {
+                                Some(Value::Int(i)) => i.to_string(),
+                                _ => "0".to_string(),
+                            }
+                        }
+                        "java/lang/Long" => {
+                            match fields.get("value") {
+                                Some(Value::Long(i)) => i.to_string(),
+                                _ => "0".to_string(),
+                            }
+                        }
+                        "java/lang/Boolean" => {
+                            match fields.get("value") {
+                                Some(Value::Int(i)) if *i != 0 => "true".to_string(),
+                                _ => "false".to_string(),
+                            }
+                        }
                         other => format!("{other}@{reference:?}"),
                     },
                     other => format!("{}@{reference:?}", other.kind_name()),
@@ -3596,9 +3621,9 @@ InvokeDynamicKind::Unknown => {
                         None => break,
                     }
                 }
-                let mut fields = HashMap::new();
-                for (name, descriptor) in all_instance_fields {
-                    fields.insert(name, default_value_for_descriptor(&descriptor));
+                let mut fields: HashMap<String, Value> = HashMap::new();
+                for (name, descriptor) in &all_instance_fields {
+                    fields.insert(name.clone(), default_value_for_descriptor(descriptor));
                 }
                 let reference = self
                     .heap
@@ -3851,21 +3876,12 @@ InvokeDynamicKind::Unknown => {
         let class_name = format!("__lambda_proxy_{}", site.name);
         self.ensure_lambda_proxy_class(&class_name, &site.descriptor)?;
 
-        let mut fields = HashMap::new();
-        fields.insert(
-            "__target_class".to_string(),
-            Value::Reference(self.heap.lock().unwrap().allocate_string(target_class.to_string())),
-        );
-        fields.insert(
-            "__target_method".to_string(),
-            Value::Reference(self.heap.lock().unwrap().allocate_string(target_method.to_string())),
-        );
-        fields.insert(
-            "__target_desc".to_string(),
-            Value::Reference(self.heap.lock().unwrap().allocate_string(target_descriptor.to_string())),
-        );
-        for (i, val) in captures.into_iter().enumerate() {
-            fields.insert(format!("__capture_{i}"), val);
+        let mut fields: HashMap<String, Value> = HashMap::new();
+        fields.insert("__target_class".to_string(), Value::Reference(self.heap.lock().unwrap().allocate_string(target_class.to_string())));
+        fields.insert("__target_method".to_string(), Value::Reference(self.heap.lock().unwrap().allocate_string(target_method.to_string())));
+        fields.insert("__target_desc".to_string(), Value::Reference(self.heap.lock().unwrap().allocate_string(target_descriptor.to_string())));
+        for (i, cap) in captures.iter().enumerate() {
+            fields.insert(format!("__capture_{}", i), *cap);
         }
 
         Ok(self
@@ -4148,6 +4164,7 @@ InvokeDynamicKind::Unknown => {
         args: Vec<Value>,
     ) -> Result<(), VmError> {
         let (target_class, target_method, target_desc, captures) = {
+            let class_name = self.get_object_class(receiver)?;
             let fields = match self.heap.lock().unwrap().get(receiver)? {
                 HeapValue::Object { fields, .. } => fields.clone(),
                 _ => return Err(VmError::NullReference),
@@ -4166,16 +4183,19 @@ InvokeDynamicKind::Unknown => {
 
             let mut captures = Vec::new();
             let mut i = 0;
-            while let Some(val) = fields.get(&format!("__capture_{i}")) {
-                captures.push(*val);
+            while let Some(Value::Reference(r)) = fields.get(&format!("__capture_{i}")) {
+                captures.push(*r);
                 i += 1;
             }
 
             (tc, tm, td, captures)
         };
 
-        let mut all_args = captures;
-        all_args.extend(args);
+            let mut all_args: Vec<Value> = captures
+                .into_iter()
+                .map(Value::Reference)
+                .collect();
+            all_args.extend(args);
 
         self.ensure_class_loaded(&target_class)?;
 
@@ -5186,6 +5206,175 @@ mod tests {
         // But a manual request still works.
         vm.request_gc();
         assert_eq!(vm.gc_stats().collections, 1);
+    }
+
+    #[test]
+    fn gc_keeps_rooted_reference_alive() {
+        let mut vm = Vm::new().expect("failed to create VM");
+        vm.set_gc_threshold(1);
+
+        let ref_value = vm.new_string("kept".to_string());
+        let string_ref = match ref_value {
+            Value::Reference(r) => r,
+            _ => unreachable!(),
+        };
+
+        vm.register_class(RuntimeClass {
+            name: "test/Root".to_string(),
+            super_class: Some("java/lang/Object".to_string()),
+            methods: HashMap::new(),
+            static_fields: HashMap::from([("held".to_string(), Value::Reference(string_ref))]),
+            instance_fields: vec![],
+            interfaces: vec![],
+        });
+
+        vm.request_gc();
+
+        let stats = vm.gc_stats();
+        assert!(stats.pause_time_ns > 0, "GC should have measured pause time");
+        assert!(stats.total_heap_bytes > 0, "heap should have allocated bytes");
+        assert_eq!(stats.last_collection_freed, 0, "rooted string should not be freed");
+    }
+
+    #[test]
+    fn gc_frees_unrooted_reference() {
+        let mut vm = Vm::new().expect("failed to create VM");
+        vm.set_gc_threshold(1);
+
+        // Allocate without rooting.
+        let _unrooted = vm.new_string("unrooted".to_string());
+        let stats_before = vm.gc_stats();
+        vm.request_gc();
+
+        let stats = vm.gc_stats();
+        assert!(stats.freed > stats_before.freed, "unrooted object should be freed");
+        assert!(stats.freed_bytes > 0, "bytes should be freed");
+    }
+
+    #[test]
+    fn gc_tracks_pause_time_and_freed_bytes() {
+        let mut vm = Vm::new().expect("failed to create VM");
+        vm.set_gc_threshold(1);
+
+        for _ in 0..10 {
+            let _s = vm.new_string("x".to_string());
+        }
+        vm.request_gc();
+
+        let stats = vm.gc_stats();
+        assert!(stats.pause_time_ns > 0, "pause time should be tracked");
+        assert!(stats.freed_bytes > 0, "freed bytes should be tracked");
+        assert!(stats.total_heap_bytes > 0, "heap bytes should be tracked");
+        assert!(stats.collections >= 1, "at least one collection should have run");
+    }
+
+    #[test]
+    fn gc_tracks_allocation_rate_via_allocs_since_gc() {
+        let mut vm = Vm::new().expect("failed to create VM");
+        vm.set_gc_threshold(100);
+
+        let initial_stats = vm.gc_stats();
+        for i in 0..50 {
+            let _s = vm.new_string(format!("str{i}"));
+        }
+
+        let stats = vm.gc_stats();
+        assert_eq!(
+            stats.total_allocations - initial_stats.total_allocations,
+            50,
+            "should track all allocations"
+        );
+    }
+
+    #[test]
+    fn gc_visible_during_jit_execution() {
+        let mut vm = Vm::new().expect("failed to create VM");
+        vm.set_gc_threshold(1);
+        vm.set_jit_thresholds(1, 1);
+
+        let string_ref = vm.new_string("jit_rooted".to_string());
+        vm.register_class(RuntimeClass {
+            name: "demo/JitGC".to_string(),
+            super_class: Some("java/lang/Object".to_string()),
+            methods: HashMap::new(),
+            static_fields: HashMap::from([("str".to_string(), string_ref)]),
+            instance_fields: vec![],
+            interfaces: vec![],
+        });
+
+        let method = Method::new(
+            [
+                0xb2, 0x00, 0x01, // getstatic #1 <Field demo/JitGC.str Ljava/lang/String;>
+                0xb0, // areturn
+            ],
+            0,
+            1,
+        )
+        .with_metadata("demo/JitGC", "getStatic", "()Ljava/lang/String;", 0x0008)
+        .with_field_refs(vec![
+            None,
+            Some(FieldRef {
+                class_name: "demo/JitGC".to_string(),
+                field_name: "str".to_string(),
+                descriptor: "Ljava/lang/String;".to_string(),
+            }),
+        ]);
+
+        let stats_before = vm.gc_stats();
+        let result = vm.execute(method.clone());
+        assert!(result.is_ok(), "JIT method should execute: {:?}", result.err());
+
+        vm.request_gc();
+        let stats = vm.gc_stats();
+        assert!(
+            stats.collections >= stats_before.collections,
+            "GC should have run during or after JIT execution"
+        );
+    }
+
+    #[test]
+    fn tlab_bump_allocation_tracked_in_stats() {
+        let mut vm = Vm::new().expect("failed to create VM");
+        vm.set_gc_threshold(1024);
+
+        // Allocate many small objects to fill TLAB and trigger refills
+        for i in 0..300 {
+            let _s = vm.new_string(format!("string_{}", i));
+        }
+
+        let stats = vm.gc_stats();
+        assert!(
+            stats.tlab_allocations > 0 || stats.tlab_refills > 0,
+            "TLAB stats should be tracked: tlab_allocations={}, tlab_refills={}",
+            stats.tlab_allocations, stats.tlab_refills
+        );
+    }
+
+    #[test]
+    fn write_barrier_tracks_old_to_young_reference() {
+        let mut vm = Vm::new().expect("failed to create VM");
+        vm.set_gc_threshold(1024);
+
+        // Allocate in old generation (after survivor space fills)
+        let old_obj = vm.new_string("old".to_string());
+        let old_ref = match old_obj {
+            Value::Reference(r) => r,
+            _ => unreachable!(),
+        };
+
+        // Allocate many objects to fill young generation
+        for i in 0..500 {
+            let _s = vm.new_string(format!("young_{}", i));
+        }
+
+        // The old object's slot should be in tenured space
+        if let Reference::Heap(old_slot) = old_ref {
+            let heap = vm.heap.lock().unwrap();
+            assert!(
+                old_slot >= heap.survivor_end,
+                "old object should be in tenured space"
+            );
+        }
     }
 
     #[test]

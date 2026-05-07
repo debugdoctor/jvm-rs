@@ -752,4 +752,242 @@ mod tests {
             "expected synthetic handler method to attempt JIT execution"
         );
     }
+
+    #[test]
+    fn invalidate_compiled_method_removes_from_cache() {
+        let compiler = JitCompiler::new().expect("failed to create JIT compiler");
+        let method = Method::new(
+            [
+                0x05, // iconst_2
+                0x10, 0x03, // bipush 3
+                0x60, // iadd
+                0xac, // ireturn
+            ],
+            0,
+            2,
+        )
+        .with_metadata("jit/Cache", "add", "()I", 0);
+
+        let code = compiler.compile(&method).expect("JIT compilation failed");
+        let key = "jit/Cache.add()I";
+        compiler.invalidate_compiled_method(key);
+
+        assert!(
+            compiler.get_compiled_code(key).is_none(),
+            "invalidated method should not be in cache"
+        );
+    }
+
+    #[test]
+    fn invalidate_compiled_method_allows_recompilation() {
+        let compiler = JitCompiler::new().expect("failed to create JIT compiler");
+        let method = Method::new(
+            [
+                0x05, // iconst_2
+                0x10, 0x03, // bipush 3
+                0x60, // iadd
+                0xac, // ireturn
+            ],
+            0,
+            2,
+        )
+        .with_metadata("jit/ReCache", "add", "()I", 0);
+        let key = "jit/ReCache.add()I";
+
+        let code1 = compiler.compile(&method).expect("first compilation failed");
+        compiler.install_code(key.to_string(), code1.clone());
+        assert!(compiler.get_compiled_code(key).is_some());
+
+        compiler.invalidate_compiled_method(key);
+        assert!(compiler.get_compiled_code(key).is_none());
+
+        let code2 = compiler.compile(&method).expect("recompilation failed");
+        compiler.install_code(key.to_string(), code2.clone());
+        assert!(compiler.get_compiled_code(key).is_some());
+        assert_eq!(compiler.get_compiled_code(key).unwrap().code_buffer, code2.code_buffer);
+    }
+
+    #[test]
+    fn osr_key_differs_from_normal_method_key() {
+        let method = Method::new(
+            [
+                0x05, // iconst_2
+                0xac, // ireturn
+            ],
+            0,
+            1,
+        )
+        .with_metadata("jit/OSR", "hotLoop", "(I)I", 0);
+
+        let normal_key = "jit/OSR.hotLoop(I)I";
+        let osr_key = JitCompiler::osr_method_key(&method, 0);
+
+        assert_ne!(normal_key, osr_key);
+        assert!(osr_key.contains("@osr:0"));
+        assert!(osr_key.starts_with(normal_key));
+    }
+
+    #[test]
+    fn osr_key_and_normal_key_cache_independently() {
+        let compiler = JitCompiler::new().expect("failed to create JIT compiler");
+        let method = Method::new(
+            [
+                0x05, // iconst_2
+                0xac, // ireturn
+            ],
+            0,
+            1,
+        )
+        .with_metadata("jit/IndyOSR", "run", "(I)I", 0);
+
+        let normal_key = "jit/IndyOSR.run(I)I";
+        let osr_key = JitCompiler::osr_method_key(&method, 0);
+
+        let code = compiler.compile(&method).expect("compilation failed");
+        compiler.install_code(normal_key.to_string(), code.clone());
+
+        assert!(compiler.get_compiled_code(normal_key).is_some());
+        assert!(compiler.get_compiled_code(&osr_key).is_none());
+
+        compiler.invalidate_compiled_method(normal_key);
+
+        assert!(compiler.get_compiled_code(normal_key).is_none());
+        assert!(compiler.get_compiled_code(&osr_key).is_none());
+    }
+
+    #[test]
+    fn mark_interpreter_only_prevents_get_or_compile() {
+        let compiler = JitCompiler::new().expect("failed to create JIT compiler");
+        let method = Method::new(
+            [
+                0x05, // iconst_2
+                0xac, // ireturn
+            ],
+            0,
+            1,
+        )
+        .with_metadata("jit/NoJIT", "skipMe", "()I", 0x0008);
+        let key = "jit/NoJIT.skipMe()I";
+
+        compiler.mark_interpreter_only(key.to_string(), DeoptReason::HelperUnsupported);
+
+        assert_eq!(
+            compiler.interpreter_only_reason(key),
+            Some(DeoptReason::HelperUnsupported)
+        );
+        assert!(
+            compiler.get_or_compile(&method).is_none(),
+            "interpreter-only method should not be JIT compiled"
+        );
+    }
+
+    #[test]
+    fn mark_interpreter_only_removes_cached_compiled_code() {
+        let compiler = JitCompiler::new().expect("failed to create JIT compiler");
+        let method = Method::new(
+            [
+                0x05, // iconst_2
+                0xac, // ireturn
+            ],
+            0,
+            1,
+        )
+        .with_metadata("jit/CachedNoJIT", "removeMe", "()I", 0);
+        let key = "jit/CachedNoJIT.removeMe()I";
+
+        let code = compiler.compile(&method).expect("compilation failed");
+        compiler.install_code(key.to_string(), code);
+
+        assert!(compiler.get_compiled_code(key).is_some());
+
+        compiler.mark_interpreter_only(key.to_string(), DeoptReason::HelperUnsupported);
+
+        assert!(compiler.get_compiled_code(key).is_none());
+        assert_eq!(
+            compiler.interpreter_only_reason(key),
+            Some(DeoptReason::HelperUnsupported)
+        );
+    }
+
+    #[test]
+    fn site_fallback_triggers_for_classcast_at_site() {
+        let compiler = JitCompiler::new().expect("failed to create JIT compiler");
+        let key = "jit/SiteFallback/target(I)V";
+
+        compiler.record_deopt_site(key, 10, DeoptReason::ClassCast);
+
+        assert!(compiler.should_recompile_with_site_fallback(key, 10, DeoptReason::ClassCast));
+        assert!(!compiler.should_recompile_with_site_fallback(key, 20, DeoptReason::ClassCast));
+        assert!(!compiler.should_recompile_with_site_fallback(key, 10, DeoptReason::NullCheck));
+    }
+
+    #[test]
+    fn site_fallback_triggers_for_nullcheck_at_site() {
+        let compiler = JitCompiler::new().expect("failed to create JIT compiler");
+        let key = "jit/SiteFallback/nullRef(Ljava/lang/Object;)V";
+
+        compiler.record_deopt_site(key, 5, DeoptReason::NullCheck);
+
+        assert!(compiler.should_recompile_with_site_fallback(key, 5, DeoptReason::NullCheck));
+        assert!(!compiler.should_recompile_with_site_fallback(key, 5, DeoptReason::ClassCast));
+    }
+
+    #[test]
+    fn should_abandon_jit_at_site_for_helper_unsupported() {
+        let compiler = JitCompiler::new().expect("failed to create JIT compiler");
+        let key = "jit/SiteFallback/unsupported()V";
+
+        assert!(compiler.should_abandon_jit_at_site(key, 0, DeoptReason::HelperUnsupported));
+        assert!(compiler.should_abandon_jit_at_site(key, 99, DeoptReason::HelperUnsupported));
+    }
+
+    #[test]
+    fn should_abandon_jit_at_site_requires_two_classcast_failures() {
+        let compiler = JitCompiler::new().expect("failed to create JIT compiler");
+        let key = "jit/SiteFallback/badCast(I)V";
+
+        compiler.record_deopt_site(key, 10, DeoptReason::ClassCast);
+        assert!(!compiler.should_abandon_jit_at_site(key, 10, DeoptReason::ClassCast));
+
+        compiler.record_deopt_site(key, 10, DeoptReason::ClassCast);
+        assert!(compiler.should_abandon_jit_at_site(key, 10, DeoptReason::ClassCast));
+
+        assert!(!compiler.should_abandon_jit_at_site(key, 20, DeoptReason::ClassCast));
+    }
+
+    #[test]
+    fn should_abandon_jit_requires_two_method_level_failures() {
+        let compiler = JitCompiler::new().expect("failed to create JIT compiler");
+        let key = "jit/MethodLevel/badCast(I)V";
+
+        assert!(!compiler.should_abandon_jit(key, DeoptReason::ClassCast));
+        assert!(!compiler.should_abandon_jit(key, DeoptReason::ClassCast));
+
+        compiler.record_deopt(key, DeoptReason::ClassCast);
+        assert!(!compiler.should_abandon_jit(key, DeoptReason::ClassCast));
+
+        compiler.record_deopt(key, DeoptReason::ClassCast);
+        assert!(compiler.should_abandon_jit(key, DeoptReason::ClassCast));
+
+        assert!(!compiler.should_abandon_jit(key, DeoptReason::NullCheck));
+    }
+
+    #[test]
+    fn interpreter_only_reason_is_overwritten_on_second_call() {
+        let compiler = JitCompiler::new().expect("failed to create JIT compiler");
+        let key = "jit/OverwriteReason/final()V";
+
+        compiler.mark_interpreter_only(key.to_string(), DeoptReason::HelperUnsupported);
+        assert_eq!(
+            compiler.interpreter_only_reason(key),
+            Some(DeoptReason::HelperUnsupported)
+        );
+
+        compiler.mark_interpreter_only(key.to_string(), DeoptReason::NullCheck);
+        assert_eq!(
+            compiler.interpreter_only_reason(key),
+            Some(DeoptReason::NullCheck),
+            "second call should overwrite the first reason"
+        );
+    }
 }

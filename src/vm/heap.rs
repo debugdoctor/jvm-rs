@@ -44,6 +44,35 @@ impl HeapValue {
             Self::StringBuilder(_) => "string-builder",
         }
     }
+
+    pub(super) fn heap_size(&self) -> usize {
+        match self {
+            Self::IntArray { values } => {
+                std::mem::size_of::<Vec<i32>>() + values.capacity() * 4
+            }
+            Self::LongArray { values } => {
+                std::mem::size_of::<Vec<i64>>() + values.capacity() * 8
+            }
+            Self::FloatArray { values } => {
+                std::mem::size_of::<Vec<f32>>() + values.capacity() * 4
+            }
+            Self::DoubleArray { values } => {
+                std::mem::size_of::<Vec<f64>>() + values.capacity() * 8
+            }
+            Self::ReferenceArray { values, .. } => {
+                std::mem::size_of::<Vec<Reference>>() + values.capacity() * 8
+            }
+            Self::String(s) => {
+                std::mem::size_of::<String>() + s.capacity()
+            }
+            Self::Object { fields, .. } => {
+                std::mem::size_of::<HashMap<String, Value>>() + fields.capacity() * 32
+            }
+            Self::StringBuilder(sb) => {
+                std::mem::size_of::<String>() + sb.capacity()
+            }
+        }
+    }
 }
 
 /// Snapshot of garbage-collector counters for tooling / tests.
@@ -57,6 +86,18 @@ pub struct GcStats {
     pub live: usize,
     /// Total number of allocations observed since VM start.
     pub total_allocations: u64,
+    /// Cumulative GC pause time in nanoseconds.
+    pub pause_time_ns: u64,
+    /// Cumulative bytes freed across all collections.
+    pub freed_bytes: u64,
+    /// Estimated total heap bytes currently in use (sum of live object sizes).
+    pub total_heap_bytes: usize,
+    /// Number of objects freed in the most recent collection.
+    pub last_collection_freed: usize,
+    /// Number of TLAB allocations (fast path).
+    pub tlab_allocations: u64,
+    /// Number of times TLAB was refilled.
+    pub tlab_refills: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -70,6 +111,27 @@ pub(super) struct Heap {
     pub(super) gc_threshold: usize,
     /// Cumulative GC statistics.
     pub(super) stats: GcStats,
+    /// Thread-local allocation buffer: next free slot index.
+    pub(super) tlab_top: usize,
+    /// End of current TLAB (start of next TLAB will be here).
+    pub(super) tlab_limit: usize,
+    /// Default TLAB size in slots.
+    pub(super) tlab_size: usize,
+    /// Object ages for generational GC (index matches values slot).
+    pub(super) ages: Vec<u8>,
+    /// End of young generation (eden + survivor space).
+    pub(super) young_end: usize,
+    /// End of survivor space (eden_end < survivor_end < values.len()).
+    pub(super) survivor_end: usize,
+    /// Max age before promotion to old generation.
+    pub(super) promotion_age: u8,
+    /// Number of minor GCs performed.
+    pub(super) minor_gc_count: u64,
+    /// Number of major (full) GCs performed.
+    pub(super) major_gc_count: u64,
+    /// Remembered set: (source_slot, target_slot) pairs where source is old and target is young.
+    /// Used by write barrier to track old->young references.
+    pub(super) remembered_set: Vec<(usize, usize)>,
 }
 
 impl Default for Heap {
@@ -80,6 +142,16 @@ impl Default for Heap {
             allocs_since_gc: 0,
             gc_threshold: 1024,
             stats: GcStats::default(),
+            tlab_top: 0,
+            tlab_limit: 0,
+            tlab_size: 256,
+            ages: Vec::new(),
+            young_end: 0,
+            survivor_end: 0,
+            promotion_age: 4,
+            minor_gc_count: 0,
+            major_gc_count: 0,
+            remembered_set: Vec::new(),
         }
     }
 }
@@ -92,16 +164,62 @@ impl Heap {
     pub(super) fn allocate(&mut self, value: HeapValue) -> Reference {
         self.allocs_since_gc += 1;
         self.stats.total_allocations = self.stats.total_allocations.saturating_add(1);
-        // Try to reuse a freed slot.
-        for (i, slot) in self.values.iter_mut().enumerate() {
-            if slot.is_none() {
-                *slot = Some(value);
-                return Reference::Heap(i);
+
+        // TLAB bump allocation - fast path
+        if self.tlab_top < self.tlab_limit {
+            let slot = self.tlab_top;
+            self.tlab_top += 1;
+            self.stats.tlab_allocations += 1;
+            while self.values.len() <= slot {
+                self.values.push(None);
+                self.ages.push(0);
+            }
+            self.values[slot] = Some(value);
+            return Reference::Heap(slot);
+        }
+
+        // TLAB exhausted - allocate new TLAB at heap end
+        self.refill_tlab();
+
+        let slot = self.tlab_top;
+        self.tlab_top += 1;
+        self.stats.tlab_allocations += 1;
+        while self.values.len() <= slot {
+            self.values.push(None);
+            self.ages.push(0);
+        }
+        self.values[slot] = Some(value);
+        Reference::Heap(slot)
+    }
+
+    fn refill_tlab(&mut self) {
+        self.stats.tlab_refills += 1;
+        self.tlab_top = self.values.len();
+        self.tlab_limit = self.values.len().saturating_add(self.tlab_size);
+        self.values.resize(self.tlab_limit, None);
+        self.ages.resize(self.tlab_limit, 0);
+    }
+
+    /// Write barrier: record old->young references for generational GC.
+    /// Called when storing a reference into slot `source_slot` that points to `target_slot`.
+    pub(super) fn write_barrier(&mut self, source_slot: usize, target_slot: usize) {
+        // Only track if source is old (tenured) and target is young
+        if source_slot >= self.survivor_end && target_slot < self.survivor_end {
+            // Avoid duplicates by checking if already in set
+            if !self.remembered_set.contains(&(source_slot, target_slot)) {
+                self.remembered_set.push((source_slot, target_slot));
             }
         }
-        let reference = self.values.len();
-        self.values.push(Some(value));
-        Reference::Heap(reference)
+    }
+
+    /// Clear the remembered set after GC.
+    pub(super) fn clear_remembered_set(&mut self) {
+        self.remembered_set.clear();
+    }
+
+    /// Get references from remembered set for minor GC tracing.
+    pub(super) fn get_remembered_set_references(&self) -> Vec<usize> {
+        self.remembered_set.iter().map(|(_, target)| *target).collect()
     }
 
     pub(super) fn allocate_string(&mut self, value: impl Into<String>) -> Reference {
@@ -214,14 +332,39 @@ impl Heap {
         index: i32,
         value: Reference,
     ) -> Result<(), VmError> {
+        let array_slot = match reference {
+            Reference::Heap(i) => i,
+            Reference::Null => return Err(VmError::NullReference),
+        };
+
+        // Extract target slot for write barrier before mutable borrow
+        let target_slot_for_barrier = if let Reference::Heap(slot) = value {
+            Some(slot)
+        } else {
+            None
+        };
+
+        // First check if it's a ReferenceArray
+        let is_ref_array = {
+            matches!(self.get(reference), Ok(HeapValue::ReferenceArray { .. }))
+        };
+
+        if !is_ref_array {
+            return Err(VmError::InvalidHeapValue {
+                expected: "reference-array",
+                actual: "non-reference-array",
+            });
+        }
+
+        // Do write barrier first (needs mutable access before the next borrow)
+        if let Some(target_slot) = target_slot_for_barrier {
+            self.write_barrier(array_slot, target_slot);
+        }
+
+        // Now do the store
         let values = match self.get_mut(reference)? {
             HeapValue::ReferenceArray { values, .. } => values,
-            value => {
-                return Err(VmError::InvalidHeapValue {
-                    expected: "reference-array",
-                    actual: value.kind_name(),
-                });
-            }
+            _ => unreachable!(),
         };
 
         let index = usize::try_from(index).map_err(|_| VmError::ArrayIndexOutOfBounds {
@@ -236,6 +379,7 @@ impl Heap {
                 index: index as i32,
                 len,
             })?;
+
         *slot = value;
         Ok(())
     }
@@ -358,10 +502,48 @@ impl Heap {
     ///
     /// `roots` must contain every `Reference` reachable from the thread stacks,
     /// static fields, and any other GC roots.
+    ///
+    /// This implements a generational GC:
+    /// - Minor GC: collects young generation (eden + survivor spaces), survivors age
+    /// - Major GC: collects entire heap when tenured fills
     pub(super) fn gc(&mut self, roots: &[Reference]) {
+        let start = std::time::Instant::now();
+
+        // Determine if this should be a minor or major GC
+        let is_minor = self.values.len() < self.survivor_end * 2;
+
+        if is_minor {
+            self.minor_gc_internal(roots);
+        } else {
+            self.major_gc_internal(roots);
+        }
+
+        let pause_ns = start.elapsed().as_nanos() as u64;
+
+        // Calculate total heap bytes from live objects.
+        let total_heap_bytes = self.values.iter()
+            .filter_map(|v| v.as_ref())
+            .map(|v| v.heap_size())
+            .sum();
+
+        self.stats.collections = self.stats.collections.saturating_add(1);
+        self.stats.pause_time_ns = self.stats.pause_time_ns.saturating_add(pause_ns);
+        self.stats.total_heap_bytes = total_heap_bytes;
+
+        // Reset TLAB after GC - start fresh at current heap end
+        self.tlab_top = self.values.len();
+        self.tlab_limit = self.values.len().saturating_add(self.tlab_size);
+        if self.tlab_limit > self.values.len() {
+            self.values.resize(self.tlab_limit, None);
+            self.ages.resize(self.tlab_limit, 0);
+        }
+    }
+
+    fn minor_gc_internal(&mut self, roots: &[Reference]) {
+        self.minor_gc_count += 1;
         let mut marked = vec![false; self.values.len()];
 
-        // Worklist-based marking.
+        // Worklist-based marking from roots.
         let mut worklist: Vec<usize> = roots
             .iter()
             .filter_map(|r| match r {
@@ -369,6 +551,13 @@ impl Heap {
                 Reference::Null => None,
             })
             .collect();
+
+        // Also trace from remembered set (old->young references)
+        for &target in &self.get_remembered_set_references() {
+            if target < marked.len() && !marked[target] {
+                worklist.push(target);
+            }
+        }
 
         while let Some(index) = worklist.pop() {
             if index >= marked.len() || marked[index] {
@@ -397,35 +586,118 @@ impl Heap {
                             }
                         }
                     }
-                    HeapValue::IntArray { .. }
-                    | HeapValue::LongArray { .. }
-                    | HeapValue::FloatArray { .. }
-                    | HeapValue::DoubleArray { .. }
-                    | HeapValue::String(_)
-                    | HeapValue::StringBuilder(_) => {}
+                    _ => {}
                 }
             }
         }
 
-        // Sweep: free unmarked objects.
-        let mut freed = 0u64;
-        for (i, slot) in self.values.iter_mut().enumerate() {
-            if slot.is_some() && !marked[i] {
-                *slot = None;
-                freed += 1;
+        // Clear remembered set after minor GC
+        self.clear_remembered_set();
+
+        // Sweep young generation: free unmarked, age survivors in place
+        let mut freed_count = 0u64;
+        let mut freed_bytes = 0u64;
+        for i in 0..self.survivor_end {
+            if let Some(ref value) = self.values[i] {
+                if !marked[i] {
+                    freed_bytes += value.heap_size() as u64;
+                    freed_count += 1;
+                    self.values[i] = None;
+                    self.ages[i] = 0;
+                } else {
+                    self.ages[i] = self.ages[i].saturating_add(1);
+                }
             }
         }
+
         self.live_count = self.values.iter().filter(|v| v.is_some()).count();
         self.allocs_since_gc = 0;
 
-        // Trim trailing None slots.
+        // After minor GC, start allocating at the current heap end (after survivor space)
+        self.tlab_top = self.values.len();
+        self.tlab_limit = self.values.len().saturating_add(self.tlab_size);
+        self.values.resize(self.tlab_limit, None);
+        self.ages.resize(self.tlab_limit, 0);
+
+        self.stats.freed = self.stats.freed.saturating_add(freed_count);
+        self.stats.last_collection_freed = freed_count as usize;
+        self.stats.freed_bytes = self.stats.freed_bytes.saturating_add(freed_bytes);
+    }
+
+    fn major_gc_internal(&mut self, roots: &[Reference]) {
+        self.major_gc_count += 1;
+        let mut marked = vec![false; self.values.len()];
+
+        // Worklist-based marking from roots.
+        let mut worklist: Vec<usize> = roots
+            .iter()
+            .filter_map(|r| match r {
+                Reference::Heap(i) => Some(*i),
+                Reference::Null => None,
+            })
+            .collect();
+
+        while let Some(index) = worklist.pop() {
+            if index >= marked.len() || marked[index] {
+                continue;
+            }
+            marked[index] = true;
+
+            if let Some(Some(value)) = self.values.get(index) {
+                match value {
+                    HeapValue::ReferenceArray { values, .. } => {
+                        for r in values {
+                            if let Reference::Heap(i) = r {
+                                if !marked[*i] {
+                                    worklist.push(*i);
+                                }
+                            }
+                        }
+                    }
+                    HeapValue::Object { fields, .. } => {
+                        for v in fields.values() {
+                            if let Value::Reference(Reference::Heap(i)) = v {
+                                if !marked[*i] {
+                                    worklist.push(*i);
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Sweep entire heap.
+        let mut freed_count = 0u64;
+        let mut freed_bytes = 0u64;
+        for i in 0..self.values.len() {
+            if let Some(ref value) = self.values[i] {
+                if !marked[i] {
+                    freed_bytes += value.heap_size() as u64;
+                    freed_count += 1;
+                    self.values[i] = None;
+                    self.ages[i] = 0;
+                }
+            }
+        }
+
+        self.live_count = self.values.iter().filter(|v| v.is_some()).count();
+        self.allocs_since_gc = 0;
+
+        // Trim trailing None slots
         while self.values.last().map_or(false, |v| v.is_none()) {
             self.values.pop();
         }
+        self.ages.truncate(self.values.len());
 
-        self.stats.collections = self.stats.collections.saturating_add(1);
-        self.stats.freed = self.stats.freed.saturating_add(freed);
-        self.stats.live = self.live_count;
+        // Reset young generation boundaries after major GC
+        self.survivor_end = self.values.len();
+        self.young_end = self.values.len();
+
+        self.stats.freed = self.stats.freed.saturating_add(freed_count);
+        self.stats.last_collection_freed = freed_count as usize;
+        self.stats.freed_bytes = self.stats.freed_bytes.saturating_add(freed_bytes);
     }
 
     pub(super) fn should_collect(&self) -> bool {

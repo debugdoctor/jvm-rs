@@ -54,10 +54,16 @@ pub(super) fn native_int_stream_array(
     stream_ref: Reference,
 ) -> Result<Reference, VmError> {
     match vm.heap.lock().unwrap().get(stream_ref)? {
-        HeapValue::Object { fields, .. } => match fields.get("__array") {
-            Some(Value::Reference(r)) => Ok(*r),
-            _ => Err(VmError::NullReference),
-        },
+        HeapValue::Object { fields, class_name: _ } => {
+            let array_ref = fields.get("__array").and_then(|v| match v {
+                Value::Reference(r) => Some(*r),
+                _ => None,
+            });
+            match array_ref {
+                Some(r) => Ok(r),
+                _ => Err(VmError::NullReference),
+            }
+        }
         value => Err(VmError::InvalidHeapValue {
             expected: "object",
             actual: value.kind_name(),
@@ -70,10 +76,16 @@ pub(super) fn native_long_stream_array(
     stream_ref: Reference,
 ) -> Result<Reference, VmError> {
     match vm.heap.lock().unwrap().get(stream_ref)? {
-        HeapValue::Object { fields, .. } => match fields.get("__array") {
-            Some(Value::Reference(r)) => Ok(*r),
-            _ => Err(VmError::NullReference),
-        },
+        HeapValue::Object { fields, class_name: _ } => {
+            let array_ref = fields.get("__array").and_then(|v| match v {
+                Value::Reference(r) => Some(*r),
+                _ => None,
+            });
+            match array_ref {
+                Some(r) => Ok(r),
+                _ => Err(VmError::NullReference),
+            }
+        }
         value => Err(VmError::InvalidHeapValue {
             expected: "object",
             actual: value.kind_name(),
@@ -86,10 +98,16 @@ pub(super) fn native_double_stream_array(
     stream_ref: Reference,
 ) -> Result<Reference, VmError> {
     match vm.heap.lock().unwrap().get(stream_ref)? {
-        HeapValue::Object { fields, .. } => match fields.get("__array") {
-            Some(Value::Reference(r)) => Ok(*r),
-            _ => Err(VmError::NullReference),
-        },
+        HeapValue::Object { fields, class_name: _ } => {
+            let array_ref = fields.get("__array").and_then(|v| match v {
+                Value::Reference(r) => Some(*r),
+                _ => None,
+            });
+            match array_ref {
+                Some(r) => Ok(r),
+                _ => Err(VmError::NullReference),
+            }
+        }
         value => Err(VmError::InvalidHeapValue {
             expected: "object",
             actual: value.kind_name(),
@@ -99,10 +117,13 @@ pub(super) fn native_double_stream_array(
 
 pub(super) fn native_collector_mode(vm: &Vm, collector_ref: Reference) -> Result<i32, VmError> {
     match vm.heap.lock().unwrap().get(collector_ref)? {
-        HeapValue::Object { fields, .. } => match fields.get("__mode") {
-            Some(Value::Int(mode)) => Ok(*mode),
-            _ => Ok(0),
-        },
+        HeapValue::Object { fields, class_name: _ } => {
+            let mode = fields.get("__mode").and_then(|v| match v {
+                Value::Int(mode) => Some(*mode),
+                _ => None,
+            });
+            Ok(mode.unwrap_or(0))
+        }
         _ => Ok(0),
     }
 }
@@ -112,10 +133,16 @@ pub(super) fn native_collector_array(
     collector_ref: Reference,
 ) -> Result<Reference, VmError> {
     match vm.heap.lock().unwrap().get(collector_ref)? {
-        HeapValue::Object { fields, .. } => match fields.get("__array") {
-            Some(Value::Reference(r)) => Ok(*r),
-            _ => Err(VmError::NullReference),
-        },
+        HeapValue::Object { fields, class_name: _ } => {
+            let array_ref = fields.get("__array").and_then(|v| match v {
+                Value::Reference(r) => Some(*r),
+                _ => None,
+            });
+            match array_ref {
+                Some(r) => Ok(r),
+                _ => Err(VmError::NullReference),
+            }
+        }
         value => Err(VmError::InvalidHeapValue {
             expected: "object",
             actual: value.kind_name(),
@@ -290,7 +317,7 @@ pub(super) fn class_internal_name(vm: &Vm, reference: Reference) -> Result<Strin
         let heap = vm.heap.lock().unwrap();
         match heap.get(reference)? {
             HeapValue::Object { fields, class_name } => (
-                fields.get("__name").and_then(|value| match value {
+                fields.get("__name").and_then(|v| match v {
                     Value::Reference(name_ref) => Some(*name_ref),
                     _ => None,
                 }),
@@ -321,16 +348,15 @@ pub(super) fn is_throwable_class(vm: &mut Vm, class_name: &str) -> Result<bool, 
 
 pub(super) fn integer_value(vm: &Vm, reference: Reference) -> Result<i32, VmError> {
     match vm.heap.lock().unwrap().get(reference)? {
-        HeapValue::Object { fields, .. } => Ok(fields
-            .get("value")
-            .and_then(|v| {
+        HeapValue::Object { fields, class_name: _ } => {
+            Ok(fields.get("value").and_then(|v| {
                 if let Value::Int(i) = v {
                     Some(*i)
                 } else {
                     None
                 }
-            })
-            .unwrap_or(0)),
+            }).unwrap_or(0))
+        }
         _ => Ok(0),
     }
 }

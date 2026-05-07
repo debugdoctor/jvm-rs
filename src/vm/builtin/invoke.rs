@@ -919,7 +919,7 @@ pub(super) fn invoke_lang(
             }
             let reference = vm.heap.lock().unwrap().allocate(HeapValue::Object {
                 class_name: "java/lang/Thread".to_string(),
-                fields: HashMap::new(),
+                fields: std::collections::HashMap::new(),
             });
             vm.runtime
                 .lock()

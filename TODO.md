@@ -91,8 +91,8 @@ Current support matrix, derived from `src/vm/jit/compiler.rs` as of 2026-05-07:
 | Interpreter-only | `getstatic java/lang/System.out` | Kept out of JIT until `println` side effects are made JIT-safe. |
 | Interpreter-only | `athrow`/synthetic `0xff` in methods with exception tables | Compiled-frame unwinding is not implemented yet, so these methods stay on the interpreter. |
 | Interpreter-only | Any unknown or structurally invalid opcode stream | `compile_bytecode` rejects truncated or unsupported bytecode before codegen. |
-- [ ] Add JIT helper ABI property tests for many args, wide values, floats/doubles, references, void returns, primitive returns, and reference returns.
-- [ ] Add JIT cache invalidation tests for site fallback, interpreter-only marking, OSR keys, and normal method keys.
+- [x] Add JIT helper ABI property tests for many args, wide values, floats/doubles, references, void returns, primitive returns, and reference returns.
+- [x] Add JIT cache invalidation tests for site fallback, interpreter-only marking, OSR keys, and normal method keys.
 - [x] Make deopt snapshot invariants explicit and tested: pc, locals, operand stack, reference kinds, and pending exception object.
 
 ### P1: Deoptimization And OSR
@@ -115,17 +115,16 @@ Current support matrix, derived from `src/vm/jit/compiler.rs` as of 2026-05-07:
 
 ### P1: Observability First
 
-- [ ] Emit GC pause time, freed bytes, live bytes, total heap bytes, and allocation rate.
-- [ ] Add tests that assert GC keeps interpreter and JIT-visible references alive.
-- [ ] Verify compiled frames expose roots before enabling more aggressive JIT execution across collections.
+- [x] Emit GC pause time, freed bytes, live bytes, total heap bytes, and allocation rate.
+- [x] Add tests that assert GC keeps interpreter and JIT-visible references alive.
+- [x] Verify compiled frames expose roots before enabling more aggressive JIT execution across collections.
 
 ### P2: Generational Collector
 
-- [ ] Implement a young generation with bump allocation.
-- [ ] Add minor GC and promotion into old generation.
-- [ ] Design and implement write barriers for generational and future concurrent collectors.
-- [ ] Add TLABs to remove the global heap lock from the common allocation path.
-- [ ] Add optional compaction or handle indirection to address long-running fragmentation.
+- [x] Add TLABs to remove the global heap lock from the common allocation path.
+- [x] Implement a young generation with bump allocation.
+- [x] Add minor GC and promotion into old generation.
+- [x] Design and implement write barriers for generational and future concurrent collectors.
 
 ## Memory
 

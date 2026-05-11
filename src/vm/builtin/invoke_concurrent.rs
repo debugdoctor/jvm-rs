@@ -97,7 +97,7 @@ pub(super) fn invoke_concurrent(
                 let mut heap = vm.heap.lock().unwrap();
                 match heap.get_mut(obj_ref)? {
                     HeapValue::Object { fields, .. } => {
-let current = match fields.get(0) {
+                        let current = match fields.get(0) {
                             Some(Value::Int(i)) => *i,
                             _ => 0,
                         };

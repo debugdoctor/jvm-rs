@@ -3,7 +3,11 @@ use std::collections::HashMap;
 use crate::vm::{ClassMethod, RuntimeClass, Value, Vm};
 
 fn build_field_offsets(fields: &[(String, String)]) -> HashMap<String, usize> {
-    fields.iter().enumerate().map(|(i, (name, _))| (name.clone(), i)).collect()
+    fields
+        .iter()
+        .enumerate()
+        .map(|(i, (name, _))| (name.clone(), i))
+        .collect()
 }
 
 pub(super) fn bootstrap_java_lang_reflect(vm: &mut Vm) {
@@ -60,7 +64,10 @@ pub(super) fn bootstrap_java_lang_reflect(vm: &mut Vm) {
         methods: class_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![("__name".to_string(), "Ljava/lang/String;".to_string())],
-        field_offsets: build_field_offsets(&vec![("__name".to_string(), "Ljava/lang/String;".to_string())]),
+        field_offsets: build_field_offsets(&vec![(
+            "__name".to_string(),
+            "Ljava/lang/String;".to_string(),
+        )]),
         interfaces: vec![],
     });
 
@@ -105,10 +112,16 @@ pub(super) fn bootstrap_java_lang_reflect(vm: &mut Vm) {
             ("__modifiers".to_string(), "I".to_string()),
         ],
         field_offsets: build_field_offsets(&vec![
-            ("__declaring_class".to_string(), "Ljava/lang/Class;".to_string()),
+            (
+                "__declaring_class".to_string(),
+                "Ljava/lang/Class;".to_string(),
+            ),
             ("__name".to_string(), "Ljava/lang/String;".to_string()),
             ("__descriptor".to_string(), "Ljava/lang/String;".to_string()),
-            ("__parameter_types".to_string(), "[Ljava/lang/Class;".to_string()),
+            (
+                "__parameter_types".to_string(),
+                "[Ljava/lang/Class;".to_string(),
+            ),
             ("__return_type".to_string(), "Ljava/lang/Class;".to_string()),
             ("__modifiers".to_string(), "I".to_string()),
         ]),
@@ -156,7 +169,10 @@ pub(super) fn bootstrap_java_lang_reflect(vm: &mut Vm) {
             ("__slot".to_string(), "I".to_string()),
         ],
         field_offsets: build_field_offsets(&vec![
-            ("__declaring_class".to_string(), "Ljava/lang/Class;".to_string()),
+            (
+                "__declaring_class".to_string(),
+                "Ljava/lang/Class;".to_string(),
+            ),
             ("__name".to_string(), "Ljava/lang/String;".to_string()),
             ("__type".to_string(), "Ljava/lang/Class;".to_string()),
             ("__descriptor".to_string(), "Ljava/lang/String;".to_string()),
@@ -193,12 +209,20 @@ pub(super) fn bootstrap_java_lang_reflect(vm: &mut Vm) {
                 "__parameter_types".to_string(),
                 "[Ljava/lang/Class;".to_string(),
             ),
+            ("__descriptor".to_string(), "Ljava/lang/String;".to_string()),
             ("__modifiers".to_string(), "I".to_string()),
             ("__slot".to_string(), "I".to_string()),
         ],
         field_offsets: build_field_offsets(&vec![
-            ("__declaring_class".to_string(), "Ljava/lang/Class;".to_string()),
-            ("__parameter_types".to_string(), "[Ljava/lang/Class;".to_string()),
+            (
+                "__declaring_class".to_string(),
+                "Ljava/lang/Class;".to_string(),
+            ),
+            (
+                "__parameter_types".to_string(),
+                "[Ljava/lang/Class;".to_string(),
+            ),
+            ("__descriptor".to_string(), "Ljava/lang/String;".to_string()),
             ("__modifiers".to_string(), "I".to_string()),
             ("__slot".to_string(), "I".to_string()),
         ]),

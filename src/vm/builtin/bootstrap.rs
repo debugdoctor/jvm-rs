@@ -351,7 +351,10 @@ pub(super) fn bootstrap_java_lang(vm: &mut Vm) {
         methods: thread_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![("target".to_string(), "Ljava/lang/Runnable;".to_string())],
-        field_offsets: build_field_offsets(&vec![("target".to_string(), "Ljava/lang/Runnable;".to_string())]),
+        field_offsets: build_field_offsets(&vec![(
+            "target".to_string(),
+            "Ljava/lang/Runnable;".to_string(),
+        )]),
         interfaces: vec![],
     });
 
@@ -670,8 +673,11 @@ pub(super) fn bootstrap_java_io_writer(vm: &mut Vm) {
         super_class: Some("java/io/Writer".to_string()),
         methods: bw_methods,
         static_fields: HashMap::new(),
-        instance_fields: vec![],
-        field_offsets: build_field_offsets(&vec![]),
+        instance_fields: vec![("__out".to_string(), "Ljava/io/Writer;".to_string())],
+        field_offsets: build_field_offsets(&vec![(
+            "__out".to_string(),
+            "Ljava/io/Writer;".to_string(),
+        )]),
         interfaces: vec![],
     });
 
@@ -770,8 +776,11 @@ pub(super) fn bootstrap_java_io_writer(vm: &mut Vm) {
         super_class: Some("java/io/Reader".to_string()),
         methods: br_methods,
         static_fields: HashMap::new(),
-        instance_fields: vec![],
-        field_offsets: build_field_offsets(&vec![]),
+        instance_fields: vec![("__in".to_string(), "Ljava/io/Reader;".to_string())],
+        field_offsets: build_field_offsets(&vec![(
+            "__in".to_string(),
+            "Ljava/io/Reader;".to_string(),
+        )]),
         interfaces: vec![],
     });
 
@@ -818,8 +827,11 @@ pub(super) fn bootstrap_java_io_writer(vm: &mut Vm) {
         super_class: Some("java/io/Reader".to_string()),
         methods: isr_methods,
         static_fields: HashMap::new(),
-        instance_fields: vec![],
-        field_offsets: build_field_offsets(&vec![]),
+        instance_fields: vec![("__in".to_string(), "Ljava/io/InputStream;".to_string())],
+        field_offsets: build_field_offsets(&vec![(
+            "__in".to_string(),
+            "Ljava/io/InputStream;".to_string(),
+        )]),
         interfaces: vec![],
     });
 
@@ -842,8 +854,11 @@ pub(super) fn bootstrap_java_io_writer(vm: &mut Vm) {
         super_class: Some("java/io/Writer".to_string()),
         methods: osr_methods,
         static_fields: HashMap::new(),
-        instance_fields: vec![],
-        field_offsets: build_field_offsets(&vec![]),
+        instance_fields: vec![("__out".to_string(), "Ljava/io/OutputStream;".to_string())],
+        field_offsets: build_field_offsets(&vec![(
+            "__out".to_string(),
+            "Ljava/io/OutputStream;".to_string(),
+        )]),
         interfaces: vec![],
     });
 
@@ -876,7 +891,114 @@ pub(super) fn bootstrap_java_io_writer(vm: &mut Vm) {
         methods: file_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![("path".to_string(), "Ljava/lang/String;".to_string())],
-        field_offsets: build_field_offsets(&vec![("path".to_string(), "Ljava/lang/String;".to_string())]),
+        field_offsets: build_field_offsets(&vec![(
+            "path".to_string(),
+            "Ljava/lang/String;".to_string(),
+        )]),
+        interfaces: vec![],
+    });
+}
+
+pub(super) fn bootstrap_java_io_filestreams(vm: &mut Vm) {
+    let mut fd_methods = HashMap::new();
+    for (name, desc) in [("valid", "()Z"), ("sync", "()V")] {
+        fd_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/io/FileDescriptor".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: fd_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![("__fd_id".to_string(), "J".to_string())],
+        field_offsets: build_field_offsets(&vec![("__fd_id".to_string(), "J".to_string())]),
+        interfaces: vec![],
+    });
+
+    let mut fis_methods = HashMap::new();
+    for (name, desc) in [
+        ("<init>", "(Ljava/io/File;)V"),
+        ("<init>", "(Ljava/io/FileDescriptor;)V"),
+        ("open0", "(Ljava/lang/String;)V"),
+        ("read0", "()I"),
+        ("readBytes", "([BII)I"),
+        ("available0", "()J"),
+        ("skip0", "(J)J"),
+        ("close0", "()V"),
+    ] {
+        fis_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/io/FileInputStream".to_string(),
+        super_class: Some("java/io/InputStream".to_string()),
+        methods: fis_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![
+            ("__fd".to_string(), "Ljava/io/FileDescriptor;".to_string()),
+            ("__path".to_string(), "Ljava/lang/String;".to_string()),
+        ],
+        field_offsets: build_field_offsets(&vec![
+            ("__fd".to_string(), "Ljava/io/FileDescriptor;".to_string()),
+            ("__path".to_string(), "Ljava/lang/String;".to_string()),
+        ]),
+        interfaces: vec![],
+    });
+
+    let mut fos_methods = HashMap::new();
+    for (name, desc) in [
+        ("<init>", "(Ljava/io/File;Z)V"),
+        ("<init>", "(Ljava/io/FileDescriptor;)V"),
+        ("open0", "(Ljava/lang/String;Z)V"),
+        ("write", "(IZ)V"),
+        ("writeBytes", "([BIIZ)V"),
+        ("close0", "()V"),
+    ] {
+        fos_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/io/FileOutputStream".to_string(),
+        super_class: Some("java/io/OutputStream".to_string()),
+        methods: fos_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![
+            ("__fd".to_string(), "Ljava/io/FileDescriptor;".to_string()),
+            ("__path".to_string(), "Ljava/lang/String;".to_string()),
+        ],
+        field_offsets: build_field_offsets(&vec![
+            ("__fd".to_string(), "Ljava/io/FileDescriptor;".to_string()),
+            ("__path".to_string(), "Ljava/lang/String;".to_string()),
+        ]),
+        interfaces: vec![],
+    });
+
+    let mut raf_methods = HashMap::new();
+    for (name, desc) in [
+        ("<init>", "(Ljava/io/File;Ljava/lang/String;)V"),
+        ("open0", "(Ljava/lang/String;I)V"),
+        ("read0", "()I"),
+        ("readBytes", "([BII)I"),
+        ("write0", "(I)V"),
+        ("writeBytes", "([BII)V"),
+        ("seek0", "(J)V"),
+        ("length", "()J"),
+        ("close0", "()V"),
+    ] {
+        raf_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/io/RandomAccessFile".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: raf_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![
+            ("__fd".to_string(), "Ljava/io/FileDescriptor;".to_string()),
+            ("__path".to_string(), "Ljava/lang/String;".to_string()),
+            ("__rw".to_string(), "Z".to_string()),
+        ],
+        field_offsets: build_field_offsets(&vec![
+            ("__fd".to_string(), "Ljava/io/FileDescriptor;".to_string()),
+            ("__path".to_string(), "Ljava/lang/String;".to_string()),
+            ("__rw".to_string(), "Z".to_string()),
+        ]),
         interfaces: vec![],
     });
 }
@@ -1090,7 +1212,10 @@ pub(super) fn bootstrap_java_util(vm: &mut Vm) {
         methods: optional_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![("value".to_string(), "Ljava/lang/Object;".to_string())],
-        field_offsets: build_field_offsets(&vec![("value".to_string(), "Ljava/lang/Object;".to_string())]),
+        field_offsets: build_field_offsets(&vec![(
+            "value".to_string(),
+            "Ljava/lang/Object;".to_string(),
+        )]),
         interfaces: vec![],
     });
 
@@ -1118,7 +1243,10 @@ pub(super) fn bootstrap_java_util(vm: &mut Vm) {
         methods: scanner_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![("__input".to_string(), "Ljava/lang/String;".to_string())],
-        field_offsets: build_field_offsets(&vec![("__input".to_string(), "Ljava/lang/String;".to_string())]),
+        field_offsets: build_field_offsets(&vec![(
+            "__input".to_string(),
+            "Ljava/lang/String;".to_string(),
+        )]),
         interfaces: vec![],
     });
 }
@@ -1271,7 +1399,10 @@ pub(super) fn bootstrap_java_nio(vm: &mut Vm) {
         methods: path_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![("__path".to_string(), "Ljava/lang/String;".to_string())],
-        field_offsets: build_field_offsets(&vec![("__path".to_string(), "Ljava/lang/String;".to_string())]),
+        field_offsets: build_field_offsets(&vec![(
+            "__path".to_string(),
+            "Ljava/lang/String;".to_string(),
+        )]),
         interfaces: vec![],
     });
 
@@ -1379,6 +1510,34 @@ pub(super) fn bootstrap_java_nio(vm: &mut Vm) {
         static_fields: HashMap::new(),
         instance_fields: vec![],
         field_offsets: build_field_offsets(&vec![]),
+        interfaces: vec![],
+    });
+
+    // java.nio.channels.ReadableByteChannel - wraps InputStream for NIO interop
+    vm.register_class(RuntimeClass {
+        name: "java/nio/channels/ReadableByteChannel".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: HashMap::new(),
+        static_fields: HashMap::new(),
+        instance_fields: vec![("__stream".to_string(), "Ljava/io/InputStream;".to_string())],
+        field_offsets: build_field_offsets(&vec![(
+            "__stream".to_string(),
+            "Ljava/io/InputStream;".to_string(),
+        )]),
+        interfaces: vec![],
+    });
+
+    // java.nio.channels.WritableByteChannel - wraps OutputStream for NIO interop
+    vm.register_class(RuntimeClass {
+        name: "java/nio/channels/WritableByteChannel".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: HashMap::new(),
+        static_fields: HashMap::new(),
+        instance_fields: vec![("__stream".to_string(), "Ljava/io/OutputStream;".to_string())],
+        field_offsets: build_field_offsets(&vec![(
+            "__stream".to_string(),
+            "Ljava/io/OutputStream;".to_string(),
+        )]),
         interfaces: vec![],
     });
 
@@ -1706,7 +1865,10 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: atomic_reference_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![("__value".to_string(), "Ljava/lang/Object;".to_string())],
-        field_offsets: build_field_offsets(&vec![("__value".to_string(), "Ljava/lang/Object;".to_string())]),
+        field_offsets: build_field_offsets(&vec![(
+            "__value".to_string(),
+            "Ljava/lang/Object;".to_string(),
+        )]),
         interfaces: vec![],
     });
 

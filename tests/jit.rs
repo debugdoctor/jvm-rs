@@ -3762,8 +3762,7 @@ public class Main {
             let mut vm = Vm::new().expect("failed to create VM");
             vm.set_class_path(options.class_path.clone());
             vm.set_jit_thresholds(1, 1);
-            let source =
-                launcher::resolve_class_path(&options.class_path, "demo.Main").unwrap();
+            let source = launcher::resolve_class_path(&options.class_path, "demo.Main").unwrap();
             let method = launcher::load_main_method(&source, "demo.Main", &[], &mut vm).unwrap();
 
             vm.execute(method.clone()).unwrap();
@@ -3863,8 +3862,7 @@ public class Main {
             let mut vm = Vm::new().expect("failed to create VM");
             vm.set_class_path(options.class_path.clone());
             vm.set_jit_thresholds(1, 1);
-            let source =
-                launcher::resolve_class_path(&options.class_path, "demo.Main").unwrap();
+            let source = launcher::resolve_class_path(&options.class_path, "demo.Main").unwrap();
             let method = launcher::load_main_method(&source, "demo.Main", &[], &mut vm).unwrap();
 
             vm.execute(method.clone()).unwrap();
@@ -3968,14 +3966,18 @@ public class Main {
             let mut vm = Vm::new().expect("failed to create VM");
             vm.set_class_path(options.class_path.clone());
             vm.set_jit_thresholds(1, 1);
-            let source =
-                launcher::resolve_class_path(&options.class_path, "demo.Main").unwrap();
+            let source = launcher::resolve_class_path(&options.class_path, "demo.Main").unwrap();
             let method = launcher::load_main_method(&source, "demo.Main", &[], &mut vm).unwrap();
 
             vm.execute(method.clone()).unwrap();
             assert_eq!(vm.take_output(), vec!["-1".to_string()]);
             assert_eq!(
-                vm.jit_deopt_count("demo/Main", "callNullVirtual", "()I", DeoptReason::NullCheck),
+                vm.jit_deopt_count(
+                    "demo/Main",
+                    "callNullVirtual",
+                    "()I",
+                    DeoptReason::NullCheck
+                ),
                 1
             );
             assert_eq!(
@@ -3995,7 +3997,12 @@ public class Main {
             vm.execute(method.clone()).unwrap();
             assert_eq!(vm.take_output(), vec!["-1".to_string()]);
             assert_eq!(
-                vm.jit_deopt_count("demo/Main", "callNullVirtual", "()I", DeoptReason::NullCheck),
+                vm.jit_deopt_count(
+                    "demo/Main",
+                    "callNullVirtual",
+                    "()I",
+                    DeoptReason::NullCheck
+                ),
                 1
             );
             assert_eq!(
@@ -4019,7 +4026,12 @@ public class Main {
             vm.execute(method).unwrap();
             assert_eq!(vm.take_output(), vec!["-1".to_string()]);
             assert_eq!(
-                vm.jit_deopt_count("demo/Main", "callNullVirtual", "()I", DeoptReason::NullCheck),
+                vm.jit_deopt_count(
+                    "demo/Main",
+                    "callNullVirtual",
+                    "()I",
+                    DeoptReason::NullCheck
+                ),
                 1
             );
             assert_eq!(
@@ -4072,8 +4084,7 @@ public class Main {
             let mut vm = Vm::new().expect("failed to create VM");
             vm.set_class_path(options.class_path.clone());
             vm.set_jit_thresholds(1, 1);
-            let source =
-                launcher::resolve_class_path(&options.class_path, "demo.Main").unwrap();
+            let source = launcher::resolve_class_path(&options.class_path, "demo.Main").unwrap();
             let method = launcher::load_main_method(&source, "demo.Main", &[], &mut vm).unwrap();
 
             vm.execute(method.clone()).unwrap();
@@ -4194,8 +4205,7 @@ public class Main {
             let mut vm = Vm::new().expect("failed to create VM");
             vm.set_class_path(options.class_path.clone());
             vm.set_jit_thresholds(1, 1);
-            let source =
-                launcher::resolve_class_path(&options.class_path, "demo.Main").unwrap();
+            let source = launcher::resolve_class_path(&options.class_path, "demo.Main").unwrap();
             let method = launcher::load_main_method(&source, "demo.Main", &[], &mut vm).unwrap();
 
             vm.execute(method.clone()).unwrap();

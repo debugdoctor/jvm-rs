@@ -27,10 +27,7 @@ pub(super) fn invoke_time(
             let heap = &mut vm.heap.lock().unwrap();
             let obj_ref = heap.allocate(HeapValue::Object {
                 class_name: "java/time/Instant".to_string(),
-                fields: vec![
-                    Value::Long(epoch_second),
-                    Value::Int(0),
-                ],
+                fields: vec![Value::Long(epoch_second), Value::Int(0)],
             });
             Ok(Some(Value::Reference(obj_ref)))
         }
@@ -124,10 +121,7 @@ pub(super) fn invoke_time(
             let heap = &mut vm.heap.lock().unwrap();
             let obj_ref = heap.allocate(HeapValue::Object {
                 class_name: "java/time/Instant".to_string(),
-                fields: vec![
-                    Value::Long(epoch_second + seconds),
-                    Value::Int(nano),
-                ],
+                fields: vec![Value::Long(epoch_second + seconds), Value::Int(nano)],
             });
             Ok(Some(Value::Reference(obj_ref)))
         }
@@ -183,10 +177,7 @@ pub(super) fn invoke_time(
             let heap = &mut vm.heap.lock().unwrap();
             let obj_ref = heap.allocate(HeapValue::Object {
                 class_name: "java/time/Instant".to_string(),
-                fields: vec![
-                    Value::Long(epoch_second - seconds),
-                    Value::Int(nano),
-                ],
+                fields: vec![Value::Long(epoch_second - seconds), Value::Int(nano)],
             });
             Ok(Some(Value::Reference(obj_ref)))
         }
@@ -289,10 +280,7 @@ pub(super) fn invoke_time(
             let heap = &mut vm.heap.lock().unwrap();
             let obj_ref = heap.allocate(HeapValue::Object {
                 class_name: "java/time/Duration".to_string(),
-                fields: vec![
-                    Value::Long(seconds),
-                    Value::Int(0),
-                ],
+                fields: vec![Value::Long(seconds), Value::Int(0)],
             });
             Ok(Some(Value::Reference(obj_ref)))
         }

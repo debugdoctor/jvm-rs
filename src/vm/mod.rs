@@ -14,9 +14,9 @@ pub use heap::GcStats;
 use heap::{Heap, HeapValue};
 use interpreter::{
     execute_aconst_null, execute_aload, execute_areturn_full, execute_astore, execute_bipush,
-    execute_dconst, execute_dload, execute_dstore, execute_dup, execute_fconst,
-    execute_fload, execute_fstore, execute_iadd, execute_iconst, execute_iload, execute_imul,
-    execute_ireturn_full, execute_istore, execute_isub, execute_lconst, execute_ldc, execute_ldc_w,
+    execute_dconst, execute_dload, execute_dstore, execute_dup, execute_fconst, execute_fload,
+    execute_fstore, execute_iadd, execute_iconst, execute_iload, execute_imul,
+    execute_ireturn_full, execute_istore, execute_isub, execute_lconst,
     execute_lload, execute_lreturn_full, execute_lstore, execute_pop, execute_return_full,
     execute_sipush,
 };
@@ -26,14 +26,17 @@ use thread::{
     ClassInitializationState, JavaThreadState, RuntimeState, SharedMonitors, SharedThreads, Thread,
 };
 pub use types::{
-    ClassMethod, ExceptionHandler, ExecutionResult, FieldRef, InvokeDynamicKind, InvokeDynamicSite,
-    Method, MethodRef, Reference, RuntimeClass, Value, VmError,
+    BootstrapArgument, ClassMethod, CondySite, ExceptionHandler, ExecutionResult, FieldRef,
+    InvokeDynamicKind, InvokeDynamicSite, Method, MethodRef, Reference, RuntimeClass, Value,
+    VmError,
 };
 use types::{default_value_for_descriptor, format_vm_float, parse_arg_count, parse_arg_types};
 
 use std::collections::HashMap;
 use std::fmt;
+use std::fs::File as FsFile;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 
 use crate::bytecode::Opcode;
@@ -48,6 +51,65 @@ use crate::vm::jit::runtime::{
 };
 
 static NEXT_THREAD_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+const LOOKUP_PUBLIC: i32 = 0x01;
+const LOOKUP_PRIVATE: i32 = 0x02;
+const LOOKUP_PROTECTED: i32 = 0x04;
+const LOOKUP_PACKAGE: i32 = 0x08;
+const LOOKUP_MODULE: i32 = 0x10;
+const LOOKUP_ORIGINAL: i32 = 0x40;
+const LOOKUP_FULL_POWER_MODES: i32 = LOOKUP_PUBLIC
+    | LOOKUP_PRIVATE
+    | LOOKUP_PROTECTED
+    | LOOKUP_PACKAGE
+    | LOOKUP_MODULE
+    | LOOKUP_ORIGINAL;
+
+#[derive(Default)]
+struct IoResources {
+    next_id: AtomicU64,
+    files: Mutex<Vec<Option<FsFile>>>,
+}
+
+impl IoResources {
+    fn alloc(&self, file: FsFile) -> u64 {
+        let id = self
+            .next_id
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.files.lock().unwrap().push(Some(file));
+        id
+    }
+
+    fn with_file<F, R>(&self, id: u64, f: F) -> Result<R, VmError>
+    where
+        F: FnOnce(&mut FsFile) -> Result<R, VmError>,
+    {
+        let mut files = self.files.lock().unwrap();
+        let idx = id as usize;
+        match files.get_mut(idx).and_then(|slot| slot.as_mut()) {
+            Some(file) => f(file),
+            None => Err(VmError::UnhandledException {
+                class_name: "java/io/IOException".to_string(),
+            }),
+        }
+    }
+
+    fn close(&self, id: u64) -> Option<FsFile> {
+        let mut files = self.files.lock().unwrap();
+        let idx = id as usize;
+        if idx < files.len() {
+            files[idx].take()
+        } else {
+            None
+        }
+    }
+
+    fn is_open(&self, id: u64) -> bool {
+        let files = self.files.lock().unwrap();
+        let idx = id as usize;
+        idx < files.len() && files[idx].is_some()
+    }
+}
 
 enum JitInvocationResult {
     Returned(Option<Value>),
@@ -73,6 +135,7 @@ pub struct Vm {
     jit: Option<JitCompiler>,
     jit_context: Option<JitContext>,
     string_pool: Arc<Mutex<HashMap<String, Reference>>>,
+    io_resources: Arc<IoResources>,
 }
 
 impl fmt::Debug for Vm {
@@ -107,6 +170,7 @@ impl Clone for Vm {
             jit: None,
             jit_context: None,
             string_pool: self.string_pool.clone(),
+            io_resources: self.io_resources.clone(),
         }
     }
 }
@@ -139,6 +203,7 @@ impl Vm {
             jit,
             jit_context,
             string_pool: Arc::new(Mutex::new(HashMap::new())),
+            io_resources: Arc::new(IoResources::default()),
         };
         vm.bootstrap();
         Ok(vm)
@@ -239,6 +304,11 @@ impl Vm {
             }
         }
         for r in runtime.class_objects.values() {
+            if let Reference::Heap(_) = r {
+                roots.push(*r);
+            }
+        }
+        for r in runtime.linked_dynamic_sites.values() {
             if let Reference::Heap(_) = r {
                 roots.push(*r);
             }
@@ -394,6 +464,32 @@ impl Vm {
             .unwrap()
             .classes
             .insert(class.name.clone(), class);
+    }
+
+    pub(crate) fn register_field_access_flags(
+        &mut self,
+        class_name: &str,
+        flags: impl IntoIterator<Item = (String, u16)>,
+    ) {
+        let mut runtime = self.runtime.lock().unwrap();
+        for (field_name, access_flags) in flags {
+            runtime
+                .field_access_flags
+                .insert((class_name.to_string(), field_name), access_flags);
+        }
+    }
+
+    pub(crate) fn register_field_descriptors(
+        &mut self,
+        class_name: &str,
+        descriptors: impl IntoIterator<Item = (String, String)>,
+    ) {
+        let mut runtime = self.runtime.lock().unwrap();
+        for (field_name, descriptor) in descriptors {
+            runtime
+                .field_descriptors
+                .insert((class_name.to_string(), field_name), descriptor);
+        }
     }
 
     /// Project a value list into JVM-slot-indexed locals: longs and doubles
@@ -900,6 +996,14 @@ impl Vm {
         argc: usize,
     ) -> Result<Option<Value>, VmError> {
         let receiver = Vm::jit_raw_reference(receiver_raw).ok_or(VmError::NullReference)?;
+        if Self::is_signature_polymorphic(&method_ref.class_name, &method_ref.method_name) {
+            let args =
+                unsafe { Vm::jit_raw_args_to_values(&method_ref.descriptor, args_ptr, argc) }
+                    .ok_or_else(|| VmError::InvalidDescriptor {
+                        descriptor: method_ref.descriptor.clone(),
+                    })?;
+            return self.invoke_signature_polymorphic(receiver, method_ref, args);
+        }
         let class_name = self.get_object_class(receiver)?;
         self.invoke_jit_instance_method_ref(&class_name, method_ref, receiver, args_ptr, argc)
     }
@@ -994,24 +1098,28 @@ impl Vm {
             arguments,
         } = &site.kind
         {
-            self.ensure_class_loaded(bootstrap_class)?;
-            let (_resolved_class, class_method) =
-                self.resolve_method(bootstrap_class, bootstrap_name, bootstrap_descriptor)?;
-            let mut all_args = args;
-            for idx in arguments {
-                if let Some(val) = self.resolve_method_handle_arg(*idx) {
-                    all_args.push(val);
+            let linked = if let Some(linked) = self.get_linked_dynamic_site(site) {
+                linked
+            } else {
+                let mut bootstrap_args = self.bootstrap_method_leading_args(site, None)?;
+                for arg in arguments {
+                    if let Some(val) = self.resolve_bootstrap_argument_value(arg)? {
+                        bootstrap_args.push(val);
+                    }
                 }
-            }
-            match class_method {
-                ClassMethod::Native => self.invoke_native(
+                let result = self.reflect_invoke_method(
                     bootstrap_class,
                     bootstrap_name,
                     bootstrap_descriptor,
-                    &all_args,
-                ),
-                ClassMethod::Bytecode(_) => Ok(Some(Value::Reference(Reference::Null))),
-            }
+                    None,
+                    bootstrap_args,
+                )?;
+                let linked = self.extract_linked_dynamic_target(result)?;
+                self.set_linked_dynamic_site(site, linked);
+                linked
+            };
+            let target = self.resolve_dynamic_target(linked)?;
+            self.invoke_method_handle(target, args)
         } else {
             Ok(Some(Value::Reference(Reference::Null)))
         }
@@ -1030,34 +1138,33 @@ impl Vm {
             arguments,
         } = &site.kind
         {
-            self.ensure_class_loaded(bootstrap_class)?;
-            let (_resolved_class, class_method) =
-                self.resolve_method(bootstrap_class, bootstrap_name, bootstrap_descriptor)?;
-            let mut all_args = args;
-            for idx in arguments {
-                if let Some(val) = self.resolve_method_handle_arg_for_interp(*idx) {
-                    all_args.push(val);
-                }
-            }
-            match class_method {
-                ClassMethod::Native => {
-                    let result = self.invoke_native(
-                        bootstrap_class,
-                        bootstrap_name,
-                        bootstrap_descriptor,
-                        &all_args,
-                    )?;
-                    if let Some(value) = result {
-                        thread.current_frame_mut().push(value)?;
+            let linked = if let Some(linked) = self.get_linked_dynamic_site(site) {
+                linked
+            } else {
+                let caller_class_name = thread.current_frame().class_name.clone();
+                let mut bootstrap_args =
+                    self.bootstrap_method_leading_args(site, Some(&caller_class_name))?;
+                for arg in arguments {
+                    if let Some(val) = self.resolve_bootstrap_argument_value(arg)? {
+                        bootstrap_args.push(val);
                     }
-                    Ok(())
                 }
-                ClassMethod::Bytecode(method) => {
-                    let frame = method.with_initial_locals(Vm::args_to_locals(all_args));
-                    thread.push_frame(Frame::new(frame));
-                    Ok(())
-                }
+                let result = self.reflect_invoke_method(
+                    bootstrap_class,
+                    bootstrap_name,
+                    bootstrap_descriptor,
+                    None,
+                    bootstrap_args,
+                )?;
+                let linked = self.extract_linked_dynamic_target(result)?;
+                self.set_linked_dynamic_site(site, linked);
+                linked
+            };
+            let target = self.resolve_dynamic_target(linked)?;
+            if let Some(value) = self.invoke_method_handle(target, args)? {
+                thread.current_frame_mut().push(value)?;
             }
+            Ok(())
         } else {
             thread
                 .current_frame_mut()
@@ -1066,12 +1173,1147 @@ impl Vm {
         }
     }
 
-    fn resolve_method_handle_arg(&self, _index: u16) -> Option<Value> {
-        None
+    fn bootstrap_method_leading_args(
+        &mut self,
+        site: &InvokeDynamicSite,
+        caller_class_name: Option<&str>,
+    ) -> Result<Vec<Value>, VmError> {
+        let lookup =
+            self.allocate_bootstrap_lookup(caller_class_name.unwrap_or("java/lang/Object"))?;
+        let invoked_name = self.new_string(site.name.clone());
+        let invoked_type = self.allocate_bootstrap_method_type(&site.descriptor)?;
+        Ok(vec![
+            Value::Reference(lookup),
+            invoked_name,
+            Value::Reference(invoked_type),
+        ])
     }
 
-    fn resolve_method_handle_arg_for_interp(&self, _index: u16) -> Option<Value> {
-        None
+    pub(crate) fn allocate_bootstrap_lookup(
+        &mut self,
+        caller_class_name: &str,
+    ) -> Result<Reference, VmError> {
+        self.allocate_bootstrap_lookup_with_modes(caller_class_name, LOOKUP_FULL_POWER_MODES)
+    }
+
+    pub(crate) fn allocate_bootstrap_lookup_with_modes(
+        &mut self,
+        caller_class_name: &str,
+        modes: i32,
+    ) -> Result<Reference, VmError> {
+        self.ensure_bootstrap_placeholder_class(
+            "java/lang/invoke/MethodHandles$Lookup",
+            vec![
+                ("__lookupClass".to_string(), "Ljava/lang/Class;".to_string()),
+                ("__modes".to_string(), "I".to_string()),
+            ],
+        );
+        {
+            let mut runtime = self.runtime.lock().unwrap();
+            if let Some(class) = runtime
+                .classes
+                .get_mut("java/lang/invoke/MethodHandles$Lookup")
+            {
+                if !class.field_offsets.contains_key("__modes") {
+                    let offset = class.instance_fields.len();
+                    class
+                        .instance_fields
+                        .push(("__modes".to_string(), "I".to_string()));
+                    class.field_offsets.insert("__modes".to_string(), offset);
+                }
+            }
+        }
+
+        let class = self.get_class("java/lang/invoke/MethodHandles$Lookup")?;
+        let mut fields = vec![Value::Reference(Reference::Null); class.instance_fields.len()];
+        if let Some(offset) = class.field_offsets.get("__lookupClass").copied() {
+            fields[offset] = Value::Reference(self.class_object(caller_class_name));
+        }
+        if let Some(offset) = class.field_offsets.get("__modes").copied() {
+            fields[offset] = Value::Int(modes);
+        }
+        Ok(self.heap.lock().unwrap().allocate(HeapValue::Object {
+            class_name: "java/lang/invoke/MethodHandles$Lookup".to_string(),
+            fields,
+        }))
+    }
+
+    fn allocate_bootstrap_method_type(&mut self, descriptor: &str) -> Result<Reference, VmError> {
+        self.ensure_bootstrap_placeholder_class(
+            "java/lang/invoke/MethodType",
+            vec![("__descriptor".to_string(), "Ljava/lang/String;".to_string())],
+        );
+
+        let class = self.get_class("java/lang/invoke/MethodType")?;
+        let mut fields = vec![Value::Reference(Reference::Null); class.instance_fields.len()];
+        if let Some(offset) = class.field_offsets.get("__descriptor").copied() {
+            fields[offset] = self.new_string(descriptor.to_string());
+        }
+        Ok(self.heap.lock().unwrap().allocate(HeapValue::Object {
+            class_name: "java/lang/invoke/MethodType".to_string(),
+            fields,
+        }))
+    }
+
+    fn ensure_bootstrap_placeholder_class(
+        &mut self,
+        class_name: &str,
+        instance_fields: Vec<(String, String)>,
+    ) {
+        if self
+            .runtime
+            .lock()
+            .unwrap()
+            .classes
+            .contains_key(class_name)
+        {
+            return;
+        }
+
+        let field_offsets = instance_fields
+            .iter()
+            .enumerate()
+            .map(|(i, (name, _))| (name.clone(), i))
+            .collect();
+        self.register_class(RuntimeClass {
+            name: class_name.to_string(),
+            super_class: Some("java/lang/Object".to_string()),
+            methods: HashMap::new(),
+            static_fields: HashMap::new(),
+            instance_fields,
+            field_offsets,
+            interfaces: vec![],
+        });
+    }
+
+    fn linked_dynamic_site_key(site: &InvokeDynamicSite) -> String {
+        format!("{}#{}", site.owner_class, site.constant_pool_index)
+    }
+
+    /// True for `invokevirtual` targets whose call-site descriptor is treated
+    /// as polymorphic (JVMS §5.4.3.5): every site of `MethodHandle.invoke*` or
+    /// `VarHandle.<accessMode>` is linked by the descriptor *of the site*, not
+    /// of any declared overload.
+    pub(crate) fn is_signature_polymorphic(class_name: &str, method_name: &str) -> bool {
+        match class_name {
+            "java/lang/invoke/MethodHandle" => matches!(
+                method_name,
+                "invoke" | "invokeExact" | "invokeBasic" | "invokeWithArguments"
+            ),
+            "java/lang/invoke/VarHandle" => matches!(
+                method_name,
+                "get"
+                    | "set"
+                    | "getVolatile"
+                    | "setVolatile"
+                    | "getAcquire"
+                    | "setRelease"
+                    | "getOpaque"
+                    | "setOpaque"
+                    | "compareAndSet"
+                    | "compareAndExchange"
+                    | "compareAndExchangeAcquire"
+                    | "compareAndExchangeRelease"
+                    | "weakCompareAndSet"
+                    | "weakCompareAndSetPlain"
+                    | "weakCompareAndSetAcquire"
+                    | "weakCompareAndSetRelease"
+                    | "getAndSet"
+                    | "getAndSetAcquire"
+                    | "getAndSetRelease"
+                    | "getAndAdd"
+                    | "getAndAddAcquire"
+                    | "getAndAddRelease"
+                    | "getAndBitwiseOr"
+                    | "getAndBitwiseOrAcquire"
+                    | "getAndBitwiseOrRelease"
+                    | "getAndBitwiseAnd"
+                    | "getAndBitwiseAndAcquire"
+                    | "getAndBitwiseAndRelease"
+                    | "getAndBitwiseXor"
+                    | "getAndBitwiseXorAcquire"
+                    | "getAndBitwiseXorRelease"
+            ),
+            _ => false,
+        }
+    }
+
+    /// Dispatch a signature-polymorphic `invokevirtual`. The receiver is the
+    /// `MethodHandle` (or `VarHandle`); `args` is the call-site arguments.
+    fn invoke_signature_polymorphic(
+        &mut self,
+        receiver: Reference,
+        method_ref: &MethodRef,
+        args: Vec<Value>,
+    ) -> Result<Option<Value>, VmError> {
+        if receiver == Reference::Null {
+            return Err(VmError::UnhandledException {
+                class_name: "java/lang/NullPointerException".to_string(),
+            });
+        }
+        match method_ref.class_name.as_str() {
+            "java/lang/invoke/MethodHandle" => self.invoke_method_handle(receiver, args),
+            "java/lang/invoke/VarHandle" => self.invoke_var_handle_access(
+                receiver,
+                &method_ref.method_name,
+                &method_ref.descriptor,
+                args,
+            ),
+            _ => Err(VmError::MethodNotFound {
+                class_name: method_ref.class_name.clone(),
+                method_name: method_ref.method_name.clone(),
+                descriptor: method_ref.descriptor.clone(),
+            }),
+        }
+    }
+
+    /// Placeholder for `VarHandle.<accessMode>(...)`. M3 will implement real
+    /// memory-ordering and CAS semantics; until then dispatch returns an error
+    /// so callers can be tested against the same code path.
+    fn invoke_var_handle_access(
+        &mut self,
+        _handle: Reference,
+        method_name: &str,
+        descriptor: &str,
+        _args: Vec<Value>,
+    ) -> Result<Option<Value>, VmError> {
+        Err(VmError::UnsupportedNativeMethod {
+            class_name: "java/lang/invoke/VarHandle".to_string(),
+            method_name: method_name.to_string(),
+            descriptor: descriptor.to_string(),
+        })
+    }
+
+    /// Resolves a constant-pool entry for `ldc`/`ldc_w`/`ldc2_w`, falling back
+    /// to `CONSTANT_Dynamic` bootstrap resolution when the static slot is empty.
+    fn load_constant_or_condy(
+        &mut self,
+        thread: &Thread,
+        index: usize,
+    ) -> Result<Value, VmError> {
+        let condy = thread
+            .current_frame()
+            .condy_sites
+            .get(index)
+            .and_then(|slot| slot.as_ref())
+            .cloned();
+        if let Some(site) = condy {
+            return self.resolve_condy_site(&site);
+        }
+        thread.current_frame().load_constant(index)
+    }
+
+    fn get_linked_dynamic_site(&self, site: &InvokeDynamicSite) -> Option<Reference> {
+        self.runtime
+            .lock()
+            .unwrap()
+            .linked_dynamic_sites
+            .get(&Self::linked_dynamic_site_key(site))
+            .copied()
+    }
+
+    fn set_linked_dynamic_site(&mut self, site: &InvokeDynamicSite, target: Reference) {
+        self.runtime
+            .lock()
+            .unwrap()
+            .linked_dynamic_sites
+            .insert(Self::linked_dynamic_site_key(site), target);
+    }
+
+    /// Registers the CallSite hierarchy as placeholder classes with a single
+    /// `__target: MethodHandle` field. ConstantCallSite is immutable; Mutable
+    /// and Volatile are kept distinct so the dispatch path can tell whether to
+    /// re-read the target on every invocation.
+    pub(crate) fn ensure_callsite_classes(&mut self) {
+        let fields = vec![("__target".to_string(), "Ljava/lang/invoke/MethodHandle;".to_string())];
+        for class_name in [
+            "java/lang/invoke/CallSite",
+            "java/lang/invoke/ConstantCallSite",
+            "java/lang/invoke/MutableCallSite",
+            "java/lang/invoke/VolatileCallSite",
+        ] {
+            self.ensure_bootstrap_placeholder_class(class_name, fields.clone());
+        }
+    }
+
+    fn ensure_method_handle_class(&mut self) {
+        let fields = vec![
+            ("__kind".to_string(), "I".to_string()),
+            ("__targetClass".to_string(), "Ljava/lang/Class;".to_string()),
+            ("__targetName".to_string(), "Ljava/lang/String;".to_string()),
+            (
+                "__targetDesc".to_string(),
+                "Ljava/lang/invoke/MethodType;".to_string(),
+            ),
+            (
+                "__constantValue".to_string(),
+                "Ljava/lang/Object;".to_string(),
+            ),
+            ("__lookupClass".to_string(), "Ljava/lang/Class;".to_string()),
+        ];
+        self.ensure_bootstrap_placeholder_class("java/lang/invoke/MethodHandle", fields);
+
+        let mut runtime = self.runtime.lock().unwrap();
+        if let Some(class) = runtime.classes.get_mut("java/lang/invoke/MethodHandle") {
+            if !class.field_offsets.contains_key("__lookupClass") {
+                let offset = class.instance_fields.len();
+                class
+                    .instance_fields
+                    .push(("__lookupClass".to_string(), "Ljava/lang/Class;".to_string()));
+                class
+                    .field_offsets
+                    .insert("__lookupClass".to_string(), offset);
+            }
+        }
+    }
+
+    fn resolve_bootstrap_argument_value(
+        &mut self,
+        argument: &BootstrapArgument,
+    ) -> Result<Option<Value>, VmError> {
+        match argument {
+            BootstrapArgument::Int(value) => Ok(Some(Value::Int(*value))),
+            BootstrapArgument::Long(value) => Ok(Some(Value::Long(*value))),
+            BootstrapArgument::Float(value) => Ok(Some(Value::Float(*value))),
+            BootstrapArgument::Double(value) => Ok(Some(Value::Double(*value))),
+            BootstrapArgument::String(value) => Ok(Some(self.new_string(value.clone()))),
+            BootstrapArgument::Class(class_name) => {
+                Ok(Some(Value::Reference(self.class_object(class_name))))
+            }
+            BootstrapArgument::MethodType(descriptor) => Ok(Some(Value::Reference(
+                self.allocate_bootstrap_method_type(descriptor)?,
+            ))),
+            BootstrapArgument::MethodHandle {
+                reference_kind,
+                target_class,
+                target_method,
+                target_descriptor,
+            } => Ok(Some(Value::Reference(
+                self.allocate_bootstrap_method_handle(
+                    *reference_kind,
+                    target_class,
+                    target_method,
+                    target_descriptor,
+                    None,
+                )?,
+            ))),
+            BootstrapArgument::Dynamic {
+                name,
+                descriptor,
+                bootstrap_class,
+                bootstrap_name,
+                bootstrap_descriptor,
+                arguments,
+            } => Ok(Some(self.resolve_condy_nested(
+                name,
+                descriptor,
+                bootstrap_class,
+                bootstrap_name,
+                bootstrap_descriptor,
+                arguments,
+            )?)),
+        }
+    }
+
+    /// Resolves a `CONSTANT_Dynamic` constant given its parsed bootstrap info.
+    /// Tries fast paths in `java/lang/invoke/ConstantBootstraps` before
+    /// dispatching the bootstrap method like any other invokedynamic.
+    fn resolve_condy_nested(
+        &mut self,
+        name: &str,
+        descriptor: &str,
+        bootstrap_class: &str,
+        bootstrap_name: &str,
+        bootstrap_descriptor: &str,
+        arguments: &[BootstrapArgument],
+    ) -> Result<Value, VmError> {
+        if let Some(value) =
+            self.try_constant_bootstraps_fast_path(bootstrap_class, bootstrap_name, name, descriptor, arguments)?
+        {
+            return Ok(value);
+        }
+        let lookup = self.allocate_bootstrap_lookup("java/lang/Object")?;
+        let invoked_name = self.new_string(name.to_string());
+        let invoked_type = self.condy_type_object(descriptor)?;
+        let mut bootstrap_args = vec![
+            Value::Reference(lookup),
+            invoked_name,
+            invoked_type,
+        ];
+        for arg in arguments {
+            if let Some(val) = self.resolve_bootstrap_argument_value(arg)? {
+                bootstrap_args.push(val);
+            }
+        }
+        let result = self.reflect_invoke_method(
+            bootstrap_class,
+            bootstrap_name,
+            bootstrap_descriptor,
+            None,
+            bootstrap_args,
+        )?;
+        Ok(result.unwrap_or(Value::Reference(Reference::Null)))
+    }
+
+    /// Resolves a `CondySite` and caches the result keyed by `(owner_class, cp_index)`.
+    pub(crate) fn resolve_condy_site(
+        &mut self,
+        site: &CondySite,
+    ) -> Result<Value, VmError> {
+        let key = format!("{}#{}", site.owner_class, site.constant_pool_index);
+        if let Some(value) = self
+            .runtime
+            .lock()
+            .unwrap()
+            .linked_condy_constants
+            .get(&key)
+            .copied()
+        {
+            return Ok(value);
+        }
+        let value = self.resolve_condy_nested(
+            &site.name,
+            &site.descriptor,
+            &site.bootstrap_class,
+            &site.bootstrap_name,
+            &site.bootstrap_descriptor,
+            &site.arguments,
+        )?;
+        self.runtime
+            .lock()
+            .unwrap()
+            .linked_condy_constants
+            .insert(key, value);
+        Ok(value)
+    }
+
+    /// For condy, the third bootstrap arg is `Class<?>` (the constant type) for
+    /// `ConstantBootstraps`-style bootstraps; for arbitrary user bootstraps it
+    /// is a `MethodType`. Detect by leading `(` to decide; otherwise treat as a
+    /// field descriptor and pass a `Class` object.
+    fn condy_type_object(&mut self, descriptor: &str) -> Result<Value, VmError> {
+        if descriptor.starts_with('(') {
+            Ok(Value::Reference(
+                self.allocate_bootstrap_method_type(descriptor)?,
+            ))
+        } else {
+            let class_name = match descriptor {
+                "I" => "java/lang/Integer",
+                "J" => "java/lang/Long",
+                "F" => "java/lang/Float",
+                "D" => "java/lang/Double",
+                "Z" => "java/lang/Boolean",
+                "B" => "java/lang/Byte",
+                "C" => "java/lang/Character",
+                "S" => "java/lang/Short",
+                "V" => "java/lang/Void",
+                other if other.starts_with('L') && other.ends_with(';') => {
+                    &other[1..other.len() - 1]
+                }
+                other => other,
+            };
+            Ok(Value::Reference(self.class_object(class_name)))
+        }
+    }
+
+    /// Fast-path implementations of standard `java.lang.invoke.ConstantBootstraps`
+    /// entries so we don't need real JDK bytecode for the common condy cases.
+    fn try_constant_bootstraps_fast_path(
+        &mut self,
+        bootstrap_class: &str,
+        bootstrap_name: &str,
+        name: &str,
+        descriptor: &str,
+        arguments: &[BootstrapArgument],
+    ) -> Result<Option<Value>, VmError> {
+        if bootstrap_class != "java/lang/invoke/ConstantBootstraps" {
+            return Ok(None);
+        }
+        match bootstrap_name {
+            "nullConstant" => Ok(Some(Value::Reference(Reference::Null))),
+            "primitiveClass" => {
+                let class_name = match name {
+                    "I" => "I",
+                    "J" => "J",
+                    "F" => "F",
+                    "D" => "D",
+                    "Z" => "Z",
+                    "B" => "B",
+                    "C" => "C",
+                    "S" => "S",
+                    "V" => "V",
+                    other => other,
+                };
+                Ok(Some(Value::Reference(self.class_object(class_name))))
+            }
+            "getStaticFinal" => {
+                let owner = match arguments.first() {
+                    Some(BootstrapArgument::Class(c)) => c.clone(),
+                    _ => {
+                        let desc = descriptor.trim_start_matches('L').trim_end_matches(';');
+                        desc.to_string()
+                    }
+                };
+                self.ensure_class_loaded(&owner)?;
+                self.ensure_class_initialized(&owner)?;
+                Ok(Some(self.get_static_field(&owner, name)?))
+            }
+            "enumConstant" => {
+                let owner = descriptor.trim_start_matches('L').trim_end_matches(';');
+                self.ensure_class_loaded(owner)?;
+                self.ensure_class_initialized(owner)?;
+                Ok(Some(self.get_static_field(owner, name)?))
+            }
+            "invoke" => {
+                // arg 0 is a MethodHandle, remaining args are passed to it.
+                let mut iter = arguments.iter();
+                let mh_arg = iter.next().ok_or(VmError::StackUnderflow)?;
+                let handle_value = self
+                    .resolve_bootstrap_argument_value(mh_arg)?
+                    .unwrap_or(Value::Reference(Reference::Null));
+                let handle_ref = handle_value.as_reference()?;
+                let mut args = Vec::new();
+                for arg in iter {
+                    if let Some(val) = self.resolve_bootstrap_argument_value(arg)? {
+                        args.push(val);
+                    }
+                }
+                Ok(Some(
+                    self.invoke_method_handle(handle_ref, args)?
+                        .unwrap_or(Value::Reference(Reference::Null)),
+                ))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn allocate_bootstrap_method_handle(
+        &mut self,
+        reference_kind: u8,
+        target_class: &str,
+        target_method: &str,
+        target_descriptor: &str,
+        constant_value: Option<Value>,
+    ) -> Result<Reference, VmError> {
+        self.allocate_bootstrap_method_handle_with_lookup(
+            reference_kind,
+            target_class,
+            target_method,
+            target_descriptor,
+            constant_value,
+            None,
+        )
+    }
+
+    pub(crate) fn allocate_bootstrap_method_handle_with_lookup(
+        &mut self,
+        reference_kind: u8,
+        target_class: &str,
+        target_method: &str,
+        target_descriptor: &str,
+        constant_value: Option<Value>,
+        lookup_class: Option<&str>,
+    ) -> Result<Reference, VmError> {
+        self.ensure_method_handle_class();
+        let class = self.get_class("java/lang/invoke/MethodHandle")?;
+        let mut fields = vec![Value::Reference(Reference::Null); class.instance_fields.len()];
+        if let Some(offset) = class.field_offsets.get("__kind").copied() {
+            fields[offset] = Value::Int(reference_kind as i32);
+        }
+        if let Some(offset) = class.field_offsets.get("__targetClass").copied() {
+            fields[offset] = Value::Reference(self.class_object(target_class));
+        }
+        if let Some(offset) = class.field_offsets.get("__targetName").copied() {
+            fields[offset] = self.new_string(target_method.to_string());
+        }
+        if let Some(offset) = class.field_offsets.get("__targetDesc").copied() {
+            fields[offset] =
+                Value::Reference(self.allocate_bootstrap_method_type(target_descriptor)?);
+        }
+        if let Some(offset) = class.field_offsets.get("__constantValue").copied() {
+            fields[offset] = constant_value.unwrap_or(Value::Reference(Reference::Null));
+        }
+        if let (Some(offset), Some(lookup_class)) = (
+            class.field_offsets.get("__lookupClass").copied(),
+            lookup_class,
+        ) {
+            fields[offset] = Value::Reference(self.class_object(lookup_class));
+        }
+        Ok(self.heap.lock().unwrap().allocate(HeapValue::Object {
+            class_name: "java/lang/invoke/MethodHandle".to_string(),
+            fields,
+        }))
+    }
+
+    fn extract_linked_dynamic_target(
+        &mut self,
+        result: Option<Value>,
+    ) -> Result<Reference, VmError> {
+        let value = result.unwrap_or(Value::Reference(Reference::Null));
+        let reference = value.as_reference()?;
+        if reference == Reference::Null {
+            return Err(VmError::UnhandledException {
+                class_name: "java/lang/NullPointerException".to_string(),
+            });
+        }
+        let class_name = self.get_object_class(reference)?;
+        match class_name.as_str() {
+            "java/lang/invoke/MethodHandle" => Ok(reference),
+            // Eagerly unwrap immutable call sites; mutable / volatile sites are
+            // kept as the call-site reference so subsequent `setTarget` calls
+            // are observed by later invocations.
+            "java/lang/invoke/ConstantCallSite" | "java/lang/invoke/CallSite" => {
+                self.get_object_field(reference, "__target")?.as_reference()
+            }
+            "java/lang/invoke/MutableCallSite" | "java/lang/invoke/VolatileCallSite" => {
+                Ok(reference)
+            }
+            _ => Err(VmError::TypeMismatch {
+                expected: "java/lang/invoke/CallSite or MethodHandle",
+                actual: "unexpected bootstrap result",
+            }),
+        }
+    }
+
+    /// Translate a cached indy binding (either a MethodHandle or a CallSite
+    /// reference) into the MethodHandle to invoke. For Mutable/VolatileCallSite
+    /// the current `__target` is re-read on every invocation so `setTarget`
+    /// changes take effect immediately.
+    fn resolve_dynamic_target(&mut self, linked: Reference) -> Result<Reference, VmError> {
+        if linked == Reference::Null {
+            return Err(VmError::UnhandledException {
+                class_name: "java/lang/NullPointerException".to_string(),
+            });
+        }
+        let class_name = self.get_object_class(linked)?;
+        match class_name.as_str() {
+            "java/lang/invoke/MethodHandle" => Ok(linked),
+            "java/lang/invoke/MutableCallSite" | "java/lang/invoke/VolatileCallSite" => {
+                self.get_object_field(linked, "__target")?.as_reference()
+            }
+            _ => Ok(linked),
+        }
+    }
+
+    fn invoke_method_handle(
+        &mut self,
+        handle_ref: Reference,
+        args: Vec<Value>,
+    ) -> Result<Option<Value>, VmError> {
+        let (kind, target_class, target_name, target_descriptor, constant_value, lookup_class) = {
+            let kind = self.get_object_field(handle_ref, "__kind")?.as_int()?;
+            let target_class_ref = self
+                .get_object_field(handle_ref, "__targetClass")?
+                .as_reference()?;
+            let target_name_ref = self
+                .get_object_field(handle_ref, "__targetName")?
+                .as_reference()?;
+            let target_desc_ref = self
+                .get_object_field(handle_ref, "__targetDesc")?
+                .as_reference()?;
+            let constant_value = self.get_object_field(handle_ref, "__constantValue")?;
+            let lookup_class_ref = self
+                .get_object_field(handle_ref, "__lookupClass")
+                .ok()
+                .and_then(|value| value.as_reference().ok())
+                .unwrap_or(Reference::Null);
+            let target_class = if target_class_ref == Reference::Null {
+                String::new()
+            } else {
+                crate::vm::builtin::helpers::class_internal_name(self, target_class_ref)?
+            };
+            let target_name = if target_name_ref == Reference::Null {
+                String::new()
+            } else {
+                self.stringify_reference(target_name_ref)?
+            };
+            let target_descriptor = if target_desc_ref == Reference::Null {
+                String::new()
+            } else {
+                let desc_ref = self
+                    .get_object_field(target_desc_ref, "__descriptor")?
+                    .as_reference()?;
+                self.stringify_reference(desc_ref)?
+            };
+            let lookup_class = if lookup_class_ref == Reference::Null {
+                None
+            } else {
+                Some(crate::vm::builtin::helpers::class_internal_name(
+                    self,
+                    lookup_class_ref,
+                )?)
+            };
+            (
+                kind,
+                target_class,
+                target_name,
+                target_descriptor,
+                constant_value,
+                lookup_class,
+            )
+        };
+
+        match kind {
+            1 => {
+                let receiver = args
+                    .first()
+                    .copied()
+                    .ok_or(VmError::StackUnderflow)?
+                    .as_reference()?;
+                self.validate_method_handle_receiver_access(
+                    lookup_class.as_deref(),
+                    &target_class,
+                    &target_name,
+                    &target_descriptor,
+                    kind,
+                    receiver,
+                )?;
+                self.get_instance_field_from_declaring(receiver, &target_class, &target_name)
+                    .map(Some)
+            }
+            2 => self.get_static_field(&target_class, &target_name).map(Some),
+            3 => {
+                let receiver = args
+                    .first()
+                    .copied()
+                    .ok_or(VmError::StackUnderflow)?
+                    .as_reference()?;
+                let value = args.get(1).copied().ok_or(VmError::StackUnderflow)?;
+                self.validate_method_handle_receiver_access(
+                    lookup_class.as_deref(),
+                    &target_class,
+                    &target_name,
+                    &target_descriptor,
+                    kind,
+                    receiver,
+                )?;
+                self.set_object_field_from_declaring(receiver, &target_class, &target_name, value)?;
+                Ok(None)
+            }
+            4 => {
+                let value = args.first().copied().ok_or(VmError::StackUnderflow)?;
+                self.put_static_field(&target_class, &target_name, value)?;
+                Ok(None)
+            }
+            5 => {
+                let receiver = args
+                    .first()
+                    .copied()
+                    .ok_or(VmError::StackUnderflow)?
+                    .as_reference()?;
+                self.validate_method_handle_receiver_access(
+                    lookup_class.as_deref(),
+                    &target_class,
+                    &target_name,
+                    &target_descriptor,
+                    kind,
+                    receiver,
+                )?;
+                self.reflect_invoke_method(
+                    &target_class,
+                    &target_name,
+                    &target_descriptor,
+                    Some(receiver),
+                    args[1..].to_vec(),
+                )
+            }
+            6 => self.reflect_invoke_method(
+                &target_class,
+                &target_name,
+                &target_descriptor,
+                None,
+                args,
+            ),
+            7 => {
+                let receiver = args
+                    .first()
+                    .copied()
+                    .ok_or(VmError::StackUnderflow)?
+                    .as_reference()?;
+                self.validate_method_handle_receiver_access(
+                    lookup_class.as_deref(),
+                    &target_class,
+                    &target_name,
+                    &target_descriptor,
+                    kind,
+                    receiver,
+                )?;
+                self.invoke_exact_instance_method(
+                    &target_class,
+                    &target_name,
+                    &target_descriptor,
+                    receiver,
+                    args[1..].to_vec(),
+                )
+            }
+            8 => self
+                .reflect_new_instance(&target_class, &target_descriptor, args)
+                .map(|reference| Some(Value::Reference(reference))),
+            9 => {
+                let receiver = args
+                    .first()
+                    .copied()
+                    .ok_or(VmError::StackUnderflow)?
+                    .as_reference()?;
+                self.validate_method_handle_receiver_access(
+                    lookup_class.as_deref(),
+                    &target_class,
+                    &target_name,
+                    &target_descriptor,
+                    kind,
+                    receiver,
+                )?;
+                self.reflect_invoke_method(
+                    &target_class,
+                    &target_name,
+                    &target_descriptor,
+                    Some(receiver),
+                    args[1..].to_vec(),
+                )
+            }
+            0 => Ok(Some(constant_value)),
+            _ => Err(VmError::UnsupportedNativeMethod {
+                class_name: "java/lang/invoke/MethodHandle".to_string(),
+                method_name: format!("invoke-kind-{kind}"),
+                descriptor: target_descriptor,
+            }),
+        }
+    }
+
+    fn invoke_exact_instance_method(
+        &mut self,
+        declaring_class: &str,
+        method_name: &str,
+        descriptor: &str,
+        receiver: Reference,
+        args: Vec<Value>,
+    ) -> Result<Option<Value>, VmError> {
+        self.ensure_class_loaded(declaring_class)?;
+        self.ensure_class_initialized(declaring_class)?;
+
+        let (resolved_class, class_method) =
+            self.resolve_method(declaring_class, method_name, descriptor)?;
+        let mut all_args = vec![Value::Reference(receiver)];
+        all_args.extend(args);
+        match class_method {
+            ClassMethod::Native => {
+                self.invoke_native(&resolved_class, method_name, descriptor, &all_args)
+            }
+            ClassMethod::Bytecode(method) => {
+                let callee = method.with_initial_locals(Vm::args_to_locals(all_args));
+                let saved_jit = self.jit.take();
+                let result = self.execute(callee);
+                self.jit = saved_jit;
+                match result? {
+                    ExecutionResult::Value(value) => Ok(Some(value)),
+                    ExecutionResult::Void => Ok(None),
+                }
+            }
+        }
+    }
+
+    pub(crate) fn validate_method_handle_lookup(
+        &mut self,
+        lookup_class: &str,
+        lookup_modes: i32,
+        owner_class: &str,
+        member_name: &str,
+        descriptor: &str,
+        reference_kind: u8,
+    ) -> Result<(), VmError> {
+        let (resolved_class, class_method) = match reference_kind {
+            5 | 6 | 9 => self.resolve_method(owner_class, member_name, descriptor)?,
+            7 | 8 => {
+                self.ensure_class_loaded(owner_class)?;
+                let class = self.get_class(owner_class)?;
+                let class_method = class
+                    .methods
+                    .get(&(member_name.to_string(), descriptor.to_string()))
+                    .cloned()
+                    .ok_or_else(|| VmError::MethodNotFound {
+                        class_name: owner_class.to_string(),
+                        method_name: member_name.to_string(),
+                        descriptor: descriptor.to_string(),
+                    })?;
+                (owner_class.to_string(), class_method)
+            }
+            _ => return Ok(()),
+        };
+
+        if member_name == "<init>" && reference_kind != 8 {
+            return Err(VmError::UnhandledException {
+                class_name: "java/lang/NoSuchMethodException".to_string(),
+            });
+        }
+
+        let access_flags = match &class_method {
+            ClassMethod::Bytecode(method) => method.access_flags,
+            ClassMethod::Native => 0x0001,
+        };
+        let is_static = access_flags & 0x0008 != 0;
+        match reference_kind {
+            5 | 9 if is_static => {
+                return Err(VmError::UnhandledException {
+                    class_name: "java/lang/NoSuchMethodException".to_string(),
+                });
+            }
+            6 if !is_static => {
+                return Err(VmError::UnhandledException {
+                    class_name: "java/lang/NoSuchMethodException".to_string(),
+                });
+            }
+            7 if is_static => {
+                return Err(VmError::UnhandledException {
+                    class_name: "java/lang/NoSuchMethodException".to_string(),
+                });
+            }
+            8 if member_name != "<init>" => {
+                return Err(VmError::UnhandledException {
+                    class_name: "java/lang/NoSuchMethodException".to_string(),
+                });
+            }
+            _ => {}
+        }
+
+        if !self.lookup_access_permitted(
+            lookup_class,
+            lookup_modes,
+            &resolved_class,
+            access_flags,
+        )? {
+            return Err(VmError::UnhandledException {
+                class_name: "java/lang/IllegalAccessException".to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    pub(crate) fn validate_field_method_handle_lookup(
+        &mut self,
+        lookup_class: &str,
+        lookup_modes: i32,
+        owner_class: &str,
+        field_name: &str,
+        descriptor: &str,
+        reference_kind: u8,
+    ) -> Result<String, VmError> {
+        let is_static = matches!(reference_kind, 2 | 4);
+        let resolved_class = self.resolve_field(owner_class, field_name, descriptor, is_static)?;
+        let access_flags = self
+            .field_access_flags(&resolved_class, field_name)
+            .unwrap_or(0x0001);
+        self.validate_lookup_member_access(
+            lookup_class,
+            lookup_modes,
+            &resolved_class,
+            access_flags,
+        )?;
+        Ok(resolved_class)
+    }
+
+    fn resolve_field(
+        &mut self,
+        owner_class: &str,
+        field_name: &str,
+        descriptor: &str,
+        is_static: bool,
+    ) -> Result<String, VmError> {
+        let mut current = Some(owner_class.to_string());
+        while let Some(class_name) = current {
+            self.ensure_class_loaded(&class_name)?;
+            let class = self.get_class(&class_name)?;
+            let found = if is_static {
+                class.static_fields.contains_key(field_name)
+                    && self
+                        .field_descriptor(&class_name, field_name)
+                        .map(|field_descriptor| field_descriptor == descriptor)
+                        .unwrap_or_else(|| {
+                            class
+                                .static_fields
+                                .get(field_name)
+                                .map(|value| Self::field_value_descriptor(*value) == descriptor)
+                                .unwrap_or(false)
+                        })
+            } else {
+                class
+                    .instance_fields
+                    .iter()
+                    .any(|(name, desc)| name == field_name && desc == descriptor)
+            };
+            if found {
+                return Ok(class_name);
+            }
+            if is_static {
+                for interface in &class.interfaces {
+                    if let Some(resolved) =
+                        self.resolve_interface_field(interface, field_name, descriptor)?
+                    {
+                        return Ok(resolved);
+                    }
+                }
+            }
+            current = class.super_class.clone();
+        }
+        Err(VmError::FieldNotFound {
+            class_name: owner_class.to_string(),
+            field_name: field_name.to_string(),
+        })
+    }
+
+    fn resolve_interface_field(
+        &mut self,
+        interface_name: &str,
+        field_name: &str,
+        descriptor: &str,
+    ) -> Result<Option<String>, VmError> {
+        self.ensure_class_loaded(interface_name)?;
+        let interface = self.get_class(interface_name)?;
+        let found = interface.static_fields.contains_key(field_name)
+            && self
+                .field_descriptor(interface_name, field_name)
+                .map(|field_descriptor| field_descriptor == descriptor)
+                .unwrap_or_else(|| {
+                    interface
+                        .static_fields
+                        .get(field_name)
+                        .map(|value| Self::field_value_descriptor(*value) == descriptor)
+                        .unwrap_or(false)
+                });
+        if found {
+            return Ok(Some(interface_name.to_string()));
+        }
+        for parent in &interface.interfaces {
+            if let Some(resolved) = self.resolve_interface_field(parent, field_name, descriptor)? {
+                return Ok(Some(resolved));
+            }
+        }
+        Ok(None)
+    }
+
+    fn field_access_flags(&self, owner_class: &str, field_name: &str) -> Option<u16> {
+        self.runtime
+            .lock()
+            .unwrap()
+            .field_access_flags
+            .get(&(owner_class.to_string(), field_name.to_string()))
+            .copied()
+    }
+
+    pub(crate) fn field_descriptor(&self, owner_class: &str, field_name: &str) -> Option<String> {
+        self.runtime
+            .lock()
+            .unwrap()
+            .field_descriptors
+            .get(&(owner_class.to_string(), field_name.to_string()))
+            .cloned()
+    }
+
+    pub(crate) fn validate_lookup_member_access(
+        &mut self,
+        lookup_class: &str,
+        lookup_modes: i32,
+        declaring_class: &str,
+        access_flags: u16,
+    ) -> Result<(), VmError> {
+        if self.lookup_access_permitted(
+            lookup_class,
+            lookup_modes,
+            declaring_class,
+            access_flags,
+        )? {
+            Ok(())
+        } else {
+            Err(VmError::UnhandledException {
+                class_name: "java/lang/IllegalAccessException".to_string(),
+            })
+        }
+    }
+
+    fn lookup_access_permitted(
+        &mut self,
+        lookup_class: &str,
+        lookup_modes: i32,
+        declaring_class: &str,
+        access_flags: u16,
+    ) -> Result<bool, VmError> {
+        if lookup_modes & LOOKUP_PUBLIC == 0 {
+            return Ok(false);
+        }
+        if access_flags & 0x0001 != 0 {
+            return Ok(true);
+        }
+        if access_flags & 0x0002 != 0 {
+            return Ok(lookup_modes & LOOKUP_PRIVATE != 0 && lookup_class == declaring_class);
+        }
+        if access_flags & 0x0004 != 0 {
+            return Ok(lookup_modes & LOOKUP_PROTECTED != 0
+                && (lookup_class == declaring_class
+                    || self.same_runtime_package(lookup_class, declaring_class)
+                    || self.is_instance_of(lookup_class, declaring_class)?));
+        }
+        Ok(lookup_modes & LOOKUP_PACKAGE != 0
+            && self.same_runtime_package(lookup_class, declaring_class))
+    }
+
+    fn validate_method_handle_receiver_access(
+        &mut self,
+        lookup_class: Option<&str>,
+        declaring_class: &str,
+        member_name: &str,
+        descriptor: &str,
+        reference_kind: i32,
+        receiver: Reference,
+    ) -> Result<(), VmError> {
+        let Some(lookup_class) = lookup_class else {
+            return Ok(());
+        };
+        let access_flags = match reference_kind {
+            1 | 3 => self
+                .field_access_flags(declaring_class, member_name)
+                .unwrap_or(0x0001),
+            5 | 7 | 9 => {
+                let (_, class_method) =
+                    self.resolve_method(declaring_class, member_name, descriptor)?;
+                match class_method {
+                    ClassMethod::Bytecode(method) => method.access_flags,
+                    ClassMethod::Native => 0x0001,
+                }
+            }
+            _ => return Ok(()),
+        };
+        if access_flags & 0x0004 == 0
+            || lookup_class == declaring_class
+            || self.same_runtime_package(lookup_class, declaring_class)
+            || !self.is_instance_of(lookup_class, declaring_class)?
+        {
+            return Ok(());
+        }
+
+        let receiver_class = self.get_object_class(receiver)?;
+        if self.is_instance_of(&receiver_class, lookup_class)? {
+            Ok(())
+        } else {
+            Err(VmError::UnhandledException {
+                class_name: "java/lang/IllegalAccessException".to_string(),
+            })
+        }
+    }
+
+    pub(crate) fn same_runtime_package(&self, lhs: &str, rhs: &str) -> bool {
+        let lhs_pkg = lhs.rsplit_once('/').map(|(pkg, _)| pkg).unwrap_or("");
+        let rhs_pkg = rhs.rsplit_once('/').map(|(pkg, _)| pkg).unwrap_or("");
+        lhs_pkg == rhs_pkg
+    }
+
+    fn field_value_descriptor(value: Value) -> &'static str {
+        match value {
+            Value::Int(_) => "I",
+            Value::Long(_) => "J",
+            Value::Float(_) => "F",
+            Value::Double(_) => "D",
+            Value::Reference(_) => "Ljava/lang/Object;",
+            Value::ReturnAddress(_) => "I",
+        }
     }
 
     pub(crate) fn invoke_jit_get_static_field_ref(
@@ -1105,17 +2347,15 @@ impl Vm {
     ) -> Result<Value, VmError> {
         let receiver = Vm::jit_raw_reference(receiver_raw).ok_or(VmError::NullReference)?;
         match self.heap.lock().unwrap().get(receiver)? {
-            HeapValue::Object { class_name, fields, .. } => {
-                let class = self.get_class(class_name).map_err(|_| VmError::ClassNotFound {
-                    class_name: class_name.clone(),
-                })?;
-                let offset = class.field_offsets.get(&field_ref.field_name).ok_or_else(|| {
-                    VmError::FieldNotFound {
-                        class_name: field_ref.class_name.clone(),
-                        field_name: field_ref.field_name.clone(),
-                    }
-                })?;
-                Ok(fields[*offset])
+            HeapValue::Object {
+                class_name, fields, ..
+            } => {
+                let offset = self.instance_field_offset(
+                    class_name,
+                    Some(&field_ref.class_name),
+                    &field_ref.field_name,
+                )?;
+                Ok(fields[offset])
             }
             value => Err(VmError::InvalidHeapValue {
                 expected: "object",
@@ -1136,15 +2376,19 @@ impl Vm {
                 descriptor: field_ref.descriptor.clone(),
             },
         )?;
-        self.set_object_field(receiver, &field_ref.field_name, value)
+        self.set_object_field_from_declaring(
+            receiver,
+            &field_ref.class_name,
+            &field_ref.field_name,
+            value,
+        )
     }
 
     pub(crate) fn invoke_jit_allocate_object(&mut self, class_name: &str) -> Option<Reference> {
         self.ensure_class_loaded(class_name).ok()?;
         self.ensure_class_initialized(class_name).ok()?;
 
-        let class = self.get_class(class_name).ok()?;
-        let all_instance_fields = class.instance_fields.clone();
+        let all_instance_fields = self.collect_instance_fields(class_name).ok()?;
         let fields: Vec<Value> = all_instance_fields
             .iter()
             .map(|(_, descriptor)| default_value_for_descriptor(descriptor))
@@ -1763,19 +3007,29 @@ impl Vm {
         reference: Reference,
         field_name: &str,
     ) -> Result<Value, VmError> {
+        self.get_instance_field_from_declaring(reference, "", field_name)
+    }
+
+    fn get_instance_field_from_declaring(
+        &self,
+        reference: Reference,
+        declaring_class: &str,
+        field_name: &str,
+    ) -> Result<Value, VmError> {
         let heap = self.heap.lock().unwrap();
         match heap.get(reference)? {
-            HeapValue::Object { class_name, fields, .. } => {
-                let class = self.get_class(class_name).map_err(|_| VmError::ClassNotFound {
-                    class_name: class_name.clone(),
-                })?;
-                let offset = class.field_offsets.get(field_name).ok_or_else(|| {
-                    VmError::FieldNotFound {
+            HeapValue::Object {
+                class_name, fields, ..
+            } => {
+                let declaring_class = (!declaring_class.is_empty()).then_some(declaring_class);
+                let offset = self.instance_field_offset(class_name, declaring_class, field_name)?;
+                Ok(fields
+                    .get(offset)
+                    .copied()
+                    .ok_or_else(|| VmError::FieldNotFound {
                         class_name: class_name.clone(),
                         field_name: field_name.to_string(),
-                    }
-                })?;
-                Ok(fields[*offset])
+                    })?)
             }
             value => Err(VmError::InvalidHeapValue {
                 expected: "object",
@@ -1791,6 +3045,16 @@ impl Vm {
     fn set_object_field(
         &mut self,
         reference: Reference,
+        field_name: &str,
+        value: Value,
+    ) -> Result<(), VmError> {
+        self.set_object_field_from_declaring(reference, "", field_name, value)
+    }
+
+    fn set_object_field_from_declaring(
+        &mut self,
+        reference: Reference,
+        declaring_class: &str,
         field_name: &str,
         value: Value,
     ) -> Result<(), VmError> {
@@ -1815,17 +3079,18 @@ impl Vm {
         }
 
         match heap.get_mut(reference)? {
-            HeapValue::Object { class_name, fields, .. } => {
-                let class = self.get_class(class_name).map_err(|_| VmError::ClassNotFound {
-                    class_name: class_name.clone(),
-                })?;
-                let offset = class.field_offsets.get(field_name).ok_or_else(|| {
-                    VmError::FieldNotFound {
+            HeapValue::Object {
+                class_name, fields, ..
+            } => {
+                let declaring_class = (!declaring_class.is_empty()).then_some(declaring_class);
+                let offset = self.instance_field_offset(class_name, declaring_class, field_name)?;
+                if offset >= fields.len() {
+                    return Err(VmError::FieldNotFound {
                         class_name: class_name.clone(),
                         field_name: field_name.to_string(),
-                    }
-                })?;
-                fields[*offset] = value;
+                    });
+                }
+                fields[offset] = value;
                 Ok(())
             }
             value => Err(VmError::InvalidHeapValue {
@@ -1833,6 +3098,47 @@ impl Vm {
                 actual: value.kind_name(),
             }),
         }
+    }
+
+    fn instance_field_offset(
+        &self,
+        object_class: &str,
+        declaring_class: Option<&str>,
+        field_name: &str,
+    ) -> Result<usize, VmError> {
+        let mut offset = 0usize;
+        let mut current = Some(object_class.to_string());
+        while let Some(class_name) = current {
+            let class = self.get_class(&class_name)?;
+            for (name, _) in &class.instance_fields {
+                if name == field_name && declaring_class.map_or(true, |decl| decl == class_name) {
+                    return Ok(offset);
+                }
+                offset += 1;
+            }
+            current = class.super_class.clone();
+        }
+        Err(VmError::FieldNotFound {
+            class_name: declaring_class.unwrap_or(object_class).to_string(),
+            field_name: field_name.to_string(),
+        })
+    }
+
+    fn collect_instance_fields(
+        &mut self,
+        class_name: &str,
+    ) -> Result<Vec<(String, String)>, VmError> {
+        let mut all_instance_fields = Vec::new();
+        let mut current = Some(class_name.to_string());
+        while let Some(current_class) = current {
+            self.ensure_class_loaded(&current_class)?;
+            let class = self.get_class(&current_class)?;
+            for (name, desc) in &class.instance_fields {
+                all_instance_fields.push((name.clone(), desc.clone()));
+            }
+            current = class.super_class.clone();
+        }
+        Ok(all_instance_fields)
     }
 
     fn start_java_thread(
@@ -2435,11 +3741,19 @@ impl Vm {
             Opcode::Iconst5 => execute_iconst(thread, 5)?,
             Opcode::Bipush => execute_bipush(thread)?,
             Opcode::Sipush => execute_sipush(thread)?,
-            Opcode::Ldc => execute_ldc(thread)?,
-            Opcode::LdcW => execute_ldc_w(thread)?,
+            Opcode::Ldc => {
+                let index = thread.current_frame_mut().read_u8()? as usize;
+                let value = self.load_constant_or_condy(thread, index)?;
+                thread.current_frame_mut().push(value)?;
+            }
+            Opcode::LdcW => {
+                let index = thread.current_frame_mut().read_u16()? as usize;
+                let value = self.load_constant_or_condy(thread, index)?;
+                thread.current_frame_mut().push(value)?;
+            }
             Opcode::Ldc2W => {
                 let index = thread.current_frame_mut().read_u16()? as usize;
-                let value = thread.current_frame().load_constant(index)?;
+                let value = self.load_constant_or_condy(thread, index)?;
                 thread.current_frame_mut().push(value)?;
             }
             Opcode::Lconst0 => execute_lconst(thread, 0)?,
@@ -3353,26 +4667,11 @@ impl Vm {
                 let index = thread.current_frame_mut().read_u16()? as usize;
                 let field_ref = thread.current_frame().load_field_ref(index)?.clone();
                 let object_ref = thread.current_frame_mut().pop()?.as_reference()?;
-                let value = match self.heap.lock().unwrap().get(object_ref)? {
-                    HeapValue::Object { class_name, fields, .. } => {
-                        let class = self.get_class(class_name).map_err(|_| VmError::ClassNotFound {
-                            class_name: class_name.clone(),
-                        })?;
-                        let offset = class.field_offsets.get(&field_ref.field_name).ok_or_else(|| {
-                            VmError::FieldNotFound {
-                                class_name: field_ref.class_name.clone(),
-                                field_name: field_ref.field_name.clone(),
-                            }
-                        })?;
-                        fields[*offset]
-                    }
-                    value => {
-                        return Err(VmError::InvalidHeapValue {
-                            expected: "object",
-                            actual: value.kind_name(),
-                        });
-                    }
-                };
+                let value = self.get_instance_field_from_declaring(
+                    object_ref,
+                    &field_ref.class_name,
+                    &field_ref.field_name,
+                )?;
                 thread.current_frame_mut().push(value)?;
             }
             Opcode::Putfield => {
@@ -3380,26 +4679,12 @@ impl Vm {
                 let field_ref = thread.current_frame().load_field_ref(index)?.clone();
                 let value = thread.current_frame_mut().pop()?;
                 let object_ref = thread.current_frame_mut().pop()?.as_reference()?;
-                match self.heap.lock().unwrap().get_mut(object_ref)? {
-                    HeapValue::Object { class_name, fields, .. } => {
-                        let class = self.get_class(class_name).map_err(|_| VmError::ClassNotFound {
-                            class_name: class_name.clone(),
-                        })?;
-                        let offset = class.field_offsets.get(&field_ref.field_name).ok_or_else(|| {
-                            VmError::FieldNotFound {
-                                class_name: field_ref.class_name.clone(),
-                                field_name: field_ref.field_name.clone(),
-                            }
-                        })?;
-                        fields[*offset] = value;
-                    }
-                    value => {
-                        return Err(VmError::InvalidHeapValue {
-                            expected: "object",
-                            actual: value.kind_name(),
-                        });
-                    }
-                };
+                self.set_object_field_from_declaring(
+                    object_ref,
+                    &field_ref.class_name,
+                    &field_ref.field_name,
+                    value,
+                )?;
             }
 
             // --- References: method invocation ---
@@ -3415,6 +4700,18 @@ impl Vm {
                 }
                 args.reverse();
                 let receiver = thread.current_frame_mut().pop()?.as_reference()?;
+
+                if Self::is_signature_polymorphic(
+                    &method_ref.class_name,
+                    &method_ref.method_name,
+                ) {
+                    let result =
+                        self.invoke_signature_polymorphic(receiver, &method_ref, args)?;
+                    if let Some(value) = result {
+                        thread.current_frame_mut().push(value)?;
+                    }
+                    return Ok(None);
+                }
 
                 let should_return_false = receiver == Reference::Null
                     && method_ref.class_name == "java/lang/Class"
@@ -3709,21 +5006,7 @@ impl Vm {
                     .to_string();
                 self.ensure_class_loaded(&class_name)?;
                 self.ensure_class_initialized(&class_name)?;
-                let mut all_instance_fields = Vec::new();
-                let mut current_class = class_name.clone();
-                loop {
-                    self.ensure_class_loaded(&current_class)?;
-                    let class = self.get_class(&current_class)?;
-                    for (name, desc) in &class.instance_fields {
-                        if !all_instance_fields.iter().any(|(n, _)| n == name) {
-                            all_instance_fields.push((name.clone(), desc.clone()));
-                        }
-                    }
-                    match &class.super_class {
-                        Some(parent) => current_class = parent.clone(),
-                        None => break,
-                    }
-                }
+                let all_instance_fields = self.collect_instance_fields(&class_name)?;
                 let fields: Vec<Value> = all_instance_fields
                     .iter()
                     .map(|(_, descriptor)| default_value_for_descriptor(descriptor))
@@ -3984,21 +5267,20 @@ impl Vm {
         let class = self.get_class(&class_name)?;
         let field_count = class.field_offsets.len();
         let mut fields = vec![Value::Reference(Reference::Null); field_count];
-        let mut set_field = |name: &str, value: Value| -> Result<(), VmError> {
-            let offset = class
-                .field_offsets
-                .get(name)
-                .copied()
-                .ok_or_else(|| VmError::FieldNotFound {
-                    class_name: class_name.clone(),
-                    field_name: name.to_string(),
+        let mut set_field =
+            |name: &str, value: Value| -> Result<(), VmError> {
+                let offset = class.field_offsets.get(name).copied().ok_or_else(|| {
+                    VmError::FieldNotFound {
+                        class_name: class_name.clone(),
+                        field_name: name.to_string(),
+                    }
                 })?;
-            if offset >= fields.len() {
-                fields.resize(offset + 1, Value::Reference(Reference::Null));
-            }
-            fields[offset] = value;
-            Ok(())
-        };
+                if offset >= fields.len() {
+                    fields.resize(offset + 1, Value::Reference(Reference::Null));
+                }
+                fields[offset] = value;
+                Ok(())
+            };
 
         set_field(
             "__target_class",
@@ -4427,9 +5709,10 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        DeoptLocalKind, DeoptSnapshot, ExceptionHandler, ExecutionResult, FieldRef, HeapValue,
-        InterpreterFallbackResult, Method, MethodRef, NEXT_THREAD_ID, Reference, RuntimeClass,
-        Value, Vm, VmError,
+        BootstrapArgument, ClassMethod, CondySite, DeoptLocalKind, DeoptSnapshot, ExceptionHandler,
+        ExecutionResult, FieldRef, HeapValue, InterpreterFallbackResult, InvokeDynamicKind,
+        InvokeDynamicSite, Method, MethodRef, NEXT_THREAD_ID, Reference, RuntimeClass, Value, Vm,
+        VmError,
     };
 
     fn raw_deopt_ref(reference: Reference) -> u64 {
@@ -5558,6 +6841,1095 @@ mod tests {
     }
 
     #[test]
+    fn invokedynamic_custom_bootstrap_links_and_caches_call_site() {
+        let mut vm = Vm::new().expect("failed to create VM");
+
+        let target_method = Method::new(
+            [
+                0x10, 0x2a, // bipush 42
+                0xac, // ireturn
+            ],
+            0,
+            1,
+        )
+        .with_metadata("demo/Target", "answer", "()I", 0x0008);
+        vm.register_class(RuntimeClass {
+            name: "demo/Target".to_string(),
+            super_class: Some("java/lang/Object".to_string()),
+            methods: HashMap::from([(
+                ("answer".to_string(), "()I".to_string()),
+                ClassMethod::Bytecode(target_method),
+            )]),
+            static_fields: HashMap::new(),
+            instance_fields: vec![],
+            field_offsets: HashMap::new(),
+            interfaces: vec![],
+        });
+
+        let bootstrap_method = Method::new(
+            [
+                0xb2, 0x00, 0x01, // getstatic #1 <Field demo/Bootstrap.count I>
+                0x04, // iconst_1
+                0x60, // iadd
+                0xb3, 0x00, 0x01, // putstatic #1 <Field demo/Bootstrap.count I>
+                0x2a, // aload_0
+                0x2d, // aload_3
+                0x19, 0x04, // aload 4
+                0x19, 0x05, // aload 5
+                0xb6, 0x00, 0x01, // invokevirtual #1 Lookup.findStatic
+                0x3a, 0x06, // astore 6
+                0xbb, 0x00, 0x01, // new #1 ConstantCallSite
+                0x59, // dup
+                0x19, 0x06, // aload 6
+                0xb7, 0x00, 0x02, // invokespecial #2 ConstantCallSite.<init>
+                0xb0, // areturn
+            ],
+            7,
+            4,
+        )
+        .with_metadata(
+            "demo/Bootstrap",
+            "bootstrap",
+            "(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/invoke/MethodType;Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/CallSite;",
+            0x0008,
+        )
+        .with_field_refs(vec![
+            None,
+            Some(FieldRef {
+                class_name: "demo/Bootstrap".to_string(),
+                field_name: "count".to_string(),
+                descriptor: "I".to_string(),
+            }),
+        ])
+        .with_method_refs(vec![
+            None,
+            Some(MethodRef {
+                class_name: "java/lang/invoke/MethodHandles$Lookup".to_string(),
+                method_name: "findStatic".to_string(),
+                descriptor: "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle;".to_string(),
+            }),
+            Some(MethodRef {
+                class_name: "java/lang/invoke/ConstantCallSite".to_string(),
+                method_name: "<init>".to_string(),
+                descriptor: "(Ljava/lang/invoke/MethodHandle;)V".to_string(),
+            }),
+        ])
+        .with_reference_classes(vec![
+            None,
+            Some("java/lang/invoke/ConstantCallSite".to_string()),
+        ]);
+        vm.register_class(RuntimeClass {
+            name: "demo/Bootstrap".to_string(),
+            super_class: Some("java/lang/Object".to_string()),
+            methods: HashMap::from([(
+                (
+                    "bootstrap".to_string(),
+                    "(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/invoke/MethodType;Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/CallSite;".to_string(),
+                ),
+                ClassMethod::Bytecode(bootstrap_method),
+            )]),
+            static_fields: HashMap::from([("count".to_string(), Value::Int(0))]),
+            instance_fields: vec![],
+            field_offsets: HashMap::new(),
+            interfaces: vec![],
+        });
+
+        let site = InvokeDynamicSite {
+            owner_class: "demo/Caller".to_string(),
+            constant_pool_index: 1,
+            name: "dynamicAnswer".to_string(),
+            descriptor: "()I".to_string(),
+            bootstrap_method_index: 0,
+            kind: InvokeDynamicKind::BootstrapMethodHandle {
+                bootstrap_class: "demo/Bootstrap".to_string(),
+                bootstrap_name: "bootstrap".to_string(),
+                bootstrap_descriptor: "(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/invoke/MethodType;Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/CallSite;".to_string(),
+                arguments: vec![
+                    BootstrapArgument::Class("demo/Target".to_string()),
+                    BootstrapArgument::String("answer".to_string()),
+                    BootstrapArgument::MethodType("()I".to_string()),
+                ],
+            },
+        };
+        let caller_method = Method::new(
+            [
+                0xba, 0x00, 0x01, 0x00, 0x00, // invokedynamic #1
+                0xac, // ireturn
+            ],
+            0,
+            1,
+        )
+        .with_metadata("demo/Caller", "call", "()I", 0x0008)
+        .with_invoke_dynamic_sites(vec![None, Some(site)]);
+
+        let first = vm.execute(caller_method.clone()).unwrap();
+        let second = vm.execute(caller_method).unwrap();
+        assert_eq!(first, ExecutionResult::Value(Value::Int(42)));
+        assert_eq!(second, ExecutionResult::Value(Value::Int(42)));
+        assert_eq!(
+            vm.get_static_field("demo/Bootstrap", "count").unwrap(),
+            Value::Int(1)
+        );
+    }
+
+    #[test]
+    fn invokedynamic_custom_bootstrap_accepts_method_handle_argument() {
+        let mut vm = Vm::new().expect("failed to create VM");
+
+        let target_method = Method::new(
+            [
+                0x10, 0x2a, // bipush 42
+                0xac, // ireturn
+            ],
+            0,
+            1,
+        )
+        .with_metadata("demo/HandleTarget", "answer", "()I", 0x0008);
+        vm.register_class(RuntimeClass {
+            name: "demo/HandleTarget".to_string(),
+            super_class: Some("java/lang/Object".to_string()),
+            methods: HashMap::from([(
+                ("answer".to_string(), "()I".to_string()),
+                ClassMethod::Bytecode(target_method),
+            )]),
+            static_fields: HashMap::new(),
+            instance_fields: vec![],
+            field_offsets: HashMap::new(),
+            interfaces: vec![],
+        });
+
+        let bootstrap_method = Method::new(
+            [
+                0xbb, 0x00, 0x01, // new #1 ConstantCallSite
+                0x59, // dup
+                0x2d, // aload_3
+                0xb7, 0x00, 0x01, // invokespecial #1 ConstantCallSite.<init>
+                0xb0, // areturn
+            ],
+            4,
+            3,
+        )
+        .with_metadata(
+            "demo/HandleBootstrap",
+            "bootstrap",
+            "(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/invoke/MethodType;Ljava/lang/invoke/MethodHandle;)Ljava/lang/invoke/CallSite;",
+            0x0008,
+        )
+        .with_method_refs(vec![
+            None,
+            Some(MethodRef {
+                class_name: "java/lang/invoke/ConstantCallSite".to_string(),
+                method_name: "<init>".to_string(),
+                descriptor: "(Ljava/lang/invoke/MethodHandle;)V".to_string(),
+            }),
+        ])
+        .with_reference_classes(vec![
+            None,
+            Some("java/lang/invoke/ConstantCallSite".to_string()),
+        ]);
+        vm.register_class(RuntimeClass {
+            name: "demo/HandleBootstrap".to_string(),
+            super_class: Some("java/lang/Object".to_string()),
+            methods: HashMap::from([(
+                (
+                    "bootstrap".to_string(),
+                    "(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/invoke/MethodType;Ljava/lang/invoke/MethodHandle;)Ljava/lang/invoke/CallSite;".to_string(),
+                ),
+                ClassMethod::Bytecode(bootstrap_method),
+            )]),
+            static_fields: HashMap::new(),
+            instance_fields: vec![],
+            field_offsets: HashMap::new(),
+            interfaces: vec![],
+        });
+
+        let caller_method = Method::new(
+            [
+                0xba, 0x00, 0x01, 0x00, 0x00, // invokedynamic #1
+                0xac, // ireturn
+            ],
+            0,
+            1,
+        )
+        .with_metadata("demo/HandleCaller", "call", "()I", 0x0008)
+        .with_invoke_dynamic_sites(vec![
+            None,
+            Some(InvokeDynamicSite {
+                owner_class: "demo/HandleCaller".to_string(),
+                constant_pool_index: 1,
+                name: "dynamicHandle".to_string(),
+                descriptor: "()I".to_string(),
+                bootstrap_method_index: 0,
+                kind: InvokeDynamicKind::BootstrapMethodHandle {
+                    bootstrap_class: "demo/HandleBootstrap".to_string(),
+                    bootstrap_name: "bootstrap".to_string(),
+                    bootstrap_descriptor: "(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/invoke/MethodType;Ljava/lang/invoke/MethodHandle;)Ljava/lang/invoke/CallSite;".to_string(),
+                    arguments: vec![BootstrapArgument::MethodHandle {
+                        reference_kind: 6,
+                        target_class: "demo/HandleTarget".to_string(),
+                        target_method: "answer".to_string(),
+                        target_descriptor: "()I".to_string(),
+                    }],
+                },
+            }),
+        ]);
+
+        let result = vm.execute(caller_method).unwrap();
+        assert_eq!(result, ExecutionResult::Value(Value::Int(42)));
+    }
+
+    #[test]
+    fn method_handle_supports_field_access_kinds() {
+        let mut vm = Vm::new().expect("failed to create VM");
+        vm.register_class(RuntimeClass {
+            name: "demo/Fields".to_string(),
+            super_class: Some("java/lang/Object".to_string()),
+            methods: HashMap::new(),
+            static_fields: HashMap::from([("shared".to_string(), Value::Int(7))]),
+            instance_fields: vec![("value".to_string(), "I".to_string())],
+            field_offsets: HashMap::from([("value".to_string(), 0)]),
+            interfaces: vec![],
+        });
+
+        let receiver = vm
+            .invoke_jit_allocate_object("demo/Fields")
+            .expect("receiver allocation");
+        vm.set_object_field(receiver, "value", Value::Int(11))
+            .unwrap();
+
+        let instance_getter = vm
+            .allocate_bootstrap_method_handle(1, "demo/Fields", "value", "I", None)
+            .unwrap();
+        let instance_setter = vm
+            .allocate_bootstrap_method_handle(3, "demo/Fields", "value", "I", None)
+            .unwrap();
+        let static_getter = vm
+            .allocate_bootstrap_method_handle(2, "demo/Fields", "shared", "I", None)
+            .unwrap();
+        let static_setter = vm
+            .allocate_bootstrap_method_handle(4, "demo/Fields", "shared", "I", None)
+            .unwrap();
+
+        let value = vm
+            .invoke_method_handle(instance_getter, vec![Value::Reference(receiver)])
+            .unwrap();
+        assert_eq!(value, Some(Value::Int(11)));
+
+        vm.invoke_method_handle(
+            instance_setter,
+            vec![Value::Reference(receiver), Value::Int(33)],
+        )
+        .unwrap();
+        assert_eq!(
+            vm.get_instance_field(receiver, "value").unwrap(),
+            Value::Int(33)
+        );
+
+        let shared = vm.invoke_method_handle(static_getter, vec![]).unwrap();
+        assert_eq!(shared, Some(Value::Int(7)));
+
+        vm.invoke_method_handle(static_setter, vec![Value::Int(99)])
+            .unwrap();
+        assert_eq!(
+            vm.get_static_field("demo/Fields", "shared").unwrap(),
+            Value::Int(99)
+        );
+    }
+
+    #[test]
+    fn method_handle_supports_special_and_constructor_kinds() {
+        let mut vm = Vm::new().expect("failed to create VM");
+
+        let parent_greet =
+            Method::new([0x04, 0xac], 1, 1).with_metadata("demo/Parent", "greet", "()I", 0);
+        vm.register_class(RuntimeClass {
+            name: "demo/Parent".to_string(),
+            super_class: Some("java/lang/Object".to_string()),
+            methods: HashMap::from([(
+                ("greet".to_string(), "()I".to_string()),
+                ClassMethod::Bytecode(parent_greet),
+            )]),
+            static_fields: HashMap::new(),
+            instance_fields: vec![],
+            field_offsets: HashMap::new(),
+            interfaces: vec![],
+        });
+
+        let child_greet =
+            Method::new([0x05, 0xac], 1, 1).with_metadata("demo/Child", "greet", "()I", 0);
+        vm.register_class(RuntimeClass {
+            name: "demo/Child".to_string(),
+            super_class: Some("demo/Parent".to_string()),
+            methods: HashMap::from([(
+                ("greet".to_string(), "()I".to_string()),
+                ClassMethod::Bytecode(child_greet),
+            )]),
+            static_fields: HashMap::new(),
+            instance_fields: vec![],
+            field_offsets: HashMap::new(),
+            interfaces: vec![],
+        });
+
+        let child = vm.invoke_jit_allocate_object("demo/Child").unwrap();
+        let virtual_handle = vm
+            .allocate_bootstrap_method_handle(5, "demo/Parent", "greet", "()I", None)
+            .unwrap();
+        let special_handle = vm
+            .allocate_bootstrap_method_handle(7, "demo/Parent", "greet", "()I", None)
+            .unwrap();
+        assert_eq!(
+            vm.invoke_method_handle(virtual_handle, vec![Value::Reference(child)])
+                .unwrap(),
+            Some(Value::Int(2))
+        );
+        assert_eq!(
+            vm.invoke_method_handle(special_handle, vec![Value::Reference(child)])
+                .unwrap(),
+            Some(Value::Int(1))
+        );
+
+        let ctor = Method::new(
+            [
+                0x2a, // aload_0
+                0x1b, // iload_1
+                0xb5, 0x00, 0x01, // putfield #1
+                0xb1, // return
+            ],
+            2,
+            2,
+        )
+        .with_metadata("demo/Box", "<init>", "(I)V", 0)
+        .with_field_refs(vec![
+            None,
+            Some(FieldRef {
+                class_name: "demo/Box".to_string(),
+                field_name: "value".to_string(),
+                descriptor: "I".to_string(),
+            }),
+        ]);
+        vm.register_class(RuntimeClass {
+            name: "demo/Box".to_string(),
+            super_class: Some("java/lang/Object".to_string()),
+            methods: HashMap::from([(
+                ("<init>".to_string(), "(I)V".to_string()),
+                ClassMethod::Bytecode(ctor),
+            )]),
+            static_fields: HashMap::new(),
+            instance_fields: vec![("value".to_string(), "I".to_string())],
+            field_offsets: HashMap::from([("value".to_string(), 0)]),
+            interfaces: vec![],
+        });
+
+        let constructor_handle = vm
+            .allocate_bootstrap_method_handle(8, "demo/Box", "<init>", "(I)V", None)
+            .unwrap();
+        let box_ref = vm
+            .invoke_method_handle(constructor_handle, vec![Value::Int(42)])
+            .unwrap()
+            .unwrap()
+            .as_reference()
+            .unwrap();
+        assert_eq!(
+            vm.get_instance_field(box_ref, "value").unwrap(),
+            Value::Int(42)
+        );
+    }
+
+    #[test]
+    fn lookup_native_methods_create_expected_method_handle_kinds() {
+        let mut vm = Vm::new().expect("failed to create VM");
+        let lookup = vm.allocate_bootstrap_lookup("demo/Caller").unwrap();
+        let target_class = vm.class_object("demo/Thing");
+        let method_name = vm.new_string("run".to_string());
+        let method_type = vm.allocate_bootstrap_method_type("(I)I").unwrap();
+        let field_name = vm.new_string("value".to_string());
+        let int_class = vm.class_object("int");
+
+        let virtual_handle = vm
+            .invoke_native(
+                "java/lang/invoke/MethodHandles$Lookup",
+                "findVirtual",
+                "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle;",
+                &[
+                    Value::Reference(lookup),
+                    Value::Reference(target_class),
+                    method_name,
+                    Value::Reference(method_type),
+                ],
+            )
+            .unwrap()
+            .unwrap()
+            .as_reference()
+            .unwrap();
+        assert_eq!(
+            vm.get_object_field(virtual_handle, "__kind").unwrap(),
+            Value::Int(5)
+        );
+
+        let getter_handle = vm
+            .invoke_native(
+                "java/lang/invoke/MethodHandles$Lookup",
+                "findGetter",
+                "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;",
+                &[
+                    Value::Reference(lookup),
+                    Value::Reference(target_class),
+                    field_name,
+                    Value::Reference(int_class),
+                ],
+            )
+            .unwrap()
+            .unwrap()
+            .as_reference()
+            .unwrap();
+        assert_eq!(
+            vm.get_object_field(getter_handle, "__kind").unwrap(),
+            Value::Int(1)
+        );
+    }
+
+    #[test]
+    fn lookup_rejects_wrong_method_kind_and_private_access() {
+        let mut vm = Vm::new().expect("failed to create VM");
+        let lookup = vm.allocate_bootstrap_lookup("demo/Caller").unwrap();
+        let target_class = vm.class_object("demo/Target");
+        let method_type = vm.allocate_bootstrap_method_type("()I").unwrap();
+        let run_name = vm.new_string("run".to_string());
+        let secret_name = vm.new_string("secret".to_string());
+
+        let instance_method =
+            Method::new([0x04, 0xac], 1, 1).with_metadata("demo/Target", "run", "()I", 0x0001);
+        let private_method =
+            Method::new([0x05, 0xac], 1, 1).with_metadata("demo/Target", "secret", "()I", 0x0002);
+        vm.register_class(RuntimeClass {
+            name: "demo/Target".to_string(),
+            super_class: Some("java/lang/Object".to_string()),
+            methods: HashMap::from([
+                (
+                    ("run".to_string(), "()I".to_string()),
+                    ClassMethod::Bytecode(instance_method),
+                ),
+                (
+                    ("secret".to_string(), "()I".to_string()),
+                    ClassMethod::Bytecode(private_method),
+                ),
+            ]),
+            static_fields: HashMap::new(),
+            instance_fields: vec![],
+            field_offsets: HashMap::new(),
+            interfaces: vec![],
+        });
+
+        let wrong_kind = vm.invoke_native(
+            "java/lang/invoke/MethodHandles$Lookup",
+            "findStatic",
+            "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle;",
+            &[
+                Value::Reference(lookup),
+                Value::Reference(target_class),
+                run_name,
+                Value::Reference(method_type),
+            ],
+        );
+        assert_eq!(
+            wrong_kind.unwrap_err(),
+            VmError::UnhandledException {
+                class_name: "java/lang/NoSuchMethodException".to_string()
+            }
+        );
+
+        let private_access = vm.invoke_native(
+            "java/lang/invoke/MethodHandles$Lookup",
+            "findVirtual",
+            "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle;",
+            &[
+                Value::Reference(lookup),
+                Value::Reference(target_class),
+                secret_name,
+                Value::Reference(method_type),
+            ],
+        );
+        assert_eq!(
+            private_access.unwrap_err(),
+            VmError::UnhandledException {
+                class_name: "java/lang/IllegalAccessException".to_string()
+            }
+        );
+
+        vm.register_class(RuntimeClass {
+            name: "demo/FieldTarget".to_string(),
+            super_class: Some("java/lang/Object".to_string()),
+            methods: HashMap::new(),
+            static_fields: HashMap::new(),
+            instance_fields: vec![("secret".to_string(), "I".to_string())],
+            field_offsets: HashMap::from([("secret".to_string(), 0)]),
+            interfaces: vec![],
+        });
+        vm.register_field_access_flags("demo/FieldTarget", [("secret".to_string(), 0x0002)]);
+        let field_target_class = vm.class_object("demo/FieldTarget");
+        let secret_field = vm.new_string("secret".to_string());
+        let int_class = vm.class_object("int");
+        let private_field_access = vm.invoke_native(
+            "java/lang/invoke/MethodHandles$Lookup",
+            "findGetter",
+            "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;",
+            &[
+                Value::Reference(lookup),
+                Value::Reference(field_target_class),
+                secret_field,
+                Value::Reference(int_class),
+            ],
+        );
+        assert_eq!(
+            private_field_access.unwrap_err(),
+            VmError::UnhandledException {
+                class_name: "java/lang/IllegalAccessException".to_string()
+            }
+        );
+
+        vm.register_class(RuntimeClass {
+            name: "demo/StaticFieldTarget".to_string(),
+            super_class: Some("java/lang/Object".to_string()),
+            methods: HashMap::new(),
+            static_fields: HashMap::from([("text".to_string(), Value::Reference(Reference::Null))]),
+            instance_fields: vec![],
+            field_offsets: HashMap::new(),
+            interfaces: vec![],
+        });
+        vm.register_field_access_flags("demo/StaticFieldTarget", [("text".to_string(), 0x0001)]);
+        vm.register_field_descriptors(
+            "demo/StaticFieldTarget",
+            [("text".to_string(), "Ljava/lang/String;".to_string())],
+        );
+        let static_field_target_class = vm.class_object("demo/StaticFieldTarget");
+        let text_field = vm.new_string("text".to_string());
+        let string_class = vm.class_object("java/lang/String");
+        vm.invoke_native(
+            "java/lang/invoke/MethodHandles$Lookup",
+            "findStaticGetter",
+            "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;",
+            &[
+                Value::Reference(lookup),
+                Value::Reference(static_field_target_class),
+                text_field,
+                Value::Reference(string_class),
+            ],
+        )
+        .expect("static reference field descriptor should come from field metadata");
+
+        vm.register_class(RuntimeClass {
+            name: "demo/FieldParent".to_string(),
+            super_class: Some("java/lang/Object".to_string()),
+            methods: HashMap::new(),
+            static_fields: HashMap::new(),
+            instance_fields: vec![("inherited".to_string(), "I".to_string())],
+            field_offsets: HashMap::from([("inherited".to_string(), 0)]),
+            interfaces: vec![],
+        });
+        vm.register_field_access_flags("demo/FieldParent", [("inherited".to_string(), 0x0001)]);
+        vm.register_field_descriptors(
+            "demo/FieldParent",
+            [("inherited".to_string(), "I".to_string())],
+        );
+        vm.register_class(RuntimeClass {
+            name: "demo/FieldChild".to_string(),
+            super_class: Some("demo/FieldParent".to_string()),
+            methods: HashMap::new(),
+            static_fields: HashMap::new(),
+            instance_fields: vec![],
+            field_offsets: HashMap::new(),
+            interfaces: vec![],
+        });
+        let child_class = vm.class_object("demo/FieldChild");
+        let inherited_name = vm.new_string("inherited".to_string());
+        let inherited_setter = vm
+            .invoke_native(
+                "java/lang/invoke/MethodHandles$Lookup",
+                "findSetter",
+                "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;",
+                &[
+                    Value::Reference(lookup),
+                    Value::Reference(child_class),
+                    inherited_name,
+                    Value::Reference(int_class),
+                ],
+            )
+            .unwrap()
+            .unwrap()
+            .as_reference()
+            .unwrap();
+        let inherited_name = vm.new_string("inherited".to_string());
+        let inherited_getter = vm
+            .invoke_native(
+                "java/lang/invoke/MethodHandles$Lookup",
+                "findGetter",
+                "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;",
+                &[
+                    Value::Reference(lookup),
+                    Value::Reference(child_class),
+                    inherited_name,
+                    Value::Reference(int_class),
+                ],
+            )
+            .unwrap()
+            .unwrap()
+            .as_reference()
+            .unwrap();
+        let child = vm.invoke_jit_allocate_object("demo/FieldChild").unwrap();
+        vm.invoke_method_handle(
+            inherited_setter,
+            vec![Value::Reference(child), Value::Int(42)],
+        )
+        .unwrap();
+        assert_eq!(
+            vm.invoke_method_handle(inherited_getter, vec![Value::Reference(child)])
+                .unwrap(),
+            Some(Value::Int(42))
+        );
+
+        vm.register_class(RuntimeClass {
+            name: "demo/ShadowParent".to_string(),
+            super_class: Some("java/lang/Object".to_string()),
+            methods: HashMap::new(),
+            static_fields: HashMap::new(),
+            instance_fields: vec![("shadow".to_string(), "I".to_string())],
+            field_offsets: HashMap::from([("shadow".to_string(), 0)]),
+            interfaces: vec![],
+        });
+        vm.register_field_access_flags("demo/ShadowParent", [("shadow".to_string(), 0x0001)]);
+        vm.register_field_descriptors(
+            "demo/ShadowParent",
+            [("shadow".to_string(), "I".to_string())],
+        );
+        vm.register_class(RuntimeClass {
+            name: "demo/ShadowChild".to_string(),
+            super_class: Some("demo/ShadowParent".to_string()),
+            methods: HashMap::new(),
+            static_fields: HashMap::new(),
+            instance_fields: vec![("shadow".to_string(), "I".to_string())],
+            field_offsets: HashMap::from([("shadow".to_string(), 0)]),
+            interfaces: vec![],
+        });
+        vm.register_field_access_flags("demo/ShadowChild", [("shadow".to_string(), 0x0001)]);
+        vm.register_field_descriptors(
+            "demo/ShadowChild",
+            [("shadow".to_string(), "I".to_string())],
+        );
+        let shadow_parent_class = vm.class_object("demo/ShadowParent");
+        let shadow_child_class = vm.class_object("demo/ShadowChild");
+        let shadow_name = vm.new_string("shadow".to_string());
+        let parent_shadow_setter = vm
+            .invoke_native(
+                "java/lang/invoke/MethodHandles$Lookup",
+                "findSetter",
+                "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;",
+                &[
+                    Value::Reference(lookup),
+                    Value::Reference(shadow_parent_class),
+                    shadow_name,
+                    Value::Reference(int_class),
+                ],
+            )
+            .unwrap()
+            .unwrap()
+            .as_reference()
+            .unwrap();
+        let shadow_name = vm.new_string("shadow".to_string());
+        let child_shadow_setter = vm
+            .invoke_native(
+                "java/lang/invoke/MethodHandles$Lookup",
+                "findSetter",
+                "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;",
+                &[
+                    Value::Reference(lookup),
+                    Value::Reference(shadow_child_class),
+                    shadow_name,
+                    Value::Reference(int_class),
+                ],
+            )
+            .unwrap()
+            .unwrap()
+            .as_reference()
+            .unwrap();
+        let shadow_name = vm.new_string("shadow".to_string());
+        let parent_shadow_getter = vm
+            .invoke_native(
+                "java/lang/invoke/MethodHandles$Lookup",
+                "findGetter",
+                "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;",
+                &[
+                    Value::Reference(lookup),
+                    Value::Reference(shadow_parent_class),
+                    shadow_name,
+                    Value::Reference(int_class),
+                ],
+            )
+            .unwrap()
+            .unwrap()
+            .as_reference()
+            .unwrap();
+        let shadow_name = vm.new_string("shadow".to_string());
+        let child_shadow_getter = vm
+            .invoke_native(
+                "java/lang/invoke/MethodHandles$Lookup",
+                "findGetter",
+                "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;",
+                &[
+                    Value::Reference(lookup),
+                    Value::Reference(shadow_child_class),
+                    shadow_name,
+                    Value::Reference(int_class),
+                ],
+            )
+            .unwrap()
+            .unwrap()
+            .as_reference()
+            .unwrap();
+        let shadow_child = vm.invoke_jit_allocate_object("demo/ShadowChild").unwrap();
+        vm.invoke_method_handle(
+            parent_shadow_setter,
+            vec![Value::Reference(shadow_child), Value::Int(99)],
+        )
+        .unwrap();
+        vm.invoke_method_handle(
+            child_shadow_setter,
+            vec![Value::Reference(shadow_child), Value::Int(7)],
+        )
+        .unwrap();
+        assert_eq!(
+            vm.invoke_method_handle(parent_shadow_getter, vec![Value::Reference(shadow_child)])
+                .unwrap(),
+            Some(Value::Int(99))
+        );
+        assert_eq!(
+            vm.invoke_method_handle(child_shadow_getter, vec![Value::Reference(shadow_child)])
+                .unwrap(),
+            Some(Value::Int(7))
+        );
+
+        vm.register_class(RuntimeClass {
+            name: "demo/HasConstant".to_string(),
+            super_class: Some("java/lang/Object".to_string()),
+            methods: HashMap::new(),
+            static_fields: HashMap::from([("MAGIC".to_string(), Value::Int(123))]),
+            instance_fields: vec![],
+            field_offsets: HashMap::new(),
+            interfaces: vec![],
+        });
+        vm.register_field_access_flags("demo/HasConstant", [("MAGIC".to_string(), 0x0019)]);
+        vm.register_field_descriptors("demo/HasConstant", [("MAGIC".to_string(), "I".to_string())]);
+        vm.register_class(RuntimeClass {
+            name: "demo/ImplementsConstant".to_string(),
+            super_class: Some("java/lang/Object".to_string()),
+            methods: HashMap::new(),
+            static_fields: HashMap::new(),
+            instance_fields: vec![],
+            field_offsets: HashMap::new(),
+            interfaces: vec!["demo/HasConstant".to_string()],
+        });
+        let implements_constant_class = vm.class_object("demo/ImplementsConstant");
+        let magic_name = vm.new_string("MAGIC".to_string());
+        let interface_getter = vm
+            .invoke_native(
+                "java/lang/invoke/MethodHandles$Lookup",
+                "findStaticGetter",
+                "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;",
+                &[
+                    Value::Reference(lookup),
+                    Value::Reference(implements_constant_class),
+                    magic_name,
+                    Value::Reference(int_class),
+                ],
+            )
+            .unwrap()
+            .unwrap()
+            .as_reference()
+            .unwrap();
+        assert_eq!(
+            vm.invoke_method_handle(interface_getter, vec![]).unwrap(),
+            Some(Value::Int(123))
+        );
+
+        vm.register_class(RuntimeClass {
+            name: "p/A".to_string(),
+            super_class: Some("java/lang/Object".to_string()),
+            methods: HashMap::new(),
+            static_fields: HashMap::new(),
+            instance_fields: vec![("guarded".to_string(), "I".to_string())],
+            field_offsets: HashMap::from([("guarded".to_string(), 0)]),
+            interfaces: vec![],
+        });
+        vm.register_field_access_flags("p/A", [("guarded".to_string(), 0x0004)]);
+        vm.register_field_descriptors("p/A", [("guarded".to_string(), "I".to_string())]);
+        vm.register_class(RuntimeClass {
+            name: "q/Sub".to_string(),
+            super_class: Some("p/A".to_string()),
+            methods: HashMap::new(),
+            static_fields: HashMap::new(),
+            instance_fields: vec![],
+            field_offsets: HashMap::new(),
+            interfaces: vec![],
+        });
+
+        let protected_lookup = vm.allocate_bootstrap_lookup("q/Sub").unwrap();
+        let protected_owner_class = vm.class_object("p/A");
+        let protected_name = vm.new_string("guarded".to_string());
+        let protected_setter = vm
+            .invoke_native(
+                "java/lang/invoke/MethodHandles$Lookup",
+                "findSetter",
+                "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;",
+                &[
+                    Value::Reference(protected_lookup),
+                    Value::Reference(protected_owner_class),
+                    protected_name,
+                    Value::Reference(int_class),
+                ],
+            )
+            .unwrap()
+            .unwrap()
+            .as_reference()
+            .unwrap();
+        let parent_receiver = vm.invoke_jit_allocate_object("p/A").unwrap();
+        let parent_result = vm.invoke_method_handle(
+            protected_setter,
+            vec![Value::Reference(parent_receiver), Value::Int(1)],
+        );
+        assert_eq!(
+            parent_result.unwrap_err(),
+            VmError::UnhandledException {
+                class_name: "java/lang/IllegalAccessException".to_string()
+            }
+        );
+
+        let sub_receiver = vm.invoke_jit_allocate_object("q/Sub").unwrap();
+        vm.invoke_method_handle(
+            protected_setter,
+            vec![Value::Reference(sub_receiver), Value::Int(2)],
+        )
+        .unwrap();
+        assert_eq!(
+            vm.get_instance_field_from_declaring(sub_receiver, "p/A", "guarded")
+                .unwrap(),
+            Value::Int(2)
+        );
+    }
+
+    #[test]
+    fn unreflect_respects_lookup_access_and_preserves_instance_kind() {
+        let mut vm = Vm::new().expect("failed to create VM");
+        let lookup = vm.allocate_bootstrap_lookup("demo/Caller").unwrap();
+
+        let method_fields = vec![
+            Value::Reference(vm.class_object("demo/Target")),
+            vm.new_string("run".to_string()),
+            vm.new_string("()I".to_string()),
+            Value::Reference(Reference::Null),
+            Value::Reference(vm.class_object("int")),
+            Value::Int(0x0001),
+        ];
+        let public_method = vm.heap.lock().unwrap().allocate(HeapValue::Object {
+            class_name: "java/lang/reflect/Method".to_string(),
+            fields: method_fields,
+        });
+
+        let handle = vm
+            .invoke_native(
+                "java/lang/invoke/MethodHandles$Lookup",
+                "unreflect",
+                "(Ljava/lang/reflect/Method;)Ljava/lang/invoke/MethodHandle;",
+                &[Value::Reference(lookup), Value::Reference(public_method)],
+            )
+            .unwrap()
+            .unwrap()
+            .as_reference()
+            .unwrap();
+        assert_eq!(
+            vm.get_object_field(handle, "__kind").unwrap(),
+            Value::Int(5)
+        );
+
+        let private_ctor_declaring = vm.class_object("demo/Target");
+        let private_ctor_descriptor = vm.new_string("()V".to_string());
+        let private_ctor = vm.heap.lock().unwrap().allocate(HeapValue::Object {
+            class_name: "java/lang/reflect/Constructor".to_string(),
+            fields: vec![
+                Value::Reference(private_ctor_declaring),
+                Value::Reference(Reference::Null),
+                private_ctor_descriptor,
+                Value::Int(0x0002),
+                Value::Int(0),
+            ],
+        });
+        let private_result = vm.invoke_native(
+            "java/lang/invoke/MethodHandles$Lookup",
+            "unreflectConstructor",
+            "(Ljava/lang/reflect/Constructor;)Ljava/lang/invoke/MethodHandle;",
+            &[Value::Reference(lookup), Value::Reference(private_ctor)],
+        );
+        assert_eq!(
+            private_result.unwrap_err(),
+            VmError::UnhandledException {
+                class_name: "java/lang/IllegalAccessException".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn lookup_modes_gate_access_and_private_lookup_in_retargets() {
+        let mut vm = Vm::new().expect("failed to create VM");
+        let public_lookup = vm
+            .invoke_native(
+                "java/lang/invoke/MethodHandles",
+                "publicLookup",
+                "()Ljava/lang/invoke/MethodHandles$Lookup;",
+                &[],
+            )
+            .unwrap()
+            .unwrap()
+            .as_reference()
+            .unwrap();
+        assert_eq!(
+            vm.invoke_native(
+                "java/lang/invoke/MethodHandles$Lookup",
+                "lookupModes",
+                "()I",
+                &[Value::Reference(public_lookup)],
+            )
+            .unwrap(),
+            Some(Value::Int(0x01))
+        );
+
+        let public_target_class = vm.class_object("demo/PublicOnly");
+        vm.register_class(RuntimeClass {
+            name: "demo/PublicOnly".to_string(),
+            super_class: Some("java/lang/Object".to_string()),
+            methods: HashMap::from([(
+                ("hidden".to_string(), "()I".to_string()),
+                ClassMethod::Bytecode(Method::new([0x04, 0xac], 1, 1).with_metadata(
+                    "demo/PublicOnly",
+                    "hidden",
+                    "()I",
+                    0x0002,
+                )),
+            )]),
+            static_fields: HashMap::new(),
+            instance_fields: vec![],
+            field_offsets: HashMap::new(),
+            interfaces: vec![],
+        });
+        let hidden_name = vm.new_string("hidden".to_string());
+        let hidden_type = vm.allocate_bootstrap_method_type("()I").unwrap();
+        let public_result = vm.invoke_native(
+            "java/lang/invoke/MethodHandles$Lookup",
+            "findVirtual",
+            "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle;",
+            &[
+                Value::Reference(public_lookup),
+                Value::Reference(public_target_class),
+                hidden_name,
+                Value::Reference(hidden_type),
+            ],
+        );
+        assert_eq!(
+            public_result.unwrap_err(),
+            VmError::UnhandledException {
+                class_name: "java/lang/IllegalAccessException".to_string()
+            }
+        );
+        let public_private_lookup = vm.invoke_native(
+            "java/lang/invoke/MethodHandles",
+            "privateLookupIn",
+            "(Ljava/lang/Class;Ljava/lang/invoke/MethodHandles$Lookup;)Ljava/lang/invoke/MethodHandles$Lookup;",
+            &[
+                Value::Reference(public_target_class),
+                Value::Reference(public_lookup),
+            ],
+        );
+        assert_eq!(
+            public_private_lookup.unwrap_err(),
+            VmError::UnhandledException {
+                class_name: "java/lang/IllegalAccessException".to_string()
+            }
+        );
+
+        let full_lookup = vm.allocate_bootstrap_lookup("demo/Caller").unwrap();
+        let private_lookup = vm
+            .invoke_native(
+                "java/lang/invoke/MethodHandles",
+                "privateLookupIn",
+                "(Ljava/lang/Class;Ljava/lang/invoke/MethodHandles$Lookup;)Ljava/lang/invoke/MethodHandles$Lookup;",
+                &[
+                    Value::Reference(public_target_class),
+                    Value::Reference(full_lookup),
+                ],
+            )
+            .unwrap()
+            .unwrap()
+            .as_reference()
+            .unwrap();
+        assert_eq!(
+            vm.invoke_native(
+                "java/lang/invoke/MethodHandles$Lookup",
+                "lookupModes",
+                "()I",
+                &[Value::Reference(private_lookup)],
+            )
+            .unwrap(),
+            Some(Value::Int(0x1f))
+        );
+        let hidden_name = vm.new_string("hidden".to_string());
+        let hidden_type = vm.allocate_bootstrap_method_type("()I").unwrap();
+        vm.invoke_native(
+            "java/lang/invoke/MethodHandles$Lookup",
+            "findVirtual",
+            "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle;",
+            &[
+                Value::Reference(private_lookup),
+                Value::Reference(public_target_class),
+                hidden_name,
+                Value::Reference(hidden_type),
+            ],
+        )
+        .expect("privateLookupIn should allow private member lookup in target class");
+
+        vm.register_class(RuntimeClass {
+            name: "other/Target".to_string(),
+            super_class: Some("java/lang/Object".to_string()),
+            methods: HashMap::new(),
+            static_fields: HashMap::new(),
+            instance_fields: vec![],
+            field_offsets: HashMap::new(),
+            interfaces: vec![],
+        });
+        let other_target_class = vm.class_object("other/Target");
+        let cross_package_lookup = vm
+            .invoke_native(
+                "java/lang/invoke/MethodHandles",
+                "privateLookupIn",
+                "(Ljava/lang/Class;Ljava/lang/invoke/MethodHandles$Lookup;)Ljava/lang/invoke/MethodHandles$Lookup;",
+                &[
+                    Value::Reference(other_target_class),
+                    Value::Reference(full_lookup),
+                ],
+            )
+            .unwrap()
+            .unwrap()
+            .as_reference()
+            .unwrap();
+        assert_eq!(
+            vm.invoke_native(
+                "java/lang/invoke/MethodHandles$Lookup",
+                "lookupModes",
+                "()I",
+                &[Value::Reference(cross_package_lookup)],
+            )
+            .unwrap(),
+            Some(Value::Int(0x1b))
+        );
+    }
+
+    #[test]
     fn write_barrier_tracks_old_to_young_reference() {
         let mut vm = Vm::new().expect("failed to create VM");
         vm.set_gc_threshold(1024);
@@ -5770,5 +8142,284 @@ mod tests {
             }
             _ => panic!("unexpected deopt resume result"),
         }
+    }
+
+    /// M1 regression: `invokevirtual MethodHandle.invokeExact(...)I` dispatches
+    /// through `invoke_method_handle` using the call-site descriptor (signature
+    /// polymorphism), not the placeholder method on `MethodHandle`.
+    #[test]
+    fn method_handle_invoke_exact_is_signature_polymorphic() {
+        let mut vm = Vm::new().expect("failed to create VM");
+
+        // demo/Target.answer()I  ->  returns 42.
+        let target_method = Method::new(
+            [
+                0x10, 0x2a, // bipush 42
+                0xac, // ireturn
+            ],
+            0,
+            1,
+        )
+        .with_metadata("demo/Target", "answer", "()I", 0x0008);
+        vm.register_class(RuntimeClass {
+            name: "demo/Target".to_string(),
+            super_class: Some("java/lang/Object".to_string()),
+            methods: HashMap::from([(
+                ("answer".to_string(), "()I".to_string()),
+                ClassMethod::Bytecode(target_method),
+            )]),
+            static_fields: HashMap::new(),
+            instance_fields: vec![],
+            field_offsets: HashMap::new(),
+            interfaces: vec![],
+        });
+
+        let handle = vm
+            .allocate_bootstrap_method_handle(6, "demo/Target", "answer", "()I", None)
+            .unwrap();
+
+        // demo/Caller.call(MethodHandle)I:
+        //   aload_0; invokevirtual #1 java/lang/invoke/MethodHandle.invokeExact ()I; ireturn
+        let caller = Method::new(
+            [
+                0x2a, // aload_0
+                0xb6, 0x00, 0x01, // invokevirtual #1
+                0xac, // ireturn
+            ],
+            1,
+            1,
+        )
+        .with_metadata("demo/Caller", "call", "(Ljava/lang/invoke/MethodHandle;)I", 0x0008)
+        .with_method_refs(vec![
+            None,
+            Some(MethodRef {
+                class_name: "java/lang/invoke/MethodHandle".to_string(),
+                method_name: "invokeExact".to_string(),
+                descriptor: "()I".to_string(),
+            }),
+        ])
+        .with_initial_locals([Some(Value::Reference(handle))]);
+
+        let result = vm.execute(caller).unwrap();
+        assert_eq!(result, ExecutionResult::Value(Value::Int(42)));
+    }
+
+    /// M1 regression: `ldc` of a `CONSTANT_Dynamic` slot triggers bootstrap and
+    /// caches the resulting value across re-execution.
+    #[test]
+    fn condy_constant_bootstrap_caches_value() {
+        let mut vm = Vm::new().expect("failed to create VM");
+
+        // Bootstrap: demo/Bootstrap.make(Lookup, name, Class)I always returns 99.
+        let bootstrap = Method::new(
+            [
+                0x10, 0x63, // bipush 99
+                0xac, // ireturn
+            ],
+            3,
+            1,
+        )
+        .with_metadata(
+            "demo/Bootstrap",
+            "make",
+            "(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/Class;)I",
+            0x0008,
+        );
+        vm.register_class(RuntimeClass {
+            name: "demo/Bootstrap".to_string(),
+            super_class: Some("java/lang/Object".to_string()),
+            methods: HashMap::from([(
+                (
+                    "make".to_string(),
+                    "(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/Class;)I"
+                        .to_string(),
+                ),
+                ClassMethod::Bytecode(bootstrap),
+            )]),
+            static_fields: HashMap::new(),
+            instance_fields: vec![],
+            field_offsets: HashMap::new(),
+            interfaces: vec![],
+        });
+
+        let site = CondySite {
+            owner_class: "demo/Caller".to_string(),
+            constant_pool_index: 2,
+            name: "k".to_string(),
+            descriptor: "I".to_string(),
+            bootstrap_method_index: 0,
+            bootstrap_class: "demo/Bootstrap".to_string(),
+            bootstrap_name: "make".to_string(),
+            bootstrap_descriptor:
+                "(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/Class;)I"
+                    .to_string(),
+            arguments: vec![],
+        };
+
+        // ldc_w #2 (condy); ireturn
+        let caller = Method::with_constant_pool(
+            [0x13, 0x00, 0x02, 0xac],
+            0,
+            1,
+            vec![None, None, None],
+        )
+        .with_metadata("demo/Caller", "call", "()I", 0x0008)
+        .with_condy_sites(vec![None, None, Some(site)]);
+
+        assert_eq!(
+            vm.execute(caller.clone()).unwrap(),
+            ExecutionResult::Value(Value::Int(99))
+        );
+        // Second call hits the cache, still 99.
+        assert_eq!(
+            vm.execute(caller).unwrap(),
+            ExecutionResult::Value(Value::Int(99))
+        );
+    }
+
+    /// M1 regression: when an indy bootstrap returns a `MutableCallSite`, the
+    /// linkage caches the *call site*, so `setTarget` calls between invocations
+    /// change the observed target.
+    #[test]
+    fn mutable_callsite_set_target_changes_invocation() {
+        let mut vm = Vm::new().expect("failed to create VM");
+
+        // Two static targets returning different ints.
+        for (cls, ret) in [("demo/A", 0x07), ("demo/B", 0x29)] {
+            let m = Method::new([0x10, ret as u8, 0xac], 0, 1)
+                .with_metadata(cls, "v", "()I", 0x0008);
+            vm.register_class(RuntimeClass {
+                name: cls.to_string(),
+                super_class: Some("java/lang/Object".to_string()),
+                methods: HashMap::from([(
+                    ("v".to_string(), "()I".to_string()),
+                    ClassMethod::Bytecode(m),
+                )]),
+                static_fields: HashMap::new(),
+                instance_fields: vec![],
+                field_offsets: HashMap::new(),
+                interfaces: vec![],
+            });
+        }
+        let first_target = vm
+            .allocate_bootstrap_method_handle(6, "demo/A", "v", "()I", None)
+            .unwrap();
+        let second_target = vm
+            .allocate_bootstrap_method_handle(6, "demo/B", "v", "()I", None)
+            .unwrap();
+
+        // Synthesize a MutableCallSite with __target = first_target.
+        vm.ensure_callsite_classes();
+        let callsite = {
+            let class = vm.get_class("java/lang/invoke/MutableCallSite").unwrap();
+            let offset = class.field_offsets.get("__target").copied().unwrap();
+            let mut fields = vec![Value::Reference(Reference::Null); class.instance_fields.len()];
+            fields[offset] = Value::Reference(first_target);
+            vm.heap.lock().unwrap().allocate(HeapValue::Object {
+                class_name: "java/lang/invoke/MutableCallSite".to_string(),
+                fields,
+            })
+        };
+
+        // Bootstrap returns the pre-built MutableCallSite via getstatic of a
+        // sentinel static field.
+        vm.register_class(RuntimeClass {
+            name: "demo/CSHolder".to_string(),
+            super_class: Some("java/lang/Object".to_string()),
+            methods: HashMap::new(),
+            static_fields: HashMap::from([(
+                "cs".to_string(),
+                Value::Reference(callsite),
+            )]),
+            instance_fields: vec![],
+            field_offsets: HashMap::new(),
+            interfaces: vec![],
+        });
+        let bootstrap = Method::new(
+            [
+                0xb2, 0x00, 0x01, // getstatic #1 demo/CSHolder.cs
+                0xb0, // areturn
+            ],
+            3,
+            1,
+        )
+        .with_metadata(
+            "demo/Bootstrap",
+            "bootstrap",
+            "(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/CallSite;",
+            0x0008,
+        )
+        .with_field_refs(vec![
+            None,
+            Some(FieldRef {
+                class_name: "demo/CSHolder".to_string(),
+                field_name: "cs".to_string(),
+                descriptor: "Ljava/lang/invoke/MutableCallSite;".to_string(),
+            }),
+        ]);
+        vm.register_class(RuntimeClass {
+            name: "demo/Bootstrap".to_string(),
+            super_class: Some("java/lang/Object".to_string()),
+            methods: HashMap::from([(
+                (
+                    "bootstrap".to_string(),
+                    "(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/CallSite;"
+                        .to_string(),
+                ),
+                ClassMethod::Bytecode(bootstrap),
+            )]),
+            static_fields: HashMap::new(),
+            instance_fields: vec![],
+            field_offsets: HashMap::new(),
+            interfaces: vec![],
+        });
+
+        let site = InvokeDynamicSite {
+            owner_class: "demo/Caller".to_string(),
+            constant_pool_index: 1,
+            name: "dyn".to_string(),
+            descriptor: "()I".to_string(),
+            bootstrap_method_index: 0,
+            kind: InvokeDynamicKind::BootstrapMethodHandle {
+                bootstrap_class: "demo/Bootstrap".to_string(),
+                bootstrap_name: "bootstrap".to_string(),
+                bootstrap_descriptor:
+                    "(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/CallSite;"
+                        .to_string(),
+                arguments: vec![],
+            },
+        };
+        let caller = Method::new(
+            [
+                0xba, 0x00, 0x01, 0x00, 0x00, // invokedynamic #1
+                0xac, // ireturn
+            ],
+            0,
+            1,
+        )
+        .with_metadata("demo/Caller", "call", "()I", 0x0008)
+        .with_invoke_dynamic_sites(vec![None, Some(site)]);
+
+        // First call observes A.
+        assert_eq!(
+            vm.execute(caller.clone()).unwrap(),
+            ExecutionResult::Value(Value::Int(7))
+        );
+
+        // setTarget to B, then re-invoke: should now observe B.
+        vm.invoke_native(
+            "java/lang/invoke/MutableCallSite",
+            "setTarget",
+            "(Ljava/lang/invoke/MethodHandle;)V",
+            &[
+                Value::Reference(callsite),
+                Value::Reference(second_target),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            vm.execute(caller).unwrap(),
+            ExecutionResult::Value(Value::Int(41))
+        );
     }
 }

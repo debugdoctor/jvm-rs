@@ -68,6 +68,208 @@ pub(super) fn invoke_other(
             };
             Ok(Some(Value::Int(hash)))
         }
+        (
+            "java/lang/invoke/MethodHandles",
+            "lookup",
+            "()Ljava/lang/invoke/MethodHandles$Lookup;",
+        ) => Ok(Some(Value::Reference(
+            vm.allocate_bootstrap_lookup("java/lang/Object")?,
+        ))),
+        (
+            "java/lang/invoke/MethodHandles",
+            "publicLookup",
+            "()Ljava/lang/invoke/MethodHandles$Lookup;",
+        ) => Ok(Some(Value::Reference(
+            vm.allocate_bootstrap_lookup_with_modes("java/lang/Object", 0x01)?,
+        ))),
+        (
+            "java/lang/invoke/MethodHandles",
+            "privateLookupIn",
+            "(Ljava/lang/Class;Ljava/lang/invoke/MethodHandles$Lookup;)Ljava/lang/invoke/MethodHandles$Lookup;",
+        ) => {
+            let target_class_ref = args[0].as_reference()?;
+            let lookup_ref = args[1].as_reference()?;
+            let lookup_class = lookup_class_name(vm, lookup_ref)?;
+            let lookup_modes = lookup_modes(vm, lookup_ref)?;
+            if lookup_modes & 0x02 == 0 || lookup_modes & 0x10 == 0 {
+                return Err(VmError::UnhandledException {
+                    class_name: "java/lang/IllegalAccessException".to_string(),
+                });
+            }
+            let target_class =
+                crate::vm::builtin::helpers::class_internal_name(vm, target_class_ref)?;
+            let mut target_modes = 0x1f;
+            if !vm.same_runtime_package(&lookup_class, &target_class) {
+                target_modes &= !0x04;
+            }
+            Ok(Some(Value::Reference(
+                vm.allocate_bootstrap_lookup_with_modes(&target_class, target_modes)?,
+            )))
+        }
+        (
+            "java/lang/invoke/MethodHandles",
+            "constant",
+            "(Ljava/lang/Class;Ljava/lang/Object;)Ljava/lang/invoke/MethodHandle;",
+        ) => {
+            let class_ref = args[0].as_reference()?;
+            let target_class = crate::vm::builtin::helpers::class_internal_name(vm, class_ref)?;
+            Ok(Some(Value::Reference(
+                vm.allocate_bootstrap_method_handle(
+                    0,
+                    &target_class,
+                    "",
+                    "Ljava/lang/Object;",
+                    Some(args[1]),
+                )?,
+            )))
+        }
+        (
+            "java/lang/invoke/MethodHandles$Lookup",
+            "findStatic",
+            "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle;",
+        ) => lookup_find_method(vm, args, 6),
+        (
+            "java/lang/invoke/MethodHandles$Lookup",
+            "findVirtual",
+            "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle;",
+        ) => lookup_find_method(vm, args, 5),
+        (
+            "java/lang/invoke/MethodHandles$Lookup",
+            "findSpecial",
+            "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;",
+        ) => lookup_find_method(vm, args, 7),
+        (
+            "java/lang/invoke/MethodHandles$Lookup",
+            "findConstructor",
+            "(Ljava/lang/Class;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle;",
+        ) => {
+            let lookup_class = lookup_class_name(vm, args[0].as_reference()?)?;
+            let lookup_modes = lookup_modes(vm, args[0].as_reference()?)?;
+            let class_ref = args[1].as_reference()?;
+            let method_type_ref = args[2].as_reference()?;
+            let descriptor_ref = vm
+                .get_object_field(method_type_ref, "__descriptor")?
+                .as_reference()?;
+            let descriptor = crate::vm::builtin::helpers::stringify_reference(vm, descriptor_ref)?;
+            let target_class = crate::vm::builtin::helpers::class_internal_name(vm, class_ref)?;
+            vm.validate_method_handle_lookup(
+                &lookup_class,
+                lookup_modes,
+                &target_class,
+                "<init>",
+                &descriptor,
+                8,
+            )?;
+            Ok(Some(Value::Reference(
+                vm.allocate_bootstrap_method_handle_with_lookup(
+                    8,
+                    &target_class,
+                    "<init>",
+                    &descriptor,
+                    None,
+                    Some(&lookup_class),
+                )?,
+            )))
+        }
+        ("java/lang/invoke/MethodHandles$Lookup", "lookupModes", "()I") => {
+            Ok(Some(Value::Int(lookup_modes(vm, args[0].as_reference()?)?)))
+        }
+        (
+            "java/lang/invoke/MethodHandles$Lookup",
+            "findGetter",
+            "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;",
+        ) => lookup_find_field(vm, args, 1),
+        (
+            "java/lang/invoke/MethodHandles$Lookup",
+            "findSetter",
+            "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;",
+        ) => lookup_find_field(vm, args, 3),
+        (
+            "java/lang/invoke/MethodHandles$Lookup",
+            "findStaticGetter",
+            "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;",
+        ) => lookup_find_field(vm, args, 2),
+        (
+            "java/lang/invoke/MethodHandles$Lookup",
+            "findStaticSetter",
+            "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;",
+        ) => lookup_find_field(vm, args, 4),
+        (
+            "java/lang/invoke/MethodHandles$Lookup",
+            "unreflect",
+            "(Ljava/lang/reflect/Method;)Ljava/lang/invoke/MethodHandle;",
+        ) => unreflect_method(vm, args[0].as_reference()?, args[1].as_reference()?),
+        (
+            "java/lang/invoke/MethodHandles$Lookup",
+            "unreflectConstructor",
+            "(Ljava/lang/reflect/Constructor;)Ljava/lang/invoke/MethodHandle;",
+        ) => unreflect_constructor(vm, args[0].as_reference()?, args[1].as_reference()?),
+        (
+            "java/lang/invoke/MethodHandles$Lookup",
+            "unreflectGetter",
+            "(Ljava/lang/reflect/Field;)Ljava/lang/invoke/MethodHandle;",
+        ) => unreflect_field(vm, args[0].as_reference()?, args[1].as_reference()?, 1, 2),
+        (
+            "java/lang/invoke/MethodHandles$Lookup",
+            "unreflectSetter",
+            "(Ljava/lang/reflect/Field;)Ljava/lang/invoke/MethodHandle;",
+        ) => unreflect_field(vm, args[0].as_reference()?, args[1].as_reference()?, 3, 4),
+        (
+            "java/lang/invoke/MethodType",
+            "toMethodDescriptorString" | "toString",
+            "()Ljava/lang/String;",
+        ) => {
+            let descriptor = vm.get_object_field(args[0].as_reference()?, "__descriptor")?;
+            Ok(Some(descriptor))
+        }
+        ("java/lang/invoke/CallSite", "getTarget", "()Ljava/lang/invoke/MethodHandle;")
+        | ("java/lang/invoke/ConstantCallSite", "getTarget", "()Ljava/lang/invoke/MethodHandle;")
+        | ("java/lang/invoke/MutableCallSite", "getTarget", "()Ljava/lang/invoke/MethodHandle;")
+        | ("java/lang/invoke/VolatileCallSite", "getTarget", "()Ljava/lang/invoke/MethodHandle;") => {
+            Ok(Some(
+                vm.get_object_field(args[0].as_reference()?, "__target")?,
+            ))
+        }
+        ("java/lang/invoke/ConstantCallSite", "<init>", "(Ljava/lang/invoke/MethodHandle;)V")
+        | ("java/lang/invoke/MutableCallSite", "<init>", "(Ljava/lang/invoke/MethodHandle;)V")
+        | ("java/lang/invoke/VolatileCallSite", "<init>", "(Ljava/lang/invoke/MethodHandle;)V") => {
+            vm.set_object_field(args[0].as_reference()?, "__target", args[1])?;
+            Ok(None)
+        }
+        // MutableCallSite / VolatileCallSite construct with a bare MethodType
+        // first, then `setTarget` later.
+        ("java/lang/invoke/MutableCallSite", "<init>", "(Ljava/lang/invoke/MethodType;)V")
+        | ("java/lang/invoke/VolatileCallSite", "<init>", "(Ljava/lang/invoke/MethodType;)V") => {
+            vm.set_object_field(
+                args[0].as_reference()?,
+                "__target",
+                Value::Reference(Reference::Null),
+            )?;
+            Ok(None)
+        }
+        (
+            "java/lang/invoke/MutableCallSite",
+            "setTarget",
+            "(Ljava/lang/invoke/MethodHandle;)V",
+        )
+        | (
+            "java/lang/invoke/VolatileCallSite",
+            "setTarget",
+            "(Ljava/lang/invoke/MethodHandle;)V",
+        ) => {
+            vm.set_object_field(args[0].as_reference()?, "__target", args[1])?;
+            Ok(None)
+        }
+        ("java/lang/invoke/MutableCallSite", "syncAll", "([Ljava/lang/invoke/MutableCallSite;)V")
+        | (
+            "java/lang/invoke/VolatileCallSite",
+            "syncAll",
+            "([Ljava/lang/invoke/VolatileCallSite;)V",
+        ) => {
+            // No special memory-ordering work needed: stores go through the
+            // heap mutex, which gives us SeqCst semantics for the field write.
+            Ok(None)
+        }
         ("jdk/internal/reflect/Reflection", "getCallerClass", "()Ljava/lang/Class;") => {
             Ok(Some(Value::Reference(Reference::Null)))
         }
@@ -142,4 +344,186 @@ pub(super) fn invoke_other(
             class_name: "".to_string(),
         }),
     }
+}
+
+fn lookup_find_method(
+    vm: &mut Vm,
+    args: &[Value],
+    reference_kind: u8,
+) -> Result<Option<Value>, VmError> {
+    let lookup_ref = args[0].as_reference()?;
+    let lookup_class = lookup_class_name(vm, lookup_ref)?;
+    let lookup_modes = lookup_modes(vm, lookup_ref)?;
+    let class_ref = args[1].as_reference()?;
+    let method_name =
+        crate::vm::builtin::helpers::stringify_reference(vm, args[2].as_reference()?)?;
+    let method_type_ref = args[3].as_reference()?;
+    let descriptor_ref = vm
+        .get_object_field(method_type_ref, "__descriptor")?
+        .as_reference()?;
+    let descriptor = crate::vm::builtin::helpers::stringify_reference(vm, descriptor_ref)?;
+    let target_class = crate::vm::builtin::helpers::class_internal_name(vm, class_ref)?;
+    vm.validate_method_handle_lookup(
+        &lookup_class,
+        lookup_modes,
+        &target_class,
+        &method_name,
+        &descriptor,
+        reference_kind,
+    )?;
+    Ok(Some(Value::Reference(
+        vm.allocate_bootstrap_method_handle_with_lookup(
+            reference_kind,
+            &target_class,
+            &method_name,
+            &descriptor,
+            None,
+            Some(&lookup_class),
+        )?,
+    )))
+}
+
+fn lookup_find_field(
+    vm: &mut Vm,
+    args: &[Value],
+    reference_kind: u8,
+) -> Result<Option<Value>, VmError> {
+    let lookup_ref = args[0].as_reference()?;
+    let lookup_class = lookup_class_name(vm, lookup_ref)?;
+    let lookup_modes = lookup_modes(vm, lookup_ref)?;
+    let class_ref = args[1].as_reference()?;
+    let field_name = crate::vm::builtin::helpers::stringify_reference(vm, args[2].as_reference()?)?;
+    let field_class_ref = args[3].as_reference()?;
+    let target_class = crate::vm::builtin::helpers::class_internal_name(vm, class_ref)?;
+    let field_class = crate::vm::builtin::helpers::class_internal_name(vm, field_class_ref)?;
+    let descriptor = crate::vm::builtin::helpers::class_name_to_descriptor(&field_class);
+    let resolved_class = vm.validate_field_method_handle_lookup(
+        &lookup_class,
+        lookup_modes,
+        &target_class,
+        &field_name,
+        &descriptor,
+        reference_kind,
+    )?;
+    Ok(Some(Value::Reference(
+        vm.allocate_bootstrap_method_handle_with_lookup(
+            reference_kind,
+            &resolved_class,
+            &field_name,
+            &descriptor,
+            None,
+            Some(&lookup_class),
+        )?,
+    )))
+}
+
+fn unreflect_method(
+    vm: &mut Vm,
+    lookup_ref: Reference,
+    method_ref: Reference,
+) -> Result<Option<Value>, VmError> {
+    let lookup_class = lookup_class_name(vm, lookup_ref)?;
+    let lookup_modes = lookup_modes(vm, lookup_ref)?;
+    let declaring_class_ref = vm
+        .get_object_field(method_ref, "__declaring_class")?
+        .as_reference()?;
+    let name_ref = vm.get_object_field(method_ref, "__name")?.as_reference()?;
+    let desc_ref = vm
+        .get_object_field(method_ref, "__descriptor")?
+        .as_reference()?;
+    let modifiers = vm.get_object_field(method_ref, "__modifiers")?.as_int()? as u16;
+    let target_class = crate::vm::builtin::helpers::class_internal_name(vm, declaring_class_ref)?;
+    let method_name = crate::vm::builtin::helpers::stringify_reference(vm, name_ref)?;
+    let descriptor = crate::vm::builtin::helpers::stringify_reference(vm, desc_ref)?;
+    vm.validate_lookup_member_access(&lookup_class, lookup_modes, &target_class, modifiers)?;
+    let reference_kind = if modifiers & 0x0008 != 0 { 6 } else { 5 };
+    Ok(Some(Value::Reference(
+        vm.allocate_bootstrap_method_handle_with_lookup(
+            reference_kind,
+            &target_class,
+            &method_name,
+            &descriptor,
+            None,
+            Some(&lookup_class),
+        )?,
+    )))
+}
+
+fn lookup_class_name(vm: &Vm, lookup_ref: Reference) -> Result<String, VmError> {
+    let lookup_class_ref = vm
+        .get_object_field(lookup_ref, "__lookupClass")?
+        .as_reference()?;
+    crate::vm::builtin::helpers::class_internal_name(vm, lookup_class_ref)
+}
+
+fn lookup_modes(vm: &Vm, lookup_ref: Reference) -> Result<i32, VmError> {
+    vm.get_object_field(lookup_ref, "__modes")
+        .and_then(|value| value.as_int())
+        .or(Ok(0x5f))
+}
+
+fn unreflect_constructor(
+    vm: &mut Vm,
+    lookup_ref: Reference,
+    ctor_ref: Reference,
+) -> Result<Option<Value>, VmError> {
+    let lookup_class = lookup_class_name(vm, lookup_ref)?;
+    let lookup_modes = lookup_modes(vm, lookup_ref)?;
+    let declaring_class_ref = vm
+        .get_object_field(ctor_ref, "__declaring_class")?
+        .as_reference()?;
+    let desc_ref = vm
+        .get_object_field(ctor_ref, "__descriptor")?
+        .as_reference()?;
+    let modifiers = vm.get_object_field(ctor_ref, "__modifiers")?.as_int()? as u16;
+    let target_class = crate::vm::builtin::helpers::class_internal_name(vm, declaring_class_ref)?;
+    let descriptor = crate::vm::builtin::helpers::stringify_reference(vm, desc_ref)?;
+    vm.validate_lookup_member_access(&lookup_class, lookup_modes, &target_class, modifiers)?;
+    Ok(Some(Value::Reference(
+        vm.allocate_bootstrap_method_handle_with_lookup(
+            8,
+            &target_class,
+            "<init>",
+            &descriptor,
+            None,
+            Some(&lookup_class),
+        )?,
+    )))
+}
+
+fn unreflect_field(
+    vm: &mut Vm,
+    lookup_ref: Reference,
+    field_ref: Reference,
+    instance_kind: u8,
+    static_kind: u8,
+) -> Result<Option<Value>, VmError> {
+    let lookup_class = lookup_class_name(vm, lookup_ref)?;
+    let lookup_modes = lookup_modes(vm, lookup_ref)?;
+    let declaring_class_ref = vm
+        .get_object_field(field_ref, "__declaring_class")?
+        .as_reference()?;
+    let name_ref = vm.get_object_field(field_ref, "__name")?.as_reference()?;
+    let type_ref = vm.get_object_field(field_ref, "__type")?.as_reference()?;
+    let modifiers = vm.get_object_field(field_ref, "__modifiers")?.as_int()?;
+    let target_class = crate::vm::builtin::helpers::class_internal_name(vm, declaring_class_ref)?;
+    let field_name = crate::vm::builtin::helpers::stringify_reference(vm, name_ref)?;
+    let field_type = crate::vm::builtin::helpers::class_internal_name(vm, type_ref)?;
+    let descriptor = crate::vm::builtin::helpers::class_name_to_descriptor(&field_type);
+    vm.validate_lookup_member_access(&lookup_class, lookup_modes, &target_class, modifiers as u16)?;
+    let reference_kind = if modifiers & 0x0008 != 0 {
+        static_kind
+    } else {
+        instance_kind
+    };
+    Ok(Some(Value::Reference(
+        vm.allocate_bootstrap_method_handle_with_lookup(
+            reference_kind,
+            &target_class,
+            &field_name,
+            &descriptor,
+            None,
+            Some(&lookup_class),
+        )?,
+    )))
 }

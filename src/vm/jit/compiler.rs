@@ -801,6 +801,14 @@ impl<'a> BytecodeCompiler<'a> {
     }
 
     fn load_constant(&mut self, index: usize) -> Result<(), JitError> {
+        if matches!(
+            self.method.condy_sites.get(index),
+            Some(Some(_))
+        ) {
+            return Err(JitError::CompilationFailed(
+                "ldc of CONSTANT_Dynamic not yet JIT-supported; fall back to interpreter".into(),
+            ));
+        }
         if let Some(Some(const_val)) = self.method.constants.get(index) {
             match const_val {
                 crate::vm::types::Value::Int(i) => {

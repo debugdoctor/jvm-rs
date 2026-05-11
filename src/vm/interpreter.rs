@@ -119,7 +119,9 @@ pub(crate) fn execute_imul(thread: &mut Thread) -> Result<(), VmError> {
 }
 
 #[inline(always)]
-pub(crate) fn execute_ireturn_full(thread: &mut Thread) -> Result<Option<ExecutionResult>, VmError> {
+pub(crate) fn execute_ireturn_full(
+    thread: &mut Thread,
+) -> Result<Option<ExecutionResult>, VmError> {
     let value = thread.current_frame_mut().pop()?;
     if thread.depth() == 1 {
         return Ok(Some(ExecutionResult::Value(value)));
@@ -130,12 +132,16 @@ pub(crate) fn execute_ireturn_full(thread: &mut Thread) -> Result<Option<Executi
 }
 
 #[inline(always)]
-pub(crate) fn execute_lreturn_full(thread: &mut Thread) -> Result<Option<ExecutionResult>, VmError> {
+pub(crate) fn execute_lreturn_full(
+    thread: &mut Thread,
+) -> Result<Option<ExecutionResult>, VmError> {
     execute_ireturn_full(thread)
 }
 
 #[inline(always)]
-pub(crate) fn execute_areturn_full(thread: &mut Thread) -> Result<Option<ExecutionResult>, VmError> {
+pub(crate) fn execute_areturn_full(
+    thread: &mut Thread,
+) -> Result<Option<ExecutionResult>, VmError> {
     execute_ireturn_full(thread)
 }
 

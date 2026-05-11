@@ -1,10 +1,13 @@
 use std::collections::HashMap;
-use std::fs;
+use std::fs::{self, File as FsFile};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
+use crate::vm::builtin::helpers::stringify_reference;
+use crate::vm::builtin::invoke_nio;
 use crate::vm::types::stub_return_value_tracked;
 use crate::vm::{ClassMethod, HeapValue, Reference, RuntimeClass, Value, Vm, VmError};
 
@@ -40,6 +43,128 @@ fn new_file_object(vm: &mut Vm, path: impl Into<String>) -> Reference {
         class_name: "java/io/File".to_string(),
         fields: vec![path_ref],
     })
+}
+
+fn io_exception_for_error(error: &std::io::Error) -> &'static str {
+    match error.kind() {
+        std::io::ErrorKind::NotFound => "java/io/FileNotFoundException",
+        std::io::ErrorKind::AlreadyExists => "java/nio/file/FileAlreadyExistsException",
+        std::io::ErrorKind::PermissionDenied => "java/nio/file/AccessDeniedException",
+        std::io::ErrorKind::DirectoryNotEmpty => "java/nio/file/DirectoryNotEmptyException",
+        _ => "java/io/IOException",
+    }
+}
+
+fn new_file_descriptor(vm: &mut Vm, resource_id: u64) -> Reference {
+    vm.heap.lock().unwrap().allocate(HeapValue::Object {
+        class_name: "java/io/FileDescriptor".to_string(),
+        fields: vec![Value::Long(resource_id as i64)],
+    })
+}
+
+fn fd_resource_id(vm: &Vm, fd_ref: Reference) -> Result<u64, VmError> {
+    let heap = vm.heap.lock().unwrap();
+    match heap.get(fd_ref)? {
+        HeapValue::Object { fields, .. } => match fields.get(0) {
+            Some(Value::Long(id)) => Ok(*id as u64),
+            _ => Ok(0),
+        },
+        _ => Ok(0),
+    }
+}
+
+fn fd_set_resource_id(vm: &mut Vm, fd_ref: Reference, id: u64) -> Result<(), VmError> {
+    let mut heap = vm.heap.lock().unwrap();
+    if let HeapValue::Object { fields, .. } = heap.get_mut(fd_ref)? {
+        if !fields.is_empty() {
+            fields[0] = Value::Long(id as i64);
+        }
+    }
+    Ok(())
+}
+
+fn fis_get_fd_ref(vm: &Vm, obj_ref: Reference) -> Result<Reference, VmError> {
+    let heap = vm.heap.lock().unwrap();
+    match heap.get(obj_ref)? {
+        HeapValue::Object { fields, .. } => match fields.get(0) {
+            Some(Value::Reference(r)) => Ok(*r),
+            _ => Ok(Reference::Null),
+        },
+        _ => Ok(Reference::Null),
+    }
+}
+
+fn raf_get_rw(vm: &Vm, obj_ref: Reference) -> Result<bool, VmError> {
+    let heap = vm.heap.lock().unwrap();
+    match heap.get(obj_ref)? {
+        HeapValue::Object { fields, .. } => match fields.get(2) {
+            Some(Value::Int(i)) => Ok(*i != 0),
+            _ => Ok(false),
+        },
+        _ => Ok(false),
+    }
+}
+
+fn raf_set_rw(vm: &mut Vm, obj_ref: Reference, rw: bool) -> Result<(), VmError> {
+    let mut heap = vm.heap.lock().unwrap();
+    if let HeapValue::Object { fields, .. } = heap.get_mut(obj_ref)? {
+        if fields.len() > 2 {
+            fields[2] = Value::Int(if rw { 1 } else { 0 });
+        }
+    }
+    Ok(())
+}
+
+fn open_file_stream(
+    vm: &mut Vm,
+    obj_ref: Reference,
+    path_str: &str,
+    mode: u8,
+) -> Result<(), VmError> {
+    let path = PathBuf::from(path_str);
+    let file = match mode {
+        0 => FsFile::open(&path).map_err(|e| VmError::UnhandledException {
+            class_name: io_exception_for_error(&e).to_string(),
+        })?,
+        1 => fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(&path)
+            .map_err(|e| VmError::UnhandledException {
+                class_name: io_exception_for_error(&e).to_string(),
+            })?,
+        2 => FsFile::create(&path).map_err(|e| VmError::UnhandledException {
+            class_name: io_exception_for_error(&e).to_string(),
+        })?,
+        3 => fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .append(true)
+            .open(&path)
+            .map_err(|e| VmError::UnhandledException {
+                class_name: io_exception_for_error(&e).to_string(),
+            })?,
+        _ => {
+            return Err(VmError::UnhandledException {
+                class_name: "java/lang/IllegalArgumentException".to_string(),
+            });
+        }
+    };
+    let rid = vm.io_resources.alloc(file);
+    let fd_ref = fis_get_fd_ref(vm, obj_ref)?;
+    fd_set_resource_id(vm, fd_ref, rid)?;
+    // Store path in fields[1]
+    let path_value = vm.new_string(path_str.to_string());
+    {
+        let mut heap = vm.heap.lock().unwrap();
+        if let HeapValue::Object { fields, .. } = heap.get_mut(obj_ref)? {
+            if fields.len() > 1 {
+                fields[1] = path_value;
+            }
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn invoke_io(
@@ -269,11 +394,7 @@ pub(super) fn invoke_lang(
                 Reference::Null => 0,
                 _ => {
                     if let Ok(b) = crate::vm::builtin::helpers::stringify_reference(vm, b_ref) {
-                        if a == b {
-                            1
-                        } else {
-                            0
-                        }
+                        if a == b { 1 } else { 0 }
                     } else {
                         0
                     }
@@ -1108,6 +1229,414 @@ pub(super) fn invoke_lang(
         ("java/io/OutputStream", "write", "([BII)V") => Ok(None),
         ("java/io/OutputStream", "flush", "()V") => Ok(None),
         ("java/io/OutputStream", "close", "()V") => Ok(None),
+        // --- FileDescriptor ---
+        ("java/io/FileDescriptor", "valid", "()Z") => {
+            let obj_ref = args[0].as_reference()?;
+            let rid = fd_resource_id(vm, obj_ref)?;
+            Ok(Some(Value::Int(if vm.io_resources.is_open(rid) {
+                1
+            } else {
+                0
+            })))
+        }
+        ("java/io/FileDescriptor", "sync", "()V") => {
+            let obj_ref = args[0].as_reference()?;
+            let rid = fd_resource_id(vm, obj_ref)?;
+            let _ = vm.io_resources.with_file(rid, |file| {
+                file.sync_all().map_err(|e| VmError::UnhandledException {
+                    class_name: io_exception_for_error(&e).to_string(),
+                })
+            });
+            Ok(None)
+        }
+        // --- FileInputStream ---
+        ("java/io/FileInputStream", "<init>", "(Ljava/io/File;)V") => {
+            let obj_ref = args[0].as_reference()?;
+            let file_ref = args[1].as_reference()?;
+            let path = file_path_string(vm, file_ref)?;
+            if let Some(path) = path {
+                let fd_ref = new_file_descriptor(vm, 0);
+                {
+                    let mut heap = vm.heap.lock().unwrap();
+                    if let HeapValue::Object { fields, .. } = heap.get_mut(obj_ref)? {
+                        fields[0] = Value::Reference(fd_ref);
+                    }
+                }
+                open_file_stream(vm, obj_ref, &path, 0)?;
+            }
+            Ok(None)
+        }
+        ("java/io/FileInputStream", "<init>", "(Ljava/io/FileDescriptor;)V") => {
+            let obj_ref = args[0].as_reference()?;
+            let fd_ref = args[1].as_reference()?;
+            let mut heap = vm.heap.lock().unwrap();
+            if let HeapValue::Object { fields, .. } = heap.get_mut(obj_ref)? {
+                fields[0] = Value::Reference(fd_ref);
+            }
+            Ok(None)
+        }
+        ("java/io/FileInputStream", "open0", "(Ljava/lang/String;)V") => {
+            let obj_ref = args[0].as_reference()?;
+            let path_ref = args[1].as_reference()?;
+            let path = crate::vm::builtin::helpers::stringify_reference(vm, path_ref)?;
+            open_file_stream(vm, obj_ref, &path, 0)?;
+            Ok(None)
+        }
+        ("java/io/FileInputStream", "read0", "()I") => {
+            let obj_ref = args[0].as_reference()?;
+            let fd_ref = fis_get_fd_ref(vm, obj_ref)?;
+            let rid = fd_resource_id(vm, fd_ref)?;
+            let byte = vm.io_resources.with_file(rid, |file| {
+                let mut buf = [0u8; 1];
+                match file.read(&mut buf) {
+                    Ok(0) => Ok(-1),
+                    Ok(_) => Ok(buf[0] as i32),
+                    Err(e) => Err(VmError::UnhandledException {
+                        class_name: io_exception_for_error(&e).to_string(),
+                    }),
+                }
+            })?;
+            Ok(Some(Value::Int(byte)))
+        }
+        ("java/io/FileInputStream", "readBytes", "([BII)I") => {
+            let obj_ref = args[0].as_reference()?;
+            let buf_ref = args[1].as_reference()?;
+            let off = args[2].as_int()? as usize;
+            let len = args[3].as_int()? as usize;
+            let fd_ref = fis_get_fd_ref(vm, obj_ref)?;
+            let rid = fd_resource_id(vm, fd_ref)?;
+            if len == 0 {
+                return Ok(Some(Value::Int(0)));
+            }
+            let total = vm.io_resources.with_file(rid, |file| {
+                let mut buffer = vec![0u8; len];
+                match file.read(&mut buffer) {
+                    Ok(0) => Ok(-1i32),
+                    Ok(n) => {
+                        let mut heap = vm.heap.lock().unwrap();
+                        if let HeapValue::IntArray { values } = heap.get_mut(buf_ref)? {
+                            let end = off + n;
+                            if end <= values.len() {
+                                for (slot, byte) in values[off..end].iter_mut().zip(&buffer[..n]) {
+                                    *slot = i32::from(*byte);
+                                }
+                            }
+                        }
+                        Ok(n as i32)
+                    }
+                    Err(e) => Err(VmError::UnhandledException {
+                        class_name: io_exception_for_error(&e).to_string(),
+                    }),
+                }
+            })?;
+            Ok(Some(Value::Int(total)))
+        }
+        ("java/io/FileInputStream", "available0", "()J") => {
+            let obj_ref = args[0].as_reference()?;
+            let fd_ref = fis_get_fd_ref(vm, obj_ref)?;
+            let rid = fd_resource_id(vm, fd_ref)?;
+            let avail = vm.io_resources.with_file(rid, |file| {
+                let metadata = file.metadata().map_err(|e| VmError::UnhandledException {
+                    class_name: io_exception_for_error(&e).to_string(),
+                })?;
+                let current = file
+                    .stream_position()
+                    .map_err(|e| VmError::UnhandledException {
+                        class_name: io_exception_for_error(&e).to_string(),
+                    })?;
+                Ok(metadata.len().saturating_sub(current) as i64)
+            })?;
+            Ok(Some(Value::Long(avail)))
+        }
+        ("java/io/FileInputStream", "skip0", "(J)J") => {
+            let obj_ref = args[0].as_reference()?;
+            let n = args[1].as_long()?;
+            let fd_ref = fis_get_fd_ref(vm, obj_ref)?;
+            let rid = fd_resource_id(vm, fd_ref)?;
+            let skipped = vm.io_resources.with_file(rid, |file| {
+                let before = file
+                    .stream_position()
+                    .map_err(|e| VmError::UnhandledException {
+                        class_name: io_exception_for_error(&e).to_string(),
+                    })?;
+                file.seek(SeekFrom::Current(n))
+                    .map_err(|e| VmError::UnhandledException {
+                        class_name: io_exception_for_error(&e).to_string(),
+                    })?;
+                let after = file
+                    .stream_position()
+                    .map_err(|e| VmError::UnhandledException {
+                        class_name: io_exception_for_error(&e).to_string(),
+                    })?;
+                Ok((after - before) as i64)
+            })?;
+            Ok(Some(Value::Long(skipped)))
+        }
+        ("java/io/FileInputStream", "close0", "()V") => {
+            let obj_ref = args[0].as_reference()?;
+            let fd_ref = fis_get_fd_ref(vm, obj_ref)?;
+            let rid = fd_resource_id(vm, fd_ref)?;
+            fd_set_resource_id(vm, fd_ref, 0)?;
+            vm.io_resources.close(rid);
+            Ok(None)
+        }
+        // --- FileOutputStream ---
+        ("java/io/FileOutputStream", "<init>", "(Ljava/io/File;Z)V") => {
+            let obj_ref = args[0].as_reference()?;
+            let file_ref = args[1].as_reference()?;
+            let append = args[2].as_int()? != 0;
+            let path = file_path_string(vm, file_ref)?;
+            if let Some(path) = path {
+                let fd_ref = new_file_descriptor(vm, 0);
+                {
+                    let mut heap = vm.heap.lock().unwrap();
+                    if let HeapValue::Object { fields, .. } = heap.get_mut(obj_ref)? {
+                        fields[0] = Value::Reference(fd_ref);
+                    }
+                }
+                let mode: u8 = if append { 3 } else { 2 };
+                open_file_stream(vm, obj_ref, &path, mode)?;
+            }
+            Ok(None)
+        }
+        ("java/io/FileOutputStream", "<init>", "(Ljava/io/FileDescriptor;)V") => {
+            let obj_ref = args[0].as_reference()?;
+            let fd_ref = args[1].as_reference()?;
+            let mut heap = vm.heap.lock().unwrap();
+            if let HeapValue::Object { fields, .. } = heap.get_mut(obj_ref)? {
+                fields[0] = Value::Reference(fd_ref);
+            }
+            Ok(None)
+        }
+        ("java/io/FileOutputStream", "open0", "(Ljava/lang/String;Z)V") => {
+            let obj_ref = args[0].as_reference()?;
+            let path_ref = args[1].as_reference()?;
+            let append = args[2].as_int()? != 0;
+            let path = crate::vm::builtin::helpers::stringify_reference(vm, path_ref)?;
+            let mode: u8 = if append { 3 } else { 2 };
+            open_file_stream(vm, obj_ref, &path, mode)?;
+            Ok(None)
+        }
+        ("java/io/FileOutputStream", "write", "(IZ)V") => {
+            let obj_ref = args[0].as_reference()?;
+            let byte = args[1].as_int()? as u8;
+            let append = args[2].as_int()? != 0;
+            let fd_ref = fis_get_fd_ref(vm, obj_ref)?;
+            let rid = fd_resource_id(vm, fd_ref)?;
+            vm.io_resources.with_file(rid, |file| {
+                if append {
+                    file.seek(SeekFrom::End(0))
+                        .map_err(|e| VmError::UnhandledException {
+                            class_name: io_exception_for_error(&e).to_string(),
+                        })?;
+                }
+                file.write_all(&[byte])
+                    .map_err(|e| VmError::UnhandledException {
+                        class_name: io_exception_for_error(&e).to_string(),
+                    })
+            })?;
+            Ok(None)
+        }
+        ("java/io/FileOutputStream", "writeBytes", "([BIIZ)V") => {
+            let obj_ref = args[0].as_reference()?;
+            let buf_ref = args[1].as_reference()?;
+            let off = args[2].as_int()? as usize;
+            let len = args[3].as_int()? as usize;
+            let fd_ref = fis_get_fd_ref(vm, obj_ref)?;
+            let rid = fd_resource_id(vm, fd_ref)?;
+            if len == 0 {
+                return Ok(None);
+            }
+            vm.io_resources.with_file(rid, |file| {
+                let heap = vm.heap.lock().unwrap();
+                let data = match heap.get(buf_ref)? {
+                    HeapValue::IntArray { values } => {
+                        let end = (off + len).min(values.len());
+                        values[off..end]
+                            .iter()
+                            .map(|&i| i as u8)
+                            .collect::<Vec<u8>>()
+                    }
+                    _ => vec![],
+                };
+                drop(heap);
+                file.write_all(&data)
+                    .map_err(|e| VmError::UnhandledException {
+                        class_name: io_exception_for_error(&e).to_string(),
+                    })
+            })?;
+            Ok(None)
+        }
+        ("java/io/FileOutputStream", "close0", "()V") => {
+            let obj_ref = args[0].as_reference()?;
+            let fd_ref = fis_get_fd_ref(vm, obj_ref)?;
+            let rid = fd_resource_id(vm, fd_ref)?;
+            fd_set_resource_id(vm, fd_ref, 0)?;
+            vm.io_resources.close(rid);
+            Ok(None)
+        }
+        // --- RandomAccessFile ---
+        ("java/io/RandomAccessFile", "<init>", "(Ljava/io/File;Ljava/lang/String;)V") => {
+            let obj_ref = args[0].as_reference()?;
+            let file_ref = args[1].as_reference()?;
+            let mode_str =
+                crate::vm::builtin::helpers::stringify_reference(vm, args[2].as_reference()?)?;
+            let path = file_path_string(vm, file_ref)?;
+            if let Some(path) = path {
+                let rw = mode_str.contains('w');
+                raf_set_rw(vm, obj_ref, rw)?;
+                let fd_ref = new_file_descriptor(vm, 0);
+                let path_value = vm.new_string(path.clone());
+                {
+                    let mut heap = vm.heap.lock().unwrap();
+                    if let HeapValue::Object { fields, .. } = heap.get_mut(obj_ref)? {
+                        fields[0] = Value::Reference(fd_ref);
+                        fields[1] = path_value;
+                    }
+                }
+                let mode: u8 = if rw { 1 } else { 0 };
+                open_file_stream(vm, obj_ref, &path, mode)?;
+            }
+            Ok(None)
+        }
+        ("java/io/RandomAccessFile", "open0", "(Ljava/lang/String;I)V") => {
+            let obj_ref = args[0].as_reference()?;
+            let path_ref = args[1].as_reference()?;
+            let mode = args[2].as_int()? as u8;
+            let path = crate::vm::builtin::helpers::stringify_reference(vm, path_ref)?;
+            let rw = mode != 0;
+            raf_set_rw(vm, obj_ref, rw)?;
+            open_file_stream(vm, obj_ref, &path, mode)?;
+            Ok(None)
+        }
+        ("java/io/RandomAccessFile", "read0", "()I") => {
+            let obj_ref = args[0].as_reference()?;
+            let fd_ref = fis_get_fd_ref(vm, obj_ref)?;
+            let rid = fd_resource_id(vm, fd_ref)?;
+            let byte = vm.io_resources.with_file(rid, |file| {
+                let mut buf = [0u8; 1];
+                match file.read(&mut buf) {
+                    Ok(0) => Ok(-1),
+                    Ok(_) => Ok(buf[0] as i32),
+                    Err(e) => Err(VmError::UnhandledException {
+                        class_name: io_exception_for_error(&e).to_string(),
+                    }),
+                }
+            })?;
+            Ok(Some(Value::Int(byte)))
+        }
+        ("java/io/RandomAccessFile", "readBytes", "([BII)I") => {
+            let obj_ref = args[0].as_reference()?;
+            let buf_ref = args[1].as_reference()?;
+            let off = args[2].as_int()? as usize;
+            let len = args[3].as_int()? as usize;
+            let fd_ref = fis_get_fd_ref(vm, obj_ref)?;
+            let rid = fd_resource_id(vm, fd_ref)?;
+            if len == 0 {
+                return Ok(Some(Value::Int(0)));
+            }
+            let total = vm.io_resources.with_file(rid, |file| {
+                let mut buffer = vec![0u8; len];
+                match file.read(&mut buffer) {
+                    Ok(0) => Ok(-1i32),
+                    Ok(n) => {
+                        let mut heap = vm.heap.lock().unwrap();
+                        if let HeapValue::IntArray { values } = heap.get_mut(buf_ref)? {
+                            let end = off + n;
+                            if end <= values.len() {
+                                for (slot, byte) in values[off..end].iter_mut().zip(&buffer[..n]) {
+                                    *slot = i32::from(*byte);
+                                }
+                            }
+                        }
+                        Ok(n as i32)
+                    }
+                    Err(e) => Err(VmError::UnhandledException {
+                        class_name: io_exception_for_error(&e).to_string(),
+                    }),
+                }
+            })?;
+            Ok(Some(Value::Int(total)))
+        }
+        ("java/io/RandomAccessFile", "write0", "(I)V") => {
+            let obj_ref = args[0].as_reference()?;
+            let byte = args[1].as_int()? as u8;
+            let fd_ref = fis_get_fd_ref(vm, obj_ref)?;
+            let rid = fd_resource_id(vm, fd_ref)?;
+            vm.io_resources.with_file(rid, |file| {
+                file.write_all(&[byte])
+                    .map_err(|e| VmError::UnhandledException {
+                        class_name: io_exception_for_error(&e).to_string(),
+                    })
+            })?;
+            Ok(None)
+        }
+        ("java/io/RandomAccessFile", "writeBytes", "([BII)V") => {
+            let obj_ref = args[0].as_reference()?;
+            let buf_ref = args[1].as_reference()?;
+            let off = args[2].as_int()? as usize;
+            let len = args[3].as_int()? as usize;
+            let fd_ref = fis_get_fd_ref(vm, obj_ref)?;
+            let rid = fd_resource_id(vm, fd_ref)?;
+            if len == 0 {
+                return Ok(None);
+            }
+            vm.io_resources.with_file(rid, |file| {
+                let heap = vm.heap.lock().unwrap();
+                let data = match heap.get(buf_ref)? {
+                    HeapValue::IntArray { values } => {
+                        let end = (off + len).min(values.len());
+                        values[off..end]
+                            .iter()
+                            .map(|&i| i as u8)
+                            .collect::<Vec<u8>>()
+                    }
+                    _ => vec![],
+                };
+                drop(heap);
+                file.write_all(&data)
+                    .map_err(|e| VmError::UnhandledException {
+                        class_name: io_exception_for_error(&e).to_string(),
+                    })
+            })?;
+            Ok(None)
+        }
+        ("java/io/RandomAccessFile", "seek0", "(J)V") => {
+            let obj_ref = args[0].as_reference()?;
+            let pos = args[1].as_long()? as u64;
+            let fd_ref = fis_get_fd_ref(vm, obj_ref)?;
+            let rid = fd_resource_id(vm, fd_ref)?;
+            vm.io_resources.with_file(rid, |file| {
+                file.seek(SeekFrom::Start(pos))
+                    .map_err(|e| VmError::UnhandledException {
+                        class_name: io_exception_for_error(&e).to_string(),
+                    })?;
+                Ok(())
+            })?;
+            Ok(None)
+        }
+        ("java/io/RandomAccessFile", "length", "()J") => {
+            let obj_ref = args[0].as_reference()?;
+            let fd_ref = fis_get_fd_ref(vm, obj_ref)?;
+            let rid = fd_resource_id(vm, fd_ref)?;
+            let len = vm.io_resources.with_file(rid, |file| {
+                Ok(file
+                    .metadata()
+                    .map_err(|e| VmError::UnhandledException {
+                        class_name: io_exception_for_error(&e).to_string(),
+                    })?
+                    .len() as i64)
+            })?;
+            Ok(Some(Value::Long(len)))
+        }
+        ("java/io/RandomAccessFile", "close0", "()V") => {
+            let obj_ref = args[0].as_reference()?;
+            let fd_ref = fis_get_fd_ref(vm, obj_ref)?;
+            let rid = fd_resource_id(vm, fd_ref)?;
+            fd_set_resource_id(vm, fd_ref, 0)?;
+            vm.io_resources.close(rid);
+            Ok(None)
+        }
         // --- ByteArrayOutputStream native impl ---
         ("java/io/ByteArrayOutputStream", "<init>", "()V") => {
             let obj_ref = args[0].as_reference()?;
@@ -1319,13 +1848,51 @@ pub(super) fn invoke_lang(
         ("java/io/Writer", "write", "(Ljava/lang/String;II)V") => Ok(None),
         ("java/io/Writer", "flush", "()V") => Ok(None),
         ("java/io/Writer", "close", "()V") => Ok(None),
-        // --- BufferedWriter stubs ---
-        ("java/io/BufferedWriter", "<init>", "(Ljava/io/Writer;)V") => Ok(None),
-        ("java/io/BufferedWriter", "write", "(I)V") => Ok(None),
-        ("java/io/BufferedWriter", "write", "([C)V") => Ok(None),
-        ("java/io/BufferedWriter", "write", "([CII)V") => Ok(None),
-        ("java/io/BufferedWriter", "flush", "()V") => Ok(None),
-        ("java/io/BufferedWriter", "close", "()V") => Ok(None),
+        // --- BufferedWriter ---
+        ("java/io/BufferedWriter", "<init>", "(Ljava/io/Writer;)V") => {
+            let obj_ref = args[0].as_reference()?;
+            let writer_ref = args[1].as_reference()?;
+            let mut heap = vm.heap.lock().unwrap();
+            if let HeapValue::Object { fields, .. } = heap.get_mut(obj_ref)? {
+                fields[0] = Value::Reference(writer_ref);
+            }
+            Ok(None)
+        }
+        ("java/io/BufferedWriter", "write", "(I)V") => {
+            let obj_ref = args[0].as_reference()?;
+            let byte = args[1].as_int()? as u8;
+            invoke_nio::write_byte_to_writer(vm, obj_ref, byte)?;
+            Ok(None)
+        }
+        ("java/io/BufferedWriter", "write", "([C)V") => {
+            let obj_ref = args[0].as_reference()?;
+            let buf_ref = args[1].as_reference()?;
+            let len = {
+                let heap = vm.heap.lock().unwrap();
+                match heap.get(buf_ref)? {
+                    HeapValue::IntArray { values } => values.len(),
+                    _ => 0,
+                }
+            };
+            invoke_nio::write_chars_to_writer(vm, obj_ref, buf_ref, 0, len as i32)?;
+            Ok(None)
+        }
+        ("java/io/BufferedWriter", "write", "([CII)V") => {
+            let obj_ref = args[0].as_reference()?;
+            let buf_ref = args[1].as_reference()?;
+            let off = args[2].as_int()?;
+            let len = args[3].as_int()?;
+            invoke_nio::write_chars_to_writer(vm, obj_ref, buf_ref, off, len)?;
+            Ok(None)
+        }
+        ("java/io/BufferedWriter", "flush", "()V") => {
+            invoke_nio::flush_writer(vm, args[0].as_reference()?)?;
+            Ok(None)
+        }
+        ("java/io/BufferedWriter", "close", "()V") => {
+            invoke_nio::close_writer(vm, args[0].as_reference()?)?;
+            Ok(None)
+        }
         // --- PrintWriter println/print ---
         ("java/io/PrintWriter", "println", "()V") => {
             println!("");
@@ -1468,34 +2035,343 @@ pub(super) fn invoke_lang(
         ("java/io/Reader", "mark", "(I)V") => Ok(None),
         ("java/io/Reader", "reset", "()V") => Ok(None),
         ("java/io/Reader", "markSupported", "()Z") => Ok(Some(Value::Int(0))),
-        // --- BufferedReader stubs ---
-        ("java/io/BufferedReader", "<init>", "(Ljava/io/Reader;)V") => Ok(None),
-        ("java/io/BufferedReader", "read", "()I") => Ok(Some(Value::Int(-1))),
-        ("java/io/BufferedReader", "read", "(I)I") => Ok(Some(Value::Int(-1))),
-        ("java/io/BufferedReader", "read", "([C)I") => Ok(Some(Value::Int(-1))),
-        ("java/io/BufferedReader", "read", "([CII)I") => Ok(Some(Value::Int(-1))),
+        // --- BufferedReader ---
+        ("java/io/BufferedReader", "<init>", "(Ljava/io/Reader;)V") => {
+            let obj_ref = args[0].as_reference()?;
+            let reader_ref = args[1].as_reference()?;
+            let mut heap = vm.heap.lock().unwrap();
+            if let HeapValue::Object { fields, .. } = heap.get_mut(obj_ref)? {
+                fields[0] = Value::Reference(reader_ref);
+            }
+            Ok(None)
+        }
+        ("java/io/BufferedReader", "read", "()I") => {
+            let obj_ref = args[0].as_reference()?;
+            let reader_ref = {
+                let heap = vm.heap.lock().unwrap();
+                match heap.get(obj_ref)? {
+                    HeapValue::Object { fields, .. } => match fields.first() {
+                        Some(Value::Reference(r)) => *r,
+                        _ => Reference::Null,
+                    },
+                    _ => Reference::Null,
+                }
+            };
+            if reader_ref == Reference::Null {
+                return Ok(Some(Value::Int(-1)));
+            }
+            let c = invoke_nio::read_char_from_reader(vm, reader_ref)?;
+            Ok(Some(Value::Int(c)))
+        }
+        ("java/io/BufferedReader", "read", "(I)I") => {
+            let obj_ref = args[0].as_reference()?;
+            let _ = args[1].as_int()?;
+            let reader_ref = {
+                let heap = vm.heap.lock().unwrap();
+                match heap.get(obj_ref)? {
+                    HeapValue::Object { fields, .. } => match fields.first() {
+                        Some(Value::Reference(r)) => *r,
+                        _ => Reference::Null,
+                    },
+                    _ => Reference::Null,
+                }
+            };
+            if reader_ref == Reference::Null {
+                return Ok(Some(Value::Int(-1)));
+            }
+            let c = invoke_nio::read_char_from_reader(vm, reader_ref)?;
+            Ok(Some(Value::Int(c)))
+        }
+        ("java/io/BufferedReader", "read", "([C)I") => {
+            let obj_ref = args[0].as_reference()?;
+            let buf_ref = args[1].as_reference()?;
+            let reader_ref = {
+                let heap = vm.heap.lock().unwrap();
+                match heap.get(obj_ref)? {
+                    HeapValue::Object { fields, .. } => match fields.first() {
+                        Some(Value::Reference(r)) => *r,
+                        _ => Reference::Null,
+                    },
+                    _ => Reference::Null,
+                }
+            };
+            if reader_ref == Reference::Null {
+                return Ok(Some(Value::Int(-1)));
+            }
+            let len = {
+                let heap = vm.heap.lock().unwrap();
+                match heap.get(buf_ref)? {
+                    HeapValue::IntArray { values } => values.len() as i32,
+                    _ => 0,
+                }
+            };
+            let n = invoke_nio::read_into_char_array_from_reader(vm, reader_ref, buf_ref, 0, len)?;
+            Ok(Some(Value::Int(n)))
+        }
+        ("java/io/BufferedReader", "read", "([CII)I") => {
+            let obj_ref = args[0].as_reference()?;
+            let buf_ref = args[1].as_reference()?;
+            let off = args[2].as_int()? as usize;
+            let len = args[3].as_int()? as usize;
+            let reader_ref = {
+                let heap = vm.heap.lock().unwrap();
+                match heap.get(obj_ref)? {
+                    HeapValue::Object { fields, .. } => match fields.first() {
+                        Some(Value::Reference(r)) => *r,
+                        _ => Reference::Null,
+                    },
+                    _ => Reference::Null,
+                }
+            };
+            if reader_ref == Reference::Null {
+                return Ok(Some(Value::Int(-1)));
+            }
+            let n = invoke_nio::read_into_char_array_from_reader(
+                vm, reader_ref, buf_ref, off as i32, len as i32,
+            )?;
+            Ok(Some(Value::Int(n)))
+        }
         ("java/io/BufferedReader", "skip", "(J)J") => Ok(Some(Value::Long(0))),
-        ("java/io/BufferedReader", "ready", "()Z") => Ok(Some(Value::Int(0))),
+        ("java/io/BufferedReader", "ready", "()Z") => {
+            let obj_ref = args[0].as_reference()?;
+            let is_ref = {
+                let heap = vm.heap.lock().unwrap();
+                match heap.get(obj_ref)? {
+                    HeapValue::Object {
+                        class_name, fields, ..
+                    } => {
+                        if class_name == "java/io/BufferedReader" {
+                            let reader_ref = match fields.first() {
+                                Some(Value::Reference(r)) => *r,
+                                _ => Reference::Null,
+                            };
+                            if reader_ref != Reference::Null {
+                                match heap.get(reader_ref)? {
+                                    HeapValue::Object { fields, .. } => {
+                                        fields.first().and_then(|v| match v {
+                                            Value::Reference(r) => Some(*r),
+                                            _ => None,
+                                        })
+                                    }
+                                    _ => None,
+                                }
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                }
+            };
+            let is_ref = match is_ref {
+                Some(r) if r != Reference::Null => r,
+                _ => return Ok(Some(Value::Int(0))),
+            };
+            let avail = invoke_nio::get_input_stream_available(vm, is_ref)?;
+            Ok(Some(Value::Int(if avail > 0 { 1 } else { 0 })))
+        }
         ("java/io/BufferedReader", "close", "()V") => Ok(None),
         ("java/io/BufferedReader", "readLine", "()Ljava/lang/String;") => {
-            Ok(Some(Value::Reference(Reference::Null)))
+            let obj_ref = args[0].as_reference()?;
+            let reader_ref = {
+                let heap = vm.heap.lock().unwrap();
+                match heap.get(obj_ref)? {
+                    HeapValue::Object { fields, .. } => match fields.first() {
+                        Some(Value::Reference(r)) => *r,
+                        _ => Reference::Null,
+                    },
+                    _ => Reference::Null,
+                }
+            };
+            if reader_ref == Reference::Null {
+                return Ok(Some(Value::Reference(Reference::Null)));
+            }
+            let mut line = String::new();
+            loop {
+                let c = invoke_nio::read_char_from_reader(vm, reader_ref)?;
+                if c < 0 {
+                    if line.is_empty() {
+                        return Ok(Some(Value::Reference(Reference::Null)));
+                    }
+                    return Ok(Some(vm.new_string(line)));
+                }
+                let ch = c as u8 as char;
+                if ch == '\n' {
+                    return Ok(Some(vm.new_string(line)));
+                }
+                if ch != '\r' {
+                    line.push(ch);
+                }
+            }
         }
-        // --- InputStreamReader stubs ---
-        ("java/io/InputStreamReader", "<init>", "(Ljava/io/InputStream;)V") => Ok(None),
-        ("java/io/InputStreamReader", "read", "()I") => Ok(Some(Value::Int(-1))),
-        ("java/io/InputStreamReader", "read", "(I)I") => Ok(Some(Value::Int(-1))),
-        ("java/io/InputStreamReader", "read", "([C)I") => Ok(Some(Value::Int(-1))),
-        ("java/io/InputStreamReader", "read", "([CII)I") => Ok(Some(Value::Int(-1))),
+        // --- InputStreamReader ---
+        ("java/io/InputStreamReader", "<init>", "(Ljava/io/InputStream;)V") => {
+            let obj_ref = args[0].as_reference()?;
+            let is_ref = args[1].as_reference()?;
+            let mut heap = vm.heap.lock().unwrap();
+            if let HeapValue::Object { fields, .. } = heap.get_mut(obj_ref)? {
+                fields[0] = Value::Reference(is_ref);
+            }
+            Ok(None)
+        }
+        ("java/io/InputStreamReader", "read", "()I") => {
+            let obj_ref = args[0].as_reference()?;
+            let is_ref = {
+                let heap = vm.heap.lock().unwrap();
+                match heap.get(obj_ref)? {
+                    HeapValue::Object { fields, .. } => match fields.first() {
+                        Some(Value::Reference(r)) => *r,
+                        _ => Reference::Null,
+                    },
+                    _ => Reference::Null,
+                }
+            };
+            if is_ref == Reference::Null {
+                return Ok(Some(Value::Int(-1)));
+            }
+            let byte = invoke_nio::read_byte_from_input_stream(vm, is_ref)?;
+            if byte < 0 {
+                Ok(Some(Value::Int(-1)))
+            } else {
+                Ok(Some(Value::Int(byte as i32)))
+            }
+        }
+        ("java/io/InputStreamReader", "read", "(I)I") => {
+            let obj_ref = args[0].as_reference()?;
+            let _ = args[1].as_int()?;
+            let is_ref = {
+                let heap = vm.heap.lock().unwrap();
+                match heap.get(obj_ref)? {
+                    HeapValue::Object { fields, .. } => match fields.first() {
+                        Some(Value::Reference(r)) => *r,
+                        _ => Reference::Null,
+                    },
+                    _ => Reference::Null,
+                }
+            };
+            if is_ref == Reference::Null {
+                return Ok(Some(Value::Int(-1)));
+            }
+            let byte = invoke_nio::read_byte_from_input_stream(vm, is_ref)?;
+            if byte < 0 {
+                Ok(Some(Value::Int(-1)))
+            } else {
+                Ok(Some(Value::Int(byte as i32)))
+            }
+        }
+        ("java/io/InputStreamReader", "read", "([C)I") => {
+            let obj_ref = args[0].as_reference()?;
+            let buf_ref = args[1].as_reference()?;
+            let is_ref = {
+                let heap = vm.heap.lock().unwrap();
+                match heap.get(obj_ref)? {
+                    HeapValue::Object { fields, .. } => match fields.first() {
+                        Some(Value::Reference(r)) => *r,
+                        _ => Reference::Null,
+                    },
+                    _ => Reference::Null,
+                }
+            };
+            if is_ref == Reference::Null {
+                return Ok(Some(Value::Int(-1)));
+            }
+            let n = invoke_nio::read_into_byte_array_from_input_stream(vm, is_ref, buf_ref, 0, {
+                let heap = vm.heap.lock().unwrap();
+                match heap.get(buf_ref)? {
+                    HeapValue::IntArray { values } => values.len() as i32,
+                    _ => 0,
+                }
+            })?;
+            Ok(Some(Value::Int(n)))
+        }
+        ("java/io/InputStreamReader", "read", "([CII)I") => {
+            let obj_ref = args[0].as_reference()?;
+            let buf_ref = args[1].as_reference()?;
+            let off = args[2].as_int()? as usize;
+            let len = args[3].as_int()? as usize;
+            let is_ref = {
+                let heap = vm.heap.lock().unwrap();
+                match heap.get(obj_ref)? {
+                    HeapValue::Object { fields, .. } => match fields.first() {
+                        Some(Value::Reference(r)) => *r,
+                        _ => Reference::Null,
+                    },
+                    _ => Reference::Null,
+                }
+            };
+            if is_ref == Reference::Null {
+                return Ok(Some(Value::Int(-1)));
+            }
+            let n = invoke_nio::read_into_byte_array_from_input_stream(
+                vm, is_ref, buf_ref, off as i32, len as i32,
+            )?;
+            Ok(Some(Value::Int(n)))
+        }
         ("java/io/InputStreamReader", "close", "()V") => Ok(None),
-        // --- OutputStreamWriter stubs ---
-        ("java/io/OutputStreamWriter", "<init>", "(Ljava/io/OutputStream;)V") => Ok(None),
-        ("java/io/OutputStreamWriter", "write", "(I)V") => Ok(None),
-        ("java/io/OutputStreamWriter", "write", "([C)V") => Ok(None),
-        ("java/io/OutputStreamWriter", "write", "([CII)V") => Ok(None),
-        ("java/io/OutputStreamWriter", "write", "(Ljava/lang/String;)V") => Ok(None),
-        ("java/io/OutputStreamWriter", "write", "(Ljava/lang/String;II)V") => Ok(None),
-        ("java/io/OutputStreamWriter", "flush", "()V") => Ok(None),
-        ("java/io/OutputStreamWriter", "close", "()V") => Ok(None),
+        // --- OutputStreamWriter ---
+        ("java/io/OutputStreamWriter", "<init>", "(Ljava/io/OutputStream;)V") => {
+            let obj_ref = args[0].as_reference()?;
+            let os_ref = args[1].as_reference()?;
+            let mut heap = vm.heap.lock().unwrap();
+            if let HeapValue::Object { fields, .. } = heap.get_mut(obj_ref)? {
+                fields[0] = Value::Reference(os_ref);
+            }
+            Ok(None)
+        }
+        ("java/io/OutputStreamWriter", "write", "(I)V") => {
+            let obj_ref = args[0].as_reference()?;
+            let byte = args[1].as_int()? as u8;
+            invoke_nio::write_byte_to_writer(vm, obj_ref, byte)?;
+            Ok(None)
+        }
+        ("java/io/OutputStreamWriter", "write", "([C)V") => {
+            let obj_ref = args[0].as_reference()?;
+            let buf_ref = args[1].as_reference()?;
+            let len = {
+                let heap = vm.heap.lock().unwrap();
+                match heap.get(buf_ref)? {
+                    HeapValue::IntArray { values } => values.len(),
+                    _ => 0,
+                }
+            };
+            invoke_nio::write_chars_to_writer(vm, obj_ref, buf_ref, 0, len as i32)?;
+            Ok(None)
+        }
+        ("java/io/OutputStreamWriter", "write", "([CII)V") => {
+            let obj_ref = args[0].as_reference()?;
+            let buf_ref = args[1].as_reference()?;
+            let off = args[2].as_int()?;
+            let len = args[3].as_int()?;
+            invoke_nio::write_chars_to_writer(vm, obj_ref, buf_ref, off, len)?;
+            Ok(None)
+        }
+        ("java/io/OutputStreamWriter", "write", "(Ljava/lang/String;)V") => {
+            let obj_ref = args[0].as_reference()?;
+            let str_ref = args[1].as_reference()?;
+            let s = crate::vm::builtin::helpers::stringify_reference(vm, str_ref)?;
+            invoke_nio::write_string_to_writer(vm, obj_ref, &s)?;
+            Ok(None)
+        }
+        ("java/io/OutputStreamWriter", "write", "(Ljava/lang/String;II)V") => {
+            let obj_ref = args[0].as_reference()?;
+            let str_ref = args[1].as_reference()?;
+            let off = args[2].as_int()? as usize;
+            let len = args[3].as_int()? as usize;
+            let s = crate::vm::builtin::helpers::stringify_reference(vm, str_ref)?;
+            let slice: String = s.chars().skip(off).take(len).collect();
+            invoke_nio::write_string_to_writer(vm, obj_ref, &slice)?;
+            Ok(None)
+        }
+        ("java/io/OutputStreamWriter", "flush", "()V") => {
+            invoke_nio::flush_writer(vm, args[0].as_reference()?)?;
+            Ok(None)
+        }
+        ("java/io/OutputStreamWriter", "close", "()V") => {
+            invoke_nio::close_writer(vm, args[0].as_reference()?)?;
+            Ok(None)
+        }
         // --- File ---
         ("java/io/File", "<init>", "(Ljava/lang/String;)V") => {
             let obj_ref = args[0].as_reference()?;

@@ -4,8 +4,8 @@
 use std::collections::HashMap;
 
 use super::types::{
-    ClassMethod, ExceptionHandler, FieldRef, InvokeDynamicSite, Method, MethodRef, ResolvedMethod,
-    Value, VmError,
+    ClassMethod, CondySite, ExceptionHandler, FieldRef, InvokeDynamicSite, Method, MethodRef,
+    ResolvedMethod, Value, VmError,
 };
 
 #[derive(Debug)]
@@ -26,6 +26,7 @@ pub(super) struct Frame {
     #[allow(dead_code)]
     pub(super) line_numbers: Vec<(u16, u16)>,
     pub(super) invoke_dynamic_sites: Vec<Option<InvokeDynamicSite>>,
+    pub(super) condy_sites: Vec<Option<CondySite>>,
     pub(super) invoke_cache: Vec<Option<ResolvedMethod>>,
     pub(super) call_counts: HashMap<usize, u32>,
     pub(super) backedge_counts: HashMap<usize, u32>,
@@ -58,6 +59,7 @@ impl Frame {
             line_numbers: self.line_numbers.clone(),
             stack_map_frames: Vec::new(),
             invoke_dynamic_sites: self.invoke_dynamic_sites.clone(),
+            condy_sites: self.condy_sites.clone(),
             initial_locals: Vec::new(),
         }
     }
@@ -103,6 +105,7 @@ impl Frame {
             exception_handlers: method.exception_handlers,
             line_numbers: method.line_numbers,
             invoke_dynamic_sites: method.invoke_dynamic_sites,
+            condy_sites: method.condy_sites,
             invoke_cache: vec![None; method_refs_len],
             call_counts: HashMap::new(),
             backedge_counts: HashMap::new(),

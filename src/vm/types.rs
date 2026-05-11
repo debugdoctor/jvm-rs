@@ -238,19 +238,67 @@ pub struct Method {
     pub stack_map_frames: Vec<crate::classfile::StackMapFrame>,
     /// InvokeDynamic call site info: `(name, descriptor, bootstrap_index)` keyed by constant pool index.
     pub invoke_dynamic_sites: Vec<Option<InvokeDynamicSite>>,
+    /// `CONSTANT_Dynamic` entries keyed by constant-pool index. Slots are `None`
+    /// for non-condy entries.
+    pub condy_sites: Vec<Option<CondySite>>,
     pub initial_locals: Vec<Option<Value>>,
 }
 
 /// Resolved info for an `invokedynamic` constant pool entry.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct InvokeDynamicSite {
+    pub owner_class: String,
+    pub constant_pool_index: usize,
     pub name: String,
     pub descriptor: String,
     pub bootstrap_method_index: u16,
     pub kind: InvokeDynamicKind,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
+pub enum BootstrapArgument {
+    Int(i32),
+    Long(i64),
+    Float(f32),
+    Double(f64),
+    String(String),
+    Class(String),
+    MethodType(String),
+    MethodHandle {
+        reference_kind: u8,
+        target_class: String,
+        target_method: String,
+        target_descriptor: String,
+    },
+    /// `CONSTANT_Dynamic`: a constant whose value is produced by running a
+    /// bootstrap method. Recursive because the bootstrap arguments themselves
+    /// may be `CONSTANT_Dynamic` entries.
+    Dynamic {
+        name: String,
+        descriptor: String,
+        bootstrap_class: String,
+        bootstrap_name: String,
+        bootstrap_descriptor: String,
+        arguments: Vec<BootstrapArgument>,
+    },
+}
+
+/// Resolved info for a `CONSTANT_Dynamic` constant-pool entry.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CondySite {
+    pub owner_class: String,
+    pub constant_pool_index: usize,
+    pub name: String,
+    /// Field-style descriptor of the produced constant (e.g. `Ljava/lang/String;`, `I`).
+    pub descriptor: String,
+    pub bootstrap_method_index: u16,
+    pub bootstrap_class: String,
+    pub bootstrap_name: String,
+    pub bootstrap_descriptor: String,
+    pub arguments: Vec<BootstrapArgument>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum InvokeDynamicKind {
     Unknown,
     LambdaProxy {
@@ -266,7 +314,7 @@ pub enum InvokeDynamicKind {
         bootstrap_class: String,
         bootstrap_name: String,
         bootstrap_descriptor: String,
-        arguments: Vec<u16>,
+        arguments: Vec<BootstrapArgument>,
     },
 }
 
@@ -362,6 +410,7 @@ impl Method {
             line_numbers: Vec::new(),
             stack_map_frames: Vec::new(),
             invoke_dynamic_sites: Vec::new(),
+            condy_sites: Vec::new(),
             initial_locals: Vec::new(),
         }
     }
@@ -418,6 +467,11 @@ impl Method {
         sites: impl Into<Vec<Option<InvokeDynamicSite>>>,
     ) -> Self {
         self.invoke_dynamic_sites = sites.into();
+        self
+    }
+
+    pub fn with_condy_sites(mut self, sites: impl Into<Vec<Option<CondySite>>>) -> Self {
+        self.condy_sites = sites.into();
         self
     }
 

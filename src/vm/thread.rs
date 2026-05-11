@@ -25,6 +25,15 @@ pub(super) struct RuntimeState {
     /// name (e.g., `java/util/HashMap`, `I`, `[Ljava/lang/String;`). Populated
     /// on demand when `ldc` or native reflection produces a Class constant.
     pub(super) class_objects: HashMap<String, crate::vm::types::Reference>,
+    /// Linked invokedynamic targets, keyed by `owner_class#constant_pool_index`.
+    pub(super) linked_dynamic_sites: HashMap<String, crate::vm::types::Reference>,
+    /// Cached `CONSTANT_Dynamic` (condy) resolution results, keyed the same way
+    /// as `linked_dynamic_sites` but for `ldc`-resolved values.
+    pub(super) linked_condy_constants: HashMap<String, crate::vm::types::Value>,
+    /// Field access flags keyed by `(declaring_class, field_name)`.
+    pub(super) field_access_flags: HashMap<(String, String), u16>,
+    /// Field descriptors keyed by `(declaring_class, field_name)`.
+    pub(super) field_descriptors: HashMap<(String, String), String>,
     /// Counter incremented each time `Vm::execute` reaches the JIT tier. If the
     /// backend cannot lower the method yet, the VM records the activation and
     /// deoptimizes back to the interpreter instead of silently ignoring the JIT

@@ -3,7 +3,11 @@ use std::collections::HashMap;
 use crate::vm::{ClassMethod, RuntimeClass, Value, Vm};
 
 fn build_field_offsets(fields: &[(String, String)]) -> HashMap<String, usize> {
-    fields.iter().enumerate().map(|(i, (name, _))| (name.clone(), i)).collect()
+    fields
+        .iter()
+        .enumerate()
+        .map(|(i, (name, _))| (name.clone(), i))
+        .collect()
 }
 
 pub(super) fn bootstrap_java_time(vm: &mut Vm) {
@@ -325,7 +329,10 @@ pub(super) fn bootstrap_java_time(vm: &mut Vm) {
         methods: zoneid_methods,
         static_fields: zoneid_static,
         instance_fields: vec![("__id".to_string(), "Ljava/lang/String;".to_string())],
-        field_offsets: build_field_offsets(&vec![("__id".to_string(), "Ljava/lang/String;".to_string())]),
+        field_offsets: build_field_offsets(&vec![(
+            "__id".to_string(),
+            "Ljava/lang/String;".to_string(),
+        )]),
         interfaces: vec![],
     });
 
@@ -344,7 +351,7 @@ pub(super) fn bootstrap_java_time(vm: &mut Vm) {
         super_class: Some("java/lang/Object".to_string()),
         methods: clock_methods,
         static_fields: HashMap::new(),
-instance_fields: vec![
+        instance_fields: vec![
             ("__millis".to_string(), "J".to_string()),
             ("__zone_id".to_string(), "Ljava/lang/String;".to_string()),
         ],

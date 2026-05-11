@@ -3,7 +3,11 @@ use std::collections::HashMap;
 use crate::vm::{ClassMethod, RuntimeClass, Value, Vm};
 
 fn build_field_offsets(fields: &[(String, String)]) -> HashMap<String, usize> {
-    fields.iter().enumerate().map(|(i, (name, _))| (name.clone(), i)).collect()
+    fields
+        .iter()
+        .enumerate()
+        .map(|(i, (name, _))| (name.clone(), i))
+        .collect()
 }
 
 pub(super) fn bootstrap_java_text(vm: &mut Vm) {
@@ -47,7 +51,10 @@ pub(super) fn bootstrap_java_text(vm: &mut Vm) {
         methods: decimalformat_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![("__pattern".to_string(), "Ljava/lang/String;".to_string())],
-        field_offsets: build_field_offsets(&vec![("__pattern".to_string(), "Ljava/lang/String;".to_string())]),
+        field_offsets: build_field_offsets(&vec![(
+            "__pattern".to_string(),
+            "Ljava/lang/String;".to_string(),
+        )]),
         interfaces: vec![],
     });
 
@@ -68,7 +75,10 @@ pub(super) fn bootstrap_java_text(vm: &mut Vm) {
         methods: messageformat_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![("__pattern".to_string(), "Ljava/lang/String;".to_string())],
-        field_offsets: build_field_offsets(&vec![("__pattern".to_string(), "Ljava/lang/String;".to_string())]),
+        field_offsets: build_field_offsets(&vec![(
+            "__pattern".to_string(),
+            "Ljava/lang/String;".to_string(),
+        )]),
         interfaces: vec![],
     });
 }

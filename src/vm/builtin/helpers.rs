@@ -325,7 +325,7 @@ pub(super) fn compare_with(
     }
 }
 
-pub(super) fn class_internal_name(vm: &Vm, reference: Reference) -> Result<String, VmError> {
+pub(crate) fn class_internal_name(vm: &Vm, reference: Reference) -> Result<String, VmError> {
     let (name_ref, class_name) = {
         let heap = vm.heap.lock().unwrap();
         match heap.get(reference)? {
@@ -353,6 +353,22 @@ pub(super) fn class_internal_name(vm: &Vm, reference: Reference) -> Result<Strin
     }
 
     Ok(class_name)
+}
+
+pub(crate) fn class_name_to_descriptor(class_name: &str) -> String {
+    match class_name {
+        "boolean" => "Z".to_string(),
+        "byte" => "B".to_string(),
+        "char" => "C".to_string(),
+        "short" => "S".to_string(),
+        "int" => "I".to_string(),
+        "long" => "J".to_string(),
+        "float" => "F".to_string(),
+        "double" => "D".to_string(),
+        "void" => "V".to_string(),
+        name if name.starts_with('[') => name.to_string(),
+        name => format!("L{name};"),
+    }
 }
 
 pub(super) fn is_throwable_class(vm: &mut Vm, class_name: &str) -> Result<bool, VmError> {

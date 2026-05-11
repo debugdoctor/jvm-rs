@@ -8,8 +8,9 @@ use crate::classfile::{
     AttributeInfo, ClassFile, ClassFileError, ConstantPoolEntry, MemberInfo, StackMapFrame,
 };
 use crate::vm::{
-    ClassMethod, ExceptionHandler, ExecutionResult, FieldRef, InvokeDynamicKind, InvokeDynamicSite,
-    Method, MethodRef, Reference, RuntimeClass, Value, Vm, VmError,
+    BootstrapArgument, ClassMethod, CondySite, ExceptionHandler, ExecutionResult, FieldRef,
+    InvokeDynamicKind, InvokeDynamicSite, Method, MethodRef, Reference, RuntimeClass, Value, Vm,
+    VmError,
 };
 use zip::ZipArchive;
 
@@ -428,7 +429,8 @@ pub(crate) fn register_class(
             .with_exception_handlers(extract_exception_handlers(class_file, code))
             .with_line_numbers(extract_line_numbers(code))
             .with_stack_map_frames(extract_stack_map_frames(code))
-            .with_invoke_dynamic_sites(extract_invoke_dynamic_sites(class_file));
+            .with_invoke_dynamic_sites(extract_invoke_dynamic_sites(class_file))
+            .with_condy_sites(extract_condy_sites(class_file));
 
             // Best-effort verification: log but don't fail on verification errors
             // since some javac output may use patterns the verifier doesn't handle yet.
@@ -449,6 +451,8 @@ pub(crate) fn register_class(
     let mut instance_fields = Vec::new();
     let mut static_fields: std::collections::HashMap<String, Value> =
         std::collections::HashMap::new();
+    let mut field_access_flags = Vec::new();
+    let mut field_descriptors = Vec::new();
     for field in &class_file.fields {
         let name = field
             .name(&class_file.constant_pool)
@@ -464,6 +468,8 @@ pub(crate) fn register_class(
                 source: e,
             })?
             .to_string();
+        field_access_flags.push((name.clone(), field.access_flags));
+        field_descriptors.push((name.clone(), descriptor.clone()));
 
         let is_static = field.access_flags & 0x0008 != 0;
         if is_static {
@@ -520,6 +526,8 @@ pub(crate) fn register_class(
         field_offsets.insert(name.clone(), i);
     }
 
+    vm.register_field_access_flags(class_name, field_access_flags);
+    vm.register_field_descriptors(class_name, field_descriptors);
     vm.register_class(RuntimeClass {
         name: class_name.to_string(),
         super_class,
@@ -599,7 +607,8 @@ fn method_to_runtime_method(
     .with_method_refs(extract_method_refs(class_file))
     .with_exception_handlers(extract_exception_handlers(class_file, code))
     .with_stack_map_frames(extract_stack_map_frames(code))
-    .with_invoke_dynamic_sites(extract_invoke_dynamic_sites(class_file));
+    .with_invoke_dynamic_sites(extract_invoke_dynamic_sites(class_file))
+    .with_condy_sites(extract_condy_sites(class_file));
 
     match descriptor {
         "([Ljava/lang/String;)V" => {
@@ -649,6 +658,10 @@ fn extract_runtime_constants(class_file: &ClassFile, vm: &mut Vm) -> Vec<Option<
             Ok(ConstantPoolEntry::MethodType {
                 descriptor_index: _,
             }) => Some(Value::Reference(Reference::Null)),
+            // CONSTANT_Dynamic constants are resolved lazily at `ldc`/`ldc_w` /
+            // `ldc2_w` time via `Method::condy_sites`; leave the slot empty so
+            // the interpreter consults the condy table.
+            Ok(ConstantPoolEntry::Dynamic { .. }) => None,
             _ => None,
         };
         constants.push(value);
@@ -728,6 +741,7 @@ fn extract_exception_handlers(
 
 fn extract_invoke_dynamic_sites(class_file: &ClassFile) -> Vec<Option<InvokeDynamicSite>> {
     let bootstrap_methods = class_file.bootstrap_methods();
+    let owner_class = class_file.class_name().unwrap_or("").to_string();
     let mut sites = Vec::with_capacity(class_file.constant_pool.len());
     sites.push(None);
 
@@ -745,6 +759,8 @@ fn extract_invoke_dynamic_sites(class_file: &ClassFile) -> Vec<Option<InvokeDyna
                     .unwrap_or(InvokeDynamicKind::Unknown);
 
                 Some(InvokeDynamicSite {
+                    owner_class: owner_class.clone(),
+                    constant_pool_index: index,
                     name,
                     descriptor,
                     bootstrap_method_index: *bootstrap_method_attr_index,
@@ -799,9 +815,117 @@ fn resolve_invoke_dynamic_kind(
             bootstrap_class,
             bootstrap_name,
             bootstrap_descriptor,
-            arguments: bootstrap_method.arguments.clone(),
+            arguments: bootstrap_method
+                .arguments
+                .iter()
+                .filter_map(|index| resolve_bootstrap_argument(class_file, *index))
+                .collect(),
         },
     }
+}
+
+fn resolve_bootstrap_argument(class_file: &ClassFile, index: u16) -> Option<BootstrapArgument> {
+    match class_file.constant_pool.get(index).ok()? {
+        ConstantPoolEntry::Integer(value) => Some(BootstrapArgument::Int(*value)),
+        ConstantPoolEntry::Long(value) => Some(BootstrapArgument::Long(*value)),
+        ConstantPoolEntry::Float(value) => Some(BootstrapArgument::Float(*value)),
+        ConstantPoolEntry::Double(value) => Some(BootstrapArgument::Double(*value)),
+        ConstantPoolEntry::String { string_index } => class_file
+            .constant_pool
+            .utf8(*string_index)
+            .ok()
+            .map(|value| BootstrapArgument::String(value.to_string())),
+        ConstantPoolEntry::Utf8(value) => Some(BootstrapArgument::String(value.clone())),
+        ConstantPoolEntry::Class { name_index } => class_file
+            .constant_pool
+            .utf8(*name_index)
+            .ok()
+            .map(|value| BootstrapArgument::Class(value.to_string())),
+        ConstantPoolEntry::MethodType { descriptor_index } => class_file
+            .constant_pool
+            .utf8(*descriptor_index)
+            .ok()
+            .map(|value| BootstrapArgument::MethodType(value.to_string())),
+        ConstantPoolEntry::MethodHandle {
+            reference_kind,
+            reference_index,
+        } => resolve_method_ref(class_file, *reference_index)
+            .ok()
+            .map(|method_ref| BootstrapArgument::MethodHandle {
+                reference_kind: *reference_kind,
+                target_class: method_ref.class_name,
+                target_method: method_ref.method_name,
+                target_descriptor: method_ref.descriptor,
+            }),
+        ConstantPoolEntry::Dynamic {
+            bootstrap_method_attr_index,
+            name_and_type_index,
+        } => {
+            let bm = class_file
+                .bootstrap_methods()
+                .get(*bootstrap_method_attr_index as usize)?;
+            let (name, descriptor) = resolve_name_and_type(class_file, *name_and_type_index).ok()?;
+            let (bootstrap_class, bootstrap_name, bootstrap_descriptor) =
+                resolve_bootstrap_method(class_file, bm.method_ref).ok()?;
+            let arguments = bm
+                .arguments
+                .iter()
+                .filter_map(|idx| resolve_bootstrap_argument(class_file, *idx))
+                .collect();
+            Some(BootstrapArgument::Dynamic {
+                name,
+                descriptor,
+                bootstrap_class,
+                bootstrap_name,
+                bootstrap_descriptor,
+                arguments,
+            })
+        }
+        _ => None,
+    }
+}
+
+fn extract_condy_sites(class_file: &ClassFile) -> Vec<Option<CondySite>> {
+    let bootstrap_methods = class_file.bootstrap_methods();
+    let owner_class = class_file.class_name().unwrap_or("").to_string();
+    let mut sites = Vec::with_capacity(class_file.constant_pool.len());
+    sites.push(None);
+
+    for index in 1..class_file.constant_pool.len() {
+        let site = match class_file.constant_pool.get(index as u16) {
+            Ok(ConstantPoolEntry::Dynamic {
+                bootstrap_method_attr_index,
+                name_and_type_index,
+            }) => bootstrap_methods
+                .get(*bootstrap_method_attr_index as usize)
+                .and_then(|bm| {
+                    let (name, descriptor) =
+                        resolve_name_and_type(class_file, *name_and_type_index).ok()?;
+                    let (bootstrap_class, bootstrap_name, bootstrap_descriptor) =
+                        resolve_bootstrap_method(class_file, bm.method_ref).ok()?;
+                    let arguments = bm
+                        .arguments
+                        .iter()
+                        .filter_map(|idx| resolve_bootstrap_argument(class_file, *idx))
+                        .collect();
+                    Some(CondySite {
+                        owner_class: owner_class.clone(),
+                        constant_pool_index: index,
+                        name,
+                        descriptor,
+                        bootstrap_method_index: *bootstrap_method_attr_index,
+                        bootstrap_class,
+                        bootstrap_name,
+                        bootstrap_descriptor,
+                        arguments,
+                    })
+                }),
+            _ => None,
+        };
+        sites.push(site);
+    }
+
+    sites
 }
 
 pub(crate) fn resolve_bootstrap_method(

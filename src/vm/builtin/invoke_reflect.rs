@@ -26,7 +26,7 @@ pub(super) fn invoke_reflect(
             let class_name_str = get_class_name(vm, this_ref)?;
             let method_name_str = crate::vm::builtin::helpers::stringify_reference(vm, name_ref)?;
             let param_descriptors = class_array_to_descriptors(vm, param_types_ref)?;
-            let method_descriptor = find_method_descriptor(
+            let (method_descriptor, method_modifiers) = find_method_info(
                 vm,
                 &class_name_str,
                 &method_name_str,
@@ -34,11 +34,8 @@ pub(super) fn invoke_reflect(
                 false,
             )?;
             let descriptor_ref = vm.intern_string(&method_descriptor);
-            let return_type_ref = class_ref_for_return_type(
-                vm,
-                &class_name_str,
-                &method_descriptor,
-            )?;
+            let return_type_ref =
+                class_ref_for_return_type(vm, &class_name_str, &method_descriptor)?;
             let heap = &mut vm.heap.lock().unwrap();
             let obj_ref = heap.allocate(HeapValue::Object {
                 class_name: "java/lang/reflect/Method".to_string(),
@@ -48,7 +45,7 @@ pub(super) fn invoke_reflect(
                     descriptor_ref,
                     Value::Reference(param_types_ref),
                     Value::Reference(return_type_ref),
-                    Value::Int(1),
+                    Value::Int(method_modifiers as i32),
                 ],
             });
             Ok(Some(Value::Reference(obj_ref)))
@@ -64,7 +61,7 @@ pub(super) fn invoke_reflect(
             let class_name_str = get_class_name(vm, this_ref)?;
             let method_name_str = crate::vm::builtin::helpers::stringify_reference(vm, name_ref)?;
             let param_descriptors = class_array_to_descriptors(vm, param_types_ref)?;
-            let method_descriptor = find_method_descriptor(
+            let (method_descriptor, method_modifiers) = find_method_info(
                 vm,
                 &class_name_str,
                 &method_name_str,
@@ -72,11 +69,8 @@ pub(super) fn invoke_reflect(
                 true,
             )?;
             let descriptor_ref = vm.intern_string(method_descriptor.clone());
-            let return_type_ref = class_ref_for_return_type(
-                vm,
-                &class_name_str,
-                &method_descriptor,
-            )?;
+            let return_type_ref =
+                class_ref_for_return_type(vm, &class_name_str, &method_descriptor)?;
             let heap = &mut vm.heap.lock().unwrap();
             let obj_ref = heap.allocate(HeapValue::Object {
                 class_name: "java/lang/reflect/Method".to_string(),
@@ -86,7 +80,7 @@ pub(super) fn invoke_reflect(
                     descriptor_ref,
                     Value::Reference(param_types_ref),
                     Value::Reference(return_type_ref),
-                    Value::Int(1),
+                    Value::Int(method_modifiers as i32),
                 ],
             });
             Ok(Some(Value::Reference(obj_ref)))
@@ -159,15 +153,17 @@ pub(super) fn invoke_reflect(
             let parameter_types_ref = args[1].as_reference()?;
             let class_name_str = get_class_name(vm, this_ref)?;
             let param_descriptors = class_array_to_descriptors(vm, parameter_types_ref)?;
-            let constructor_descriptor =
-                find_constructor_descriptor(vm, &class_name_str, &param_descriptors, false)?;
+            let (constructor_descriptor, constructor_modifiers) =
+                find_constructor_info(vm, &class_name_str, &param_descriptors, false)?;
+            let descriptor_ref = vm.intern_string(constructor_descriptor);
             let heap = &mut vm.heap.lock().unwrap();
             let obj_ref = heap.allocate(HeapValue::Object {
                 class_name: "java/lang/reflect/Constructor".to_string(),
                 fields: vec![
                     Value::Reference(this_ref),
                     Value::Reference(parameter_types_ref),
-                    Value::Int(1),
+                    descriptor_ref,
+                    Value::Int(constructor_modifiers as i32),
                     Value::Int(0),
                 ],
             });
@@ -182,15 +178,17 @@ pub(super) fn invoke_reflect(
             let parameter_types_ref = args[1].as_reference()?;
             let class_name_str = get_class_name(vm, this_ref)?;
             let param_descriptors = class_array_to_descriptors(vm, parameter_types_ref)?;
-            let constructor_descriptor =
-                find_constructor_descriptor(vm, &class_name_str, &param_descriptors, true)?;
+            let (constructor_descriptor, constructor_modifiers) =
+                find_constructor_info(vm, &class_name_str, &param_descriptors, true)?;
+            let descriptor_ref = vm.intern_string(constructor_descriptor);
             let heap = &mut vm.heap.lock().unwrap();
             let obj_ref = heap.allocate(HeapValue::Object {
                 class_name: "java/lang/reflect/Constructor".to_string(),
                 fields: vec![
                     Value::Reference(this_ref),
                     Value::Reference(parameter_types_ref),
-                    Value::Int(1),
+                    descriptor_ref,
+                    Value::Int(constructor_modifiers as i32),
                     Value::Int(0),
                 ],
             });
@@ -387,7 +385,7 @@ pub(super) fn invoke_reflect(
             let this_ref = args[0].as_reference()?;
             let heap = vm.heap.lock().unwrap();
             if let Ok(HeapValue::Object { fields, .. }) = heap.get(this_ref) {
-                if let Some(Value::Int(m)) = fields.get(2) {
+                if let Some(Value::Int(m)) = fields.get(3) {
                     return Ok(Some(Value::Int(*m)));
                 }
             }
@@ -558,22 +556,26 @@ fn class_ref_for_return_type(
     class_ref_for_descriptor(vm, return_descriptor(descriptor))
 }
 
-fn find_method_descriptor(
+fn find_method_info(
     vm: &mut Vm,
     class_name: &str,
     method_name: &str,
     param_descriptors: &[String],
     include_inherited: bool,
-) -> Result<String, VmError> {
+) -> Result<(String, u16), VmError> {
     let mut current = Some(class_name.to_string());
     while let Some(name) = current {
         vm.ensure_class(&name)?;
         let class = vm.get_class(&name)?;
-        for ((candidate_name, descriptor), _) in &class.methods {
+        for ((candidate_name, descriptor), class_method) in &class.methods {
             if candidate_name == method_name
                 && parameter_descriptors(descriptor) == param_descriptors
             {
-                return Ok(descriptor.clone());
+                let access_flags = match class_method {
+                    crate::vm::ClassMethod::Bytecode(method) => method.access_flags,
+                    crate::vm::ClassMethod::Native => 0x0001,
+                };
+                return Ok((descriptor.clone(), access_flags));
             }
         }
         if include_inherited {
@@ -589,13 +591,13 @@ fn find_method_descriptor(
     })
 }
 
-fn find_constructor_descriptor(
+fn find_constructor_info(
     vm: &mut Vm,
     class_name: &str,
     param_descriptors: &[String],
     include_inherited: bool,
-) -> Result<String, VmError> {
-    find_method_descriptor(
+) -> Result<(String, u16), VmError> {
+    find_method_info(
         vm,
         class_name,
         "<init>",
@@ -618,7 +620,10 @@ fn find_field_descriptor(
             return Ok((descriptor.clone(), false));
         }
         if let Some(value) = class.static_fields.get(field_name) {
-            return Ok((descriptor_for_value(*value), true));
+            let descriptor = vm
+                .field_descriptor(&name, field_name)
+                .unwrap_or_else(|| descriptor_for_value(*value));
+            return Ok((descriptor, true));
         }
         if include_inherited {
             current = class.super_class.clone();
@@ -741,7 +746,7 @@ fn constructor_metadata(vm: &Vm, this_ref: Reference) -> Result<ExecutableMetada
         .unwrap_or(Value::Reference(Reference::Null))
         .as_reference()?;
     let descriptor_ref = fields
-        .get(1)
+        .get(2)
         .copied()
         .unwrap_or(Value::Reference(Reference::Null))
         .as_reference()?;
@@ -779,11 +784,7 @@ fn field_metadata(vm: &Vm, this_ref: Reference) -> Result<FieldMetadata, VmError
         .copied()
         .unwrap_or(Value::Reference(Reference::Null))
         .as_reference()?;
-    let modifiers = fields
-        .get(4)
-        .copied()
-        .unwrap_or(Value::Int(0))
-        .as_int()?;
+    let modifiers = fields.get(4).copied().unwrap_or(Value::Int(0)).as_int()?;
     drop(heap);
     Ok(FieldMetadata {
         declaring_class: get_class_name(vm, declaring_class_ref)?,
@@ -839,16 +840,16 @@ fn unbox_reflection_value(vm: &Vm, value: Value, descriptor: &str) -> Result<Val
             )),
             _ => Ok(Value::Int(0)),
         },
-            "J" => match value {
-                Value::Long(_) => Ok(value),
-                Value::Reference(reference) => match vm.heap.lock().unwrap().get(reference)? {
-                    HeapValue::Object { fields, .. } => {
-                        Ok(fields.get(0).copied().unwrap_or(Value::Long(0)))
-                    }
-                    _ => Ok(Value::Long(0)),
-                },
+        "J" => match value {
+            Value::Long(_) => Ok(value),
+            Value::Reference(reference) => match vm.heap.lock().unwrap().get(reference)? {
+                HeapValue::Object { fields, .. } => {
+                    Ok(fields.get(0).copied().unwrap_or(Value::Long(0)))
+                }
                 _ => Ok(Value::Long(0)),
             },
+            _ => Ok(Value::Long(0)),
+        },
         _ => Ok(value),
     }
 }

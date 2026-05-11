@@ -31,10 +31,7 @@ pub(super) fn invoke_regex(
                     let heap = &mut vm.heap.lock().unwrap();
                     let obj_ref = heap.allocate(HeapValue::Object {
                         class_name: "java/util/regex/Pattern".to_string(),
-                        fields: vec![
-                            Value::Reference(pattern_ref),
-                            Value::Int(0),
-                        ],
+                        fields: vec![Value::Reference(pattern_ref), Value::Int(0)],
                     });
                     Ok(Some(Value::Reference(obj_ref)))
                 }
@@ -62,10 +59,7 @@ pub(super) fn invoke_regex(
                     let heap = &mut vm.heap.lock().unwrap();
                     let obj_ref = heap.allocate(HeapValue::Object {
                         class_name: "java/util/regex/Pattern".to_string(),
-                        fields: vec![
-                            Value::Reference(pattern_ref),
-                            Value::Int(flags),
-                        ],
+                        fields: vec![Value::Reference(pattern_ref), Value::Int(flags)],
                     });
                     Ok(Some(Value::Reference(obj_ref)))
                 }

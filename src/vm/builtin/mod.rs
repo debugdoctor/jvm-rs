@@ -28,6 +28,7 @@ impl Vm {
         bootstrap::bootstrap_java_lang(self);
         bootstrap::bootstrap_java_io(self);
         bootstrap::bootstrap_java_io_writer(self);
+        bootstrap::bootstrap_java_io_filestreams(self);
         bootstrap::bootstrap_java_util(self);
         bootstrap::bootstrap_java_nio(self);
         bootstrap::bootstrap_java_util_concurrent(self);
@@ -36,6 +37,7 @@ impl Vm {
         bootstrap_text::bootstrap_java_text(self);
         bootstrap_time::bootstrap_java_time(self);
         bootstrap::bootstrap_other(self);
+        self.ensure_callsite_classes();
     }
 
     pub(super) fn invoke_native(

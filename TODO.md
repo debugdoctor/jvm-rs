@@ -1,6 +1,6 @@
 # jvm-rs TODO
 
-Updated: 2026-05-06
+Updated: 2026-05-11
 
 The goal is not to clone every layer of HotSpot. The goal is to keep jvm-rs small, understandable, fast to start, and memory-conscious while steadily closing the compatibility and performance gaps that matter for real Java programs.
 
@@ -130,7 +130,7 @@ Current support matrix, derived from `src/vm/jit/compiler.rs` as of 2026-05-07:
 
 ### P1: Runtime Layout
 
-- [ ] Replace map-style object field storage with class-layout-based flat slots.
+- [x] Replace map-style object field storage with class-layout-based flat slots.
 - [ ] Build class metadata arenas to reduce repeated HashMap and String allocation.
 - [ ] Add a symbol/string interner shared by class metadata and runtime strings where safe.
 - [ ] Document the compressed-reference plan: current `Reference::Heap(usize)` behavior, HotSpot compressed oops differences, and migration path.

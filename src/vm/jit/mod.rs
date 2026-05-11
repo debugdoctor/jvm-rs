@@ -116,7 +116,7 @@ impl JitCompiler {
         })
     }
 
-    pub fn should_compile(&self, frame: &Frame, cp_index: Option<usize>) -> bool {
+    pub(super) fn should_compile(&self, frame: &Frame, cp_index: Option<usize>) -> bool {
         if let Some(index) = cp_index {
             let call_count = frame.call_counts.get(&index).copied().unwrap_or(0);
             call_count >= self.invocation_threshold
@@ -125,7 +125,7 @@ impl JitCompiler {
         }
     }
 
-    pub fn should_osr(&self, frame: &Frame, backedge_pc: usize) -> bool {
+    pub(super) fn should_osr(&self, frame: &Frame, backedge_pc: usize) -> bool {
         frame
             .backedge_counts
             .get(&backedge_pc)

@@ -13,11 +13,11 @@ use frame::Frame;
 pub use heap::GcStats;
 use heap::{Heap, HeapValue};
 use interpreter::{
-    execute_aconst_null, execute_aload, execute_astore, execute_bipush,
-    execute_dconst, execute_dup, execute_fconst,
-    execute_iadd, execute_iconst, execute_iload, execute_imul,
+    execute_aconst_null, execute_aload, execute_areturn_full, execute_astore, execute_bipush,
+    execute_dconst, execute_dload, execute_dstore, execute_dup, execute_fconst,
+    execute_fload, execute_fstore, execute_iadd, execute_iconst, execute_iload, execute_imul,
     execute_ireturn_full, execute_istore, execute_isub, execute_lconst, execute_ldc, execute_ldc_w,
-    execute_pop, execute_return_full,
+    execute_lload, execute_lreturn_full, execute_lstore, execute_pop, execute_return_full,
     execute_sipush,
 };
 use smallvec::SmallVec;
@@ -401,7 +401,7 @@ impl Vm {
     /// index the bytecode expects. Without this padding, methods like
     /// `ArraysSupport.vectorizedMismatch(Object,J,Object,J,I,I)` read local
     /// 7 (the second int) from an uninitialized slot.
-    pub(super) fn collect_jit_args_static(method: &Method, frame: &Frame) -> Vec<Value> {
+    fn collect_jit_args_static(method: &Method, frame: &Frame) -> Vec<Value> {
         // JIT signature is built from the descriptor; for non-static methods the
         // JIT does not include `this`, so we skip locals[0] in that case.
         let arg_count = parse_arg_types(&method.descriptor)
@@ -2502,26 +2502,42 @@ impl Vm {
                 let index = thread.current_frame_mut().read_u8()? as usize;
                 execute_aload(thread, index)?;
             }
-            Opcode::Iload | Opcode::Lload | Opcode::Fload | Opcode::Dload => {
+            Opcode::Iload => {
                 let index = thread.current_frame_mut().read_u8()? as usize;
                 execute_iload(thread, index)?;
             }
-            Opcode::Iload0 | Opcode::Lload0 | Opcode::Fload0 | Opcode::Dload0 => {
-                execute_iload(thread, 0)?;
+            Opcode::Lload => {
+                let index = thread.current_frame_mut().read_u8()? as usize;
+                execute_lload(thread, index)?;
             }
-            Opcode::Iload1 | Opcode::Lload1 | Opcode::Fload1 | Opcode::Dload1 => {
-                execute_iload(thread, 1)?;
+            Opcode::Fload => {
+                let index = thread.current_frame_mut().read_u8()? as usize;
+                execute_fload(thread, index)?;
             }
-            Opcode::Iload2 | Opcode::Lload2 | Opcode::Fload2 | Opcode::Dload2 => {
-                execute_iload(thread, 2)?;
+            Opcode::Dload => {
+                let index = thread.current_frame_mut().read_u8()? as usize;
+                execute_dload(thread, index)?;
             }
-            Opcode::Iload3 | Opcode::Lload3 | Opcode::Fload3 | Opcode::Dload3 => {
-                execute_iload(thread, 3)?;
-            }
-            Opcode::Aload0 => execute_iload(thread, 0)?,
-            Opcode::Aload1 => execute_iload(thread, 1)?,
-            Opcode::Aload2 => execute_iload(thread, 2)?,
-            Opcode::Aload3 => execute_iload(thread, 3)?,
+            Opcode::Iload0 => execute_iload(thread, 0)?,
+            Opcode::Lload0 => execute_lload(thread, 0)?,
+            Opcode::Fload0 => execute_fload(thread, 0)?,
+            Opcode::Dload0 => execute_dload(thread, 0)?,
+            Opcode::Iload1 => execute_iload(thread, 1)?,
+            Opcode::Lload1 => execute_lload(thread, 1)?,
+            Opcode::Fload1 => execute_fload(thread, 1)?,
+            Opcode::Dload1 => execute_dload(thread, 1)?,
+            Opcode::Iload2 => execute_iload(thread, 2)?,
+            Opcode::Lload2 => execute_lload(thread, 2)?,
+            Opcode::Fload2 => execute_fload(thread, 2)?,
+            Opcode::Dload2 => execute_dload(thread, 2)?,
+            Opcode::Iload3 => execute_iload(thread, 3)?,
+            Opcode::Lload3 => execute_lload(thread, 3)?,
+            Opcode::Fload3 => execute_fload(thread, 3)?,
+            Opcode::Dload3 => execute_dload(thread, 3)?,
+            Opcode::Aload0 => execute_aload(thread, 0)?,
+            Opcode::Aload1 => execute_aload(thread, 1)?,
+            Opcode::Aload2 => execute_aload(thread, 2)?,
+            Opcode::Aload3 => execute_aload(thread, 3)?,
             Opcode::Iaload => {
                 let index = thread.current_frame_mut().pop()?.as_int()?;
                 let array_ref = thread.current_frame_mut().pop()?.as_reference()?;
@@ -2595,26 +2611,42 @@ impl Vm {
                 let index = thread.current_frame_mut().read_u8()? as usize;
                 execute_astore(thread, index)?;
             }
-            Opcode::Istore | Opcode::Lstore | Opcode::Fstore | Opcode::Dstore => {
+            Opcode::Istore => {
                 let index = thread.current_frame_mut().read_u8()? as usize;
                 execute_istore(thread, index)?;
             }
-            Opcode::Istore0 | Opcode::Lstore0 | Opcode::Fstore0 | Opcode::Dstore0 => {
-                execute_istore(thread, 0)?;
+            Opcode::Lstore => {
+                let index = thread.current_frame_mut().read_u8()? as usize;
+                execute_lstore(thread, index)?;
             }
-            Opcode::Istore1 | Opcode::Lstore1 | Opcode::Fstore1 | Opcode::Dstore1 => {
-                execute_istore(thread, 1)?;
+            Opcode::Fstore => {
+                let index = thread.current_frame_mut().read_u8()? as usize;
+                execute_fstore(thread, index)?;
             }
-            Opcode::Istore2 | Opcode::Lstore2 | Opcode::Fstore2 | Opcode::Dstore2 => {
-                execute_istore(thread, 2)?;
+            Opcode::Dstore => {
+                let index = thread.current_frame_mut().read_u8()? as usize;
+                execute_dstore(thread, index)?;
             }
-            Opcode::Istore3 | Opcode::Lstore3 | Opcode::Fstore3 | Opcode::Dstore3 => {
-                execute_istore(thread, 3)?;
-            }
-            Opcode::Astore0 => execute_istore(thread, 0)?,
-            Opcode::Astore1 => execute_istore(thread, 1)?,
-            Opcode::Astore2 => execute_istore(thread, 2)?,
-            Opcode::Astore3 => execute_istore(thread, 3)?,
+            Opcode::Istore0 => execute_istore(thread, 0)?,
+            Opcode::Lstore0 => execute_lstore(thread, 0)?,
+            Opcode::Fstore0 => execute_fstore(thread, 0)?,
+            Opcode::Dstore0 => execute_dstore(thread, 0)?,
+            Opcode::Istore1 => execute_istore(thread, 1)?,
+            Opcode::Lstore1 => execute_lstore(thread, 1)?,
+            Opcode::Fstore1 => execute_fstore(thread, 1)?,
+            Opcode::Dstore1 => execute_dstore(thread, 1)?,
+            Opcode::Istore2 => execute_istore(thread, 2)?,
+            Opcode::Lstore2 => execute_lstore(thread, 2)?,
+            Opcode::Fstore2 => execute_fstore(thread, 2)?,
+            Opcode::Dstore2 => execute_dstore(thread, 2)?,
+            Opcode::Istore3 => execute_istore(thread, 3)?,
+            Opcode::Lstore3 => execute_lstore(thread, 3)?,
+            Opcode::Fstore3 => execute_fstore(thread, 3)?,
+            Opcode::Dstore3 => execute_dstore(thread, 3)?,
+            Opcode::Astore0 => execute_astore(thread, 0)?,
+            Opcode::Astore1 => execute_astore(thread, 1)?,
+            Opcode::Astore2 => execute_astore(thread, 2)?,
+            Opcode::Astore3 => execute_astore(thread, 3)?,
             Opcode::Iastore => {
                 let value = thread.current_frame_mut().pop()?.as_int()?;
                 let index = thread.current_frame_mut().pop()?.as_int()?;
@@ -3841,12 +3873,14 @@ impl Vm {
             }
 
             // --- Control: returns ---
-            Opcode::Areturn
-            | Opcode::Ireturn
-            | Opcode::Lreturn
-            | Opcode::Freturn
-            | Opcode::Dreturn => {
+            Opcode::Ireturn | Opcode::Freturn | Opcode::Dreturn => {
                 return execute_ireturn_full(thread);
+            }
+            Opcode::Lreturn => {
+                return execute_lreturn_full(thread);
+            }
+            Opcode::Areturn => {
+                return execute_areturn_full(thread);
             }
             Opcode::Return => {
                 return execute_return_full(thread);

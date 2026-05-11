@@ -9,6 +9,7 @@ pub(super) mod invoke;
 pub(super) mod invoke_concurrent;
 pub(super) mod invoke_nio;
 pub(super) mod invoke_other;
+pub(super) mod method_handle_combinators;
 pub(super) mod invoke_reflect;
 pub(super) mod invoke_regex;
 pub(super) mod invoke_text;

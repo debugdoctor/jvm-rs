@@ -1,6 +1,6 @@
 # jvm-rs TODO
 
-Updated: 2026-05-11
+Updated: 2026-05-12
 
 The goal is not to clone every layer of HotSpot. The goal is to keep jvm-rs small, understandable, fast to start, and memory-conscious while steadily closing the compatibility and performance gaps that matter for real Java programs.
 
@@ -49,7 +49,7 @@ HotSpot is the comparison point: it has a complete JDK surface, mature GC implem
 - [x] Improve `java.lang.Class` and reflection: annotations, modifiers, constructors, primitive/array class metadata, and method invocation error semantics.
 - [ ] Improve `java.lang.Thread`: interrupt, daemon flag, name, priority, context class loader, uncaught exception handler.
 - [ ] Implement `ServiceLoader`, resource loading, system properties, and environment access behavior needed by common libraries.
-- [ ] Move `java.io` and `java.nio.file` from stubs toward real file IO, error handling, and path normalization.
+- [x] Move `java.io` and `java.nio.file` from stubs toward real file IO, error handling, and path normalization.
 - [ ] Expand `java.util.stream`: map/filter/reduce/collect pipelines instead of only selected native collector/stream shortcuts.
 - [ ] Implement `String.intern()` with proper string pool for deduplication.
 

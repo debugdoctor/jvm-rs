@@ -8,6 +8,15 @@ pub(super) fn invoke_other(
     descriptor: &str,
     args: &[Value],
 ) -> Result<Option<Value>, VmError> {
+    if let Some(result) = super::method_handle_combinators::try_invoke_combinator(
+        vm,
+        class_name,
+        method_name,
+        descriptor,
+        args,
+    )? {
+        return Ok(result);
+    }
     match (class_name, method_name, descriptor) {
         ("java/lang/System", "currentTimeMillis", "()J") => {
             let now = std::time::SystemTime::now()
@@ -125,6 +134,54 @@ pub(super) fn invoke_other(
         }
         (
             "java/lang/invoke/MethodHandles$Lookup",
+            "findVarHandle",
+            "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/VarHandle;",
+        ) => {
+            let owner_class_ref = args[1].as_reference()?;
+            let name_ref = args[2].as_reference()?;
+            let type_class_ref = args[3].as_reference()?;
+            let owner = crate::vm::builtin::helpers::class_internal_name(vm, owner_class_ref)?;
+            let name = crate::vm::builtin::helpers::stringify_reference(vm, name_ref)?;
+            let type_internal =
+                crate::vm::builtin::helpers::class_internal_name(vm, type_class_ref)?;
+            let descriptor = type_class_to_descriptor(&type_internal);
+            let vh = vm.allocate_var_handle(0, &owner, &name, &descriptor)?;
+            Ok(Some(Value::Reference(vh)))
+        }
+        (
+            "java/lang/invoke/MethodHandles$Lookup",
+            "findStaticVarHandle",
+            "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/VarHandle;",
+        ) => {
+            let owner_class_ref = args[1].as_reference()?;
+            let name_ref = args[2].as_reference()?;
+            let type_class_ref = args[3].as_reference()?;
+            let owner = crate::vm::builtin::helpers::class_internal_name(vm, owner_class_ref)?;
+            let name = crate::vm::builtin::helpers::stringify_reference(vm, name_ref)?;
+            let type_internal =
+                crate::vm::builtin::helpers::class_internal_name(vm, type_class_ref)?;
+            let descriptor = type_class_to_descriptor(&type_internal);
+            let vh = vm.allocate_var_handle(1, &owner, &name, &descriptor)?;
+            Ok(Some(Value::Reference(vh)))
+        }
+        (
+            "java/lang/invoke/MethodHandles",
+            "arrayElementVarHandle",
+            "(Ljava/lang/Class;)Ljava/lang/invoke/VarHandle;",
+        ) => {
+            let array_class_ref = args[0].as_reference()?;
+            let array_name =
+                crate::vm::builtin::helpers::class_internal_name(vm, array_class_ref)?;
+            // array_name is e.g. `[I`, `[J`, `[Ljava/lang/Object;`.
+            let element_desc = array_name
+                .strip_prefix('[')
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "Ljava/lang/Object;".to_string());
+            let vh = vm.allocate_var_handle(2, &array_name, "", &element_desc)?;
+            Ok(Some(Value::Reference(vh)))
+        }
+        (
+            "java/lang/invoke/MethodHandles$Lookup",
             "findStatic",
             "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle;",
         ) => lookup_find_method(vm, args, 6),
@@ -173,6 +230,167 @@ pub(super) fn invoke_other(
         }
         ("java/lang/invoke/MethodHandles$Lookup", "lookupModes", "()I") => {
             Ok(Some(Value::Int(lookup_modes(vm, args[0].as_reference()?)?)))
+        }
+        (
+            "java/lang/invoke/MethodHandles$Lookup",
+            "lookupClass",
+            "()Ljava/lang/Class;",
+        ) => Ok(Some(vm.get_object_field(args[0].as_reference()?, "__lookupClass")?)),
+        (
+            "java/lang/invoke/MethodHandles$Lookup",
+            "previousLookupClass",
+            "()Ljava/lang/Class;",
+        ) => Ok(Some(
+            vm.get_object_field(args[0].as_reference()?, "__previousLookupClass")
+                .unwrap_or(Value::Reference(Reference::Null)),
+        )),
+        (
+            "java/lang/invoke/MethodHandles$Lookup",
+            "hasFullPrivilegeAccess",
+            "()Z",
+        ) => {
+            let modes = lookup_modes(vm, args[0].as_reference()?)?;
+            // PRIVATE (0x02) | MODULE (0x10) bits required for full privilege.
+            let full = (modes & 0x02 != 0) && (modes & 0x10 != 0);
+            Ok(Some(Value::Int(if full { 1 } else { 0 })))
+        }
+        (
+            "java/lang/invoke/MethodHandles$Lookup",
+            "in",
+            "(Ljava/lang/Class;)Ljava/lang/invoke/MethodHandles$Lookup;",
+        ) => {
+            let lookup_ref = args[0].as_reference()?;
+            let target_class_ref = args[1].as_reference()?;
+            let prev_lookup_class = lookup_class_name(vm, lookup_ref)?;
+            let prev_modes = lookup_modes(vm, lookup_ref)?;
+            let target_class =
+                crate::vm::builtin::helpers::class_internal_name(vm, target_class_ref)?;
+            // JVMS: in(C) drops PROTECTED unconditionally; drops PRIVATE,
+            // PACKAGE if C is in a different package; drops PRIVATE, PACKAGE,
+            // MODULE if C is in a different module (which we collapse to
+            // "different runtime package" for jvm-rs).
+            let mut new_modes = prev_modes & !0x04; // drop PROTECTED
+            if !vm.same_runtime_package(&prev_lookup_class, &target_class) {
+                new_modes &= !(0x02 | 0x08); // drop PRIVATE, PACKAGE
+                new_modes &= !0x10; // drop MODULE (no real module tracking)
+            }
+            Ok(Some(Value::Reference(
+                vm.allocate_bootstrap_lookup_full(
+                    &target_class,
+                    new_modes,
+                    Some(&prev_lookup_class),
+                )?,
+            )))
+        }
+        (
+            "java/lang/invoke/MethodHandles$Lookup",
+            "dropLookupMode",
+            "(I)Ljava/lang/invoke/MethodHandles$Lookup;",
+        ) => {
+            let lookup_ref = args[0].as_reference()?;
+            let drop_mode = args[1].as_int()?;
+            let lookup_class = lookup_class_name(vm, lookup_ref)?;
+            let modes = lookup_modes(vm, lookup_ref)?;
+            // Per JVMS dropping PROTECTED is a no-op; dropping PUBLIC nukes all
+            // access bits.
+            let new_modes = if drop_mode == 0x04 {
+                modes
+            } else if drop_mode == 0x01 {
+                0
+            } else {
+                modes & !drop_mode
+            };
+            let prev =
+                vm.get_object_field(lookup_ref, "__previousLookupClass")?.as_reference()?;
+            let prev_class = if prev == Reference::Null {
+                None
+            } else {
+                Some(crate::vm::builtin::helpers::class_internal_name(vm, prev)?)
+            };
+            Ok(Some(Value::Reference(
+                vm.allocate_bootstrap_lookup_full(
+                    &lookup_class,
+                    new_modes,
+                    prev_class.as_deref(),
+                )?,
+            )))
+        }
+        (
+            "java/lang/invoke/MethodHandles$Lookup",
+            "accessClass",
+            "(Ljava/lang/Class;)Ljava/lang/Class;",
+        ) => {
+            // Best-effort: load the class and return it. The full JVMS check
+            // would validate against modes — defer until a real workload needs
+            // it.
+            let class_ref = args[1].as_reference()?;
+            let class_name =
+                crate::vm::builtin::helpers::class_internal_name(vm, class_ref)?;
+            vm.ensure_class_loaded(&class_name)?;
+            Ok(Some(Value::Reference(class_ref)))
+        }
+        (
+            "java/lang/invoke/MethodHandles$Lookup",
+            "ensureInitialized",
+            "(Ljava/lang/Class;)Ljava/lang/Class;",
+        ) => {
+            let class_ref = args[1].as_reference()?;
+            let class_name =
+                crate::vm::builtin::helpers::class_internal_name(vm, class_ref)?;
+            vm.ensure_class_loaded(&class_name)?;
+            vm.ensure_class_initialized(&class_name)?;
+            Ok(Some(Value::Reference(class_ref)))
+        }
+        (
+            "java/lang/invoke/MethodHandles$Lookup",
+            "revealDirect",
+            "(Ljava/lang/invoke/MethodHandle;)Ljava/lang/invoke/MethodHandleInfo;",
+        ) => {
+            let handle = args[1].as_reference()?;
+            let info = vm.allocate_method_handle_info(handle)?;
+            Ok(Some(Value::Reference(info)))
+        }
+        (
+            "java/lang/invoke/MethodHandles$Lookup",
+            "defineHiddenClass",
+            "([BZ[Ljava/lang/invoke/MethodHandles$Lookup$ClassOption;)Ljava/lang/invoke/MethodHandles$Lookup;",
+        )
+        | (
+            "java/lang/invoke/MethodHandles$Lookup",
+            "defineHiddenClassWithClassData",
+            "([BLjava/lang/Object;Z[Ljava/lang/invoke/MethodHandles$Lookup$ClassOption;)Ljava/lang/invoke/MethodHandles$Lookup;",
+        ) => {
+            let lookup_ref = args[0].as_reference()?;
+            let bytes_ref = args[1].as_reference()?;
+            let initialize = if method_name == "defineHiddenClass" {
+                args[2].as_int()? != 0
+            } else {
+                args[3].as_int()? != 0
+            };
+            let lookup_class = lookup_class_name(vm, lookup_ref)?;
+            let new_class = vm.define_hidden_class(&lookup_class, bytes_ref, initialize)?;
+            let modes = lookup_modes(vm, lookup_ref)?;
+            let new_lookup = vm.allocate_bootstrap_lookup_full(
+                &new_class,
+                modes,
+                Some(&lookup_class),
+            )?;
+            Ok(Some(Value::Reference(new_lookup)))
+        }
+        ("java/lang/invoke/MethodHandleInfo", "getReferenceKind", "()I") => {
+            Ok(Some(vm.get_object_field(args[0].as_reference()?, "__referenceKind")?))
+        }
+        ("java/lang/invoke/MethodHandleInfo", "getDeclaringClass", "()Ljava/lang/Class;") => {
+            Ok(Some(vm.get_object_field(args[0].as_reference()?, "__declaringClass")?))
+        }
+        ("java/lang/invoke/MethodHandleInfo", "getName", "()Ljava/lang/String;") => {
+            Ok(Some(vm.get_object_field(args[0].as_reference()?, "__name")?))
+        }
+        ("java/lang/invoke/MethodHandleInfo", "getMethodType", "()Ljava/lang/invoke/MethodType;") => {
+            Ok(Some(vm.get_object_field(args[0].as_reference()?, "__methodType")?))
+        }
+        ("java/lang/invoke/MethodHandleInfo", "getModifiers", "()I") => {
+            Ok(Some(Value::Int(0x0001))) // ACC_PUBLIC
         }
         (
             "java/lang/invoke/MethodHandles$Lookup",
@@ -270,6 +488,59 @@ pub(super) fn invoke_other(
             // heap mutex, which gives us SeqCst semantics for the field write.
             Ok(None)
         }
+        (
+            "java/lang/invoke/CallSite",
+            "dynamicInvoker",
+            "()Ljava/lang/invoke/MethodHandle;",
+        )
+        | (
+            "java/lang/invoke/ConstantCallSite",
+            "dynamicInvoker",
+            "()Ljava/lang/invoke/MethodHandle;",
+        )
+        | (
+            "java/lang/invoke/MutableCallSite",
+            "dynamicInvoker",
+            "()Ljava/lang/invoke/MethodHandle;",
+        )
+        | (
+            "java/lang/invoke/VolatileCallSite",
+            "dynamicInvoker",
+            "()Ljava/lang/invoke/MethodHandle;",
+        ) => {
+            let callsite = args[0].as_reference()?;
+            // Read the current target's descriptor to use as the invoker's
+            // type. If the target is null, fall back to a no-op `()V`.
+            let target_value = vm.get_object_field(callsite, "__target")?;
+            let target_ref = target_value.as_reference()?;
+            let desc = if target_ref == Reference::Null {
+                "()V".to_string()
+            } else {
+                let target_desc_ref = vm
+                    .get_object_field(target_ref, "__targetDesc")?
+                    .as_reference()?;
+                if target_desc_ref == Reference::Null {
+                    "()V".to_string()
+                } else {
+                    let s = vm
+                        .get_object_field(target_desc_ref, "__descriptor")?
+                        .as_reference()?;
+                    crate::vm::builtin::helpers::stringify_reference(vm, s)?
+                }
+            };
+            let mh = vm.allocate_derived_method_handle(
+                crate::vm::MH_KIND_INVOKER,
+                &desc,
+                vec![
+                    (
+                        "__invokerKind",
+                        Value::Int(crate::vm::MH_INVOKER_CALLSITE),
+                    ),
+                    ("__invokerCallsite", Value::Reference(callsite)),
+                ],
+            )?;
+            Ok(Some(Value::Reference(mh)))
+        }
         ("jdk/internal/reflect/Reflection", "getCallerClass", "()Ljava/lang/Class;") => {
             Ok(Some(Value::Reference(Reference::Null)))
         }
@@ -292,8 +563,21 @@ pub(super) fn invoke_other(
             Ok(Some(Value::Int(i32::from(cfg!(target_endian = "big")))))
         }
         ("jdk/internal/misc/Unsafe", "pageSize", "()I") => Ok(Some(Value::Int(4096))),
-        ("jdk/internal/misc/Unsafe", "objectFieldOffset", _)
-        | ("jdk/internal/misc/Unsafe", "staticFieldOffset", _) => Ok(Some(Value::Long(0))),
+        ("jdk/internal/misc/Unsafe", "objectFieldOffset", _) => {
+            // Args: (this, Field) or (this, Class, String). We support both shapes.
+            let offset = if args.len() == 3 {
+                let field_ref = args[1].as_reference()?;
+                unsafe_field_offset_from_field(vm, field_ref)?
+            } else if args.len() == 4 {
+                let class_ref = args[1].as_reference()?;
+                let name_ref = args[2].as_reference()?;
+                unsafe_field_offset_from_class_name(vm, class_ref, name_ref)?
+            } else {
+                0
+            };
+            Ok(Some(Value::Long(offset)))
+        }
+        ("jdk/internal/misc/Unsafe", "staticFieldOffset", _) => Ok(Some(Value::Long(0))),
         ("jdk/internal/misc/Unsafe", "staticFieldBase", _) => {
             Ok(Some(Value::Reference(Reference::Null)))
         }
@@ -302,18 +586,74 @@ pub(super) fn invoke_other(
         | ("jdk/internal/misc/Unsafe", "fullFence", "()V") => Ok(None),
         (
             "jdk/internal/misc/Unsafe",
-            "compareAndSetInt"
-            | "compareAndSetLong"
-            | "compareAndSetReference"
-            | "compareAndSetObject",
-            _,
-        ) => Ok(Some(Value::Int(1))),
-        ("jdk/internal/misc/Unsafe", "getReferenceVolatile", _) => {
-            Ok(Some(Value::Reference(Reference::Null)))
-        }
-        ("jdk/internal/misc/Unsafe", "putReferenceVolatile", _)
-        | ("jdk/internal/misc/Unsafe", "putIntVolatile", _) => Ok(None),
-        ("jdk/internal/misc/Unsafe", "getIntVolatile", _) => Ok(Some(Value::Int(0))),
+            "compareAndSetInt",
+            "(Ljava/lang/Object;JII)Z",
+        ) => unsafe_cas_int(vm, args),
+        (
+            "jdk/internal/misc/Unsafe",
+            "compareAndSetLong",
+            "(Ljava/lang/Object;JJJ)Z",
+        ) => unsafe_cas_long(vm, args),
+        (
+            "jdk/internal/misc/Unsafe",
+            "compareAndSetReference" | "compareAndSetObject",
+            "(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z",
+        ) => unsafe_cas_reference(vm, args),
+        (
+            "jdk/internal/misc/Unsafe",
+            "getAndAddInt",
+            "(Ljava/lang/Object;JI)I",
+        ) => unsafe_get_and_add_int(vm, args),
+        (
+            "jdk/internal/misc/Unsafe",
+            "getAndAddLong",
+            "(Ljava/lang/Object;JJ)J",
+        ) => unsafe_get_and_add_long(vm, args),
+        (
+            "jdk/internal/misc/Unsafe",
+            "getAndSetInt",
+            "(Ljava/lang/Object;JI)I",
+        ) => unsafe_get_and_set_int(vm, args),
+        (
+            "jdk/internal/misc/Unsafe",
+            "getAndSetLong",
+            "(Ljava/lang/Object;JJ)J",
+        ) => unsafe_get_and_set_long(vm, args),
+        (
+            "jdk/internal/misc/Unsafe",
+            "getAndSetReference" | "getAndSetObject",
+            "(Ljava/lang/Object;JLjava/lang/Object;)Ljava/lang/Object;",
+        ) => unsafe_get_and_set_reference(vm, args),
+        (
+            "jdk/internal/misc/Unsafe",
+            "getIntVolatile",
+            "(Ljava/lang/Object;J)I",
+        ) => unsafe_get_int(vm, args),
+        (
+            "jdk/internal/misc/Unsafe",
+            "putIntVolatile",
+            "(Ljava/lang/Object;JI)V",
+        ) => unsafe_put_int(vm, args),
+        (
+            "jdk/internal/misc/Unsafe",
+            "getLongVolatile",
+            "(Ljava/lang/Object;J)J",
+        ) => unsafe_get_long(vm, args),
+        (
+            "jdk/internal/misc/Unsafe",
+            "putLongVolatile",
+            "(Ljava/lang/Object;JJ)V",
+        ) => unsafe_put_long(vm, args),
+        (
+            "jdk/internal/misc/Unsafe",
+            "getReferenceVolatile",
+            "(Ljava/lang/Object;J)Ljava/lang/Object;",
+        ) => unsafe_get_reference(vm, args),
+        (
+            "jdk/internal/misc/Unsafe",
+            "putReferenceVolatile",
+            "(Ljava/lang/Object;JLjava/lang/Object;)V",
+        ) => unsafe_put_reference(vm, args),
         ("jdk/internal/misc/Unsafe", _, _) => {
             let classification = classify_unsafe_method(method_name, descriptor);
             if classification == UnsafeClassification::DangerousStub {
@@ -526,4 +866,384 @@ fn unreflect_field(
             Some(&lookup_class),
         )?,
     )))
+}
+
+/// Convert a `Class<?>` internal name (`int`, `long`, `java/lang/String`, `[I`)
+/// into a JVMS field descriptor.
+fn type_class_to_descriptor(internal: &str) -> String {
+    match internal {
+        "int" => "I".to_string(),
+        "long" => "J".to_string(),
+        "float" => "F".to_string(),
+        "double" => "D".to_string(),
+        "boolean" => "Z".to_string(),
+        "byte" => "B".to_string(),
+        "char" => "C".to_string(),
+        "short" => "S".to_string(),
+        "void" => "V".to_string(),
+        s if s.starts_with('[') => s.to_string(),
+        s if s.len() == 1 && "BCDFIJSZV".contains(s) => s.to_string(),
+        s => format!("L{};", s),
+    }
+}
+
+// ----- Unsafe field / array RMW helpers (M3.4) -----
+
+fn unsafe_field_offset_from_field(vm: &mut Vm, field_ref: Reference) -> Result<i64, VmError> {
+    if field_ref == Reference::Null {
+        return Ok(0);
+    }
+    let declaring_ref = vm
+        .get_object_field(field_ref, "__declaring_class")?
+        .as_reference()?;
+    let name_ref = vm.get_object_field(field_ref, "__name")?.as_reference()?;
+    unsafe_field_offset_from_class_name(vm, declaring_ref, name_ref)
+}
+
+fn unsafe_field_offset_from_class_name(
+    vm: &mut Vm,
+    class_ref: Reference,
+    name_ref: Reference,
+) -> Result<i64, VmError> {
+    if class_ref == Reference::Null || name_ref == Reference::Null {
+        return Ok(0);
+    }
+    let class_internal = crate::vm::builtin::helpers::class_internal_name(vm, class_ref)?;
+    let name = crate::vm::builtin::helpers::stringify_reference(vm, name_ref)?;
+    if let Ok(class) = vm.get_class(&class_internal) {
+        if let Some(offset) = class.field_offsets.get(&name).copied() {
+            return Ok(offset as i64);
+        }
+    }
+    Ok(0)
+}
+
+/// Apply an `RMW` closure to an instance field slot or an array element while
+/// holding the heap mutex. Returns the closure's result.
+fn with_target_slot<F, R>(vm: &mut Vm, target: Reference, offset: i64, f: F) -> Result<R, VmError>
+where
+    F: FnOnce(SlotView<'_>) -> Result<R, VmError>,
+{
+    if target == Reference::Null {
+        return Err(VmError::UnhandledException {
+            class_name: "java/lang/NullPointerException".to_string(),
+        });
+    }
+    let mut heap = vm.heap.lock().unwrap();
+    let hv = heap.get_mut(target)?;
+    match hv {
+        crate::vm::HeapValue::Object { fields, .. } => {
+            let idx = offset as usize;
+            if idx >= fields.len() {
+                return Err(VmError::FieldNotFound {
+                    class_name: String::new(),
+                    field_name: format!("offset {offset}"),
+                });
+            }
+            f(SlotView::Single(&mut fields[idx]))
+        }
+        crate::vm::HeapValue::IntArray { values } => {
+            let idx = offset as usize;
+            if idx >= values.len() {
+                return Err(VmError::ArrayIndexOutOfBounds {
+                    index: offset as i32,
+                    len: values.len(),
+                });
+            }
+            f(SlotView::IntArr(values, idx))
+        }
+        crate::vm::HeapValue::LongArray { values } => {
+            let idx = offset as usize;
+            if idx >= values.len() {
+                return Err(VmError::ArrayIndexOutOfBounds {
+                    index: offset as i32,
+                    len: values.len(),
+                });
+            }
+            f(SlotView::LongArr(values, idx))
+        }
+        crate::vm::HeapValue::ReferenceArray { values, .. } => {
+            let idx = offset as usize;
+            if idx >= values.len() {
+                return Err(VmError::ArrayIndexOutOfBounds {
+                    index: offset as i32,
+                    len: values.len(),
+                });
+            }
+            f(SlotView::RefArr(values, idx))
+        }
+        other => Err(VmError::InvalidHeapValue {
+            expected: "object-or-array",
+            actual: other.kind_name(),
+        }),
+    }
+}
+
+enum SlotView<'a> {
+    Single(&'a mut Value),
+    IntArr(&'a mut Vec<i32>, usize),
+    LongArr(&'a mut Vec<i64>, usize),
+    RefArr(&'a mut Vec<Reference>, usize),
+}
+
+fn unsafe_cas_int(vm: &mut Vm, args: &[Value]) -> Result<Option<Value>, VmError> {
+    let target = args[1].as_reference()?;
+    let offset = args[2].as_long()?;
+    let expected = args[3].as_int()?;
+    let new = args[4].as_int()?;
+    let ok = with_target_slot(vm, target, offset, |slot| match slot {
+        SlotView::Single(v) => {
+            let prev = v.as_int().unwrap_or(0);
+            if prev == expected {
+                *v = Value::Int(new);
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        }
+        SlotView::IntArr(arr, idx) => {
+            if arr[idx] == expected {
+                arr[idx] = new;
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        }
+        _ => Ok(false),
+    })?;
+    Ok(Some(Value::Int(if ok { 1 } else { 0 })))
+}
+
+fn unsafe_cas_long(vm: &mut Vm, args: &[Value]) -> Result<Option<Value>, VmError> {
+    let target = args[1].as_reference()?;
+    let offset = args[2].as_long()?;
+    let expected = args[3].as_long()?;
+    let new = args[4].as_long()?;
+    let ok = with_target_slot(vm, target, offset, |slot| match slot {
+        SlotView::Single(v) => {
+            let prev = v.as_long().unwrap_or(0);
+            if prev == expected {
+                *v = Value::Long(new);
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        }
+        SlotView::LongArr(arr, idx) => {
+            if arr[idx] == expected {
+                arr[idx] = new;
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        }
+        _ => Ok(false),
+    })?;
+    Ok(Some(Value::Int(if ok { 1 } else { 0 })))
+}
+
+fn unsafe_cas_reference(vm: &mut Vm, args: &[Value]) -> Result<Option<Value>, VmError> {
+    let target = args[1].as_reference()?;
+    let offset = args[2].as_long()?;
+    let expected = args[3].as_reference()?;
+    let new = args[4].as_reference()?;
+    let ok = with_target_slot(vm, target, offset, |slot| match slot {
+        SlotView::Single(v) => {
+            let prev = v.as_reference().unwrap_or(Reference::Null);
+            if prev == expected {
+                *v = Value::Reference(new);
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        }
+        SlotView::RefArr(arr, idx) => {
+            if arr[idx] == expected {
+                arr[idx] = new;
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        }
+        _ => Ok(false),
+    })?;
+    Ok(Some(Value::Int(if ok { 1 } else { 0 })))
+}
+
+fn unsafe_get_and_add_int(vm: &mut Vm, args: &[Value]) -> Result<Option<Value>, VmError> {
+    let target = args[1].as_reference()?;
+    let offset = args[2].as_long()?;
+    let delta = args[3].as_int()?;
+    let prev = with_target_slot(vm, target, offset, |slot| match slot {
+        SlotView::Single(v) => {
+            let p = v.as_int().unwrap_or(0);
+            *v = Value::Int(p.wrapping_add(delta));
+            Ok(p)
+        }
+        SlotView::IntArr(arr, idx) => {
+            let p = arr[idx];
+            arr[idx] = p.wrapping_add(delta);
+            Ok(p)
+        }
+        _ => Ok(0),
+    })?;
+    Ok(Some(Value::Int(prev)))
+}
+
+fn unsafe_get_and_add_long(vm: &mut Vm, args: &[Value]) -> Result<Option<Value>, VmError> {
+    let target = args[1].as_reference()?;
+    let offset = args[2].as_long()?;
+    let delta = args[3].as_long()?;
+    let prev = with_target_slot(vm, target, offset, |slot| match slot {
+        SlotView::Single(v) => {
+            let p = v.as_long().unwrap_or(0);
+            *v = Value::Long(p.wrapping_add(delta));
+            Ok(p)
+        }
+        SlotView::LongArr(arr, idx) => {
+            let p = arr[idx];
+            arr[idx] = p.wrapping_add(delta);
+            Ok(p)
+        }
+        _ => Ok(0),
+    })?;
+    Ok(Some(Value::Long(prev)))
+}
+
+fn unsafe_get_and_set_int(vm: &mut Vm, args: &[Value]) -> Result<Option<Value>, VmError> {
+    let target = args[1].as_reference()?;
+    let offset = args[2].as_long()?;
+    let new = args[3].as_int()?;
+    let prev = with_target_slot(vm, target, offset, |slot| match slot {
+        SlotView::Single(v) => {
+            let p = v.as_int().unwrap_or(0);
+            *v = Value::Int(new);
+            Ok(p)
+        }
+        SlotView::IntArr(arr, idx) => {
+            let p = arr[idx];
+            arr[idx] = new;
+            Ok(p)
+        }
+        _ => Ok(0),
+    })?;
+    Ok(Some(Value::Int(prev)))
+}
+
+fn unsafe_get_and_set_long(vm: &mut Vm, args: &[Value]) -> Result<Option<Value>, VmError> {
+    let target = args[1].as_reference()?;
+    let offset = args[2].as_long()?;
+    let new = args[3].as_long()?;
+    let prev = with_target_slot(vm, target, offset, |slot| match slot {
+        SlotView::Single(v) => {
+            let p = v.as_long().unwrap_or(0);
+            *v = Value::Long(new);
+            Ok(p)
+        }
+        SlotView::LongArr(arr, idx) => {
+            let p = arr[idx];
+            arr[idx] = new;
+            Ok(p)
+        }
+        _ => Ok(0),
+    })?;
+    Ok(Some(Value::Long(prev)))
+}
+
+fn unsafe_get_and_set_reference(vm: &mut Vm, args: &[Value]) -> Result<Option<Value>, VmError> {
+    let target = args[1].as_reference()?;
+    let offset = args[2].as_long()?;
+    let new = args[3].as_reference()?;
+    let prev = with_target_slot(vm, target, offset, |slot| match slot {
+        SlotView::Single(v) => {
+            let p = v.as_reference().unwrap_or(Reference::Null);
+            *v = Value::Reference(new);
+            Ok(p)
+        }
+        SlotView::RefArr(arr, idx) => {
+            let p = arr[idx];
+            arr[idx] = new;
+            Ok(p)
+        }
+        _ => Ok(Reference::Null),
+    })?;
+    Ok(Some(Value::Reference(prev)))
+}
+
+fn unsafe_get_int(vm: &mut Vm, args: &[Value]) -> Result<Option<Value>, VmError> {
+    let target = args[1].as_reference()?;
+    let offset = args[2].as_long()?;
+    let value = with_target_slot(vm, target, offset, |slot| match slot {
+        SlotView::Single(v) => Ok(v.as_int().unwrap_or(0)),
+        SlotView::IntArr(arr, idx) => Ok(arr[idx]),
+        _ => Ok(0),
+    })?;
+    Ok(Some(Value::Int(value)))
+}
+
+fn unsafe_put_int(vm: &mut Vm, args: &[Value]) -> Result<Option<Value>, VmError> {
+    let target = args[1].as_reference()?;
+    let offset = args[2].as_long()?;
+    let new = args[3].as_int()?;
+    with_target_slot(vm, target, offset, |slot| {
+        match slot {
+            SlotView::Single(v) => *v = Value::Int(new),
+            SlotView::IntArr(arr, idx) => arr[idx] = new,
+            _ => {}
+        }
+        Ok(())
+    })?;
+    Ok(None)
+}
+
+fn unsafe_get_long(vm: &mut Vm, args: &[Value]) -> Result<Option<Value>, VmError> {
+    let target = args[1].as_reference()?;
+    let offset = args[2].as_long()?;
+    let value = with_target_slot(vm, target, offset, |slot| match slot {
+        SlotView::Single(v) => Ok(v.as_long().unwrap_or(0)),
+        SlotView::LongArr(arr, idx) => Ok(arr[idx]),
+        _ => Ok(0),
+    })?;
+    Ok(Some(Value::Long(value)))
+}
+
+fn unsafe_put_long(vm: &mut Vm, args: &[Value]) -> Result<Option<Value>, VmError> {
+    let target = args[1].as_reference()?;
+    let offset = args[2].as_long()?;
+    let new = args[3].as_long()?;
+    with_target_slot(vm, target, offset, |slot| {
+        match slot {
+            SlotView::Single(v) => *v = Value::Long(new),
+            SlotView::LongArr(arr, idx) => arr[idx] = new,
+            _ => {}
+        }
+        Ok(())
+    })?;
+    Ok(None)
+}
+
+fn unsafe_get_reference(vm: &mut Vm, args: &[Value]) -> Result<Option<Value>, VmError> {
+    let target = args[1].as_reference()?;
+    let offset = args[2].as_long()?;
+    let value = with_target_slot(vm, target, offset, |slot| match slot {
+        SlotView::Single(v) => Ok(v.as_reference().unwrap_or(Reference::Null)),
+        SlotView::RefArr(arr, idx) => Ok(arr[idx]),
+        _ => Ok(Reference::Null),
+    })?;
+    Ok(Some(Value::Reference(value)))
+}
+
+fn unsafe_put_reference(vm: &mut Vm, args: &[Value]) -> Result<Option<Value>, VmError> {
+    let target = args[1].as_reference()?;
+    let offset = args[2].as_long()?;
+    let new = args[3].as_reference()?;
+    with_target_slot(vm, target, offset, |slot| {
+        match slot {
+            SlotView::Single(v) => *v = Value::Reference(new),
+            SlotView::RefArr(arr, idx) => arr[idx] = new,
+            _ => {}
+        }
+        Ok(())
+    })?;
+    Ok(None)
 }

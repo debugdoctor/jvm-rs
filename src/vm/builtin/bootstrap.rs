@@ -380,6 +380,10 @@ pub(super) fn bootstrap_java_lang(vm: &mut Vm) {
         ),
         ("java/lang/ClassCastException", "java/lang/RuntimeException"),
         (
+            "java/lang/invoke/WrongMethodTypeException",
+            "java/lang/RuntimeException",
+        ),
+        (
             "java/lang/NegativeArraySizeException",
             "java/lang/RuntimeException",
         ),

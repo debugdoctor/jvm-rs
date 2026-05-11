@@ -98,11 +98,19 @@ pub fn classify_unsafe_method(method_name: &str, descriptor: &str) -> UnsafeClas
         ("compareAndSetInt", _)
         | ("compareAndSetLong", _)
         | ("compareAndSetReference", _)
-        | ("compareAndSetObject", _) => UnsafeClassification::ConservativeStub,
+        | ("compareAndSetObject", _) => UnsafeClassification::Real,
         ("getReferenceVolatile", _)
         | ("putReferenceVolatile", _)
         | ("putIntVolatile", _)
-        | ("getIntVolatile", _) => UnsafeClassification::ConservativeStub,
+        | ("getIntVolatile", _)
+        | ("getLongVolatile", _)
+        | ("putLongVolatile", _)
+        | ("getAndAddInt", _)
+        | ("getAndAddLong", _)
+        | ("getAndSetInt", _)
+        | ("getAndSetLong", _)
+        | ("getAndSetReference", _)
+        | ("getAndSetObject", _) => UnsafeClassification::Real,
         ("getInt", _) | ("putInt", _) => UnsafeClassification::DangerousStub,
         ("getLong", _) | ("putLong", _) => UnsafeClassification::DangerousStub,
         ("getObject", _) | ("putObject", _) => UnsafeClassification::DangerousStub,

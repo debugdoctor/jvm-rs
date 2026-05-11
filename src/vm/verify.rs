@@ -1667,7 +1667,10 @@ fn store_local(
 ) -> Result<(), VmError> {
     let len = state.locals.len();
     if index >= len {
-        return Err(verification_error(pc, format!("local {index} out of bounds")));
+        return Err(verification_error(
+            pc,
+            format!("local {index} out of bounds"),
+        ));
     }
 
     if index > 0 && is_wide_verify_type(&state.locals[index - 1]) {
@@ -1682,7 +1685,10 @@ fn store_local(
     if is_wide {
         let next = index + 1;
         if next >= len {
-            return Err(verification_error(pc, format!("local {next} out of bounds")));
+            return Err(verification_error(
+                pc,
+                format!("local {next} out of bounds"),
+            ));
         }
         state.locals[next] = VerifyType::Top;
     }
@@ -1753,10 +1759,7 @@ fn truncate_stack_map_locals(locals: &[VerifyType], count: usize) -> Vec<VerifyT
         index -= 1;
         let ty = &locals[index];
 
-        if matches!(ty, VerifyType::Top)
-            && index > 0
-            && is_wide_verify_type(&locals[index - 1])
-        {
+        if matches!(ty, VerifyType::Top) && index > 0 && is_wide_verify_type(&locals[index - 1]) {
             continue;
         }
 

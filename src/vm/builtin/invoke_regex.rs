@@ -28,14 +28,13 @@ pub(super) fn invoke_regex(
                         patterns.insert(id, re);
                         id
                     };
-                    let mut fields = std::collections::HashMap::new();
-                    fields.insert("__regex".to_string(), Value::Reference(pattern_ref));
-                    fields.insert("__flags".to_string(), Value::Int(0));
-                    fields.insert("__regex_id".to_string(), Value::Int(regex_id as i32));
                     let heap = &mut vm.heap.lock().unwrap();
                     let obj_ref = heap.allocate(HeapValue::Object {
                         class_name: "java/util/regex/Pattern".to_string(),
-                        fields,
+                        fields: vec![
+                            Value::Reference(pattern_ref),
+                            Value::Int(0),
+                        ],
                     });
                     Ok(Some(Value::Reference(obj_ref)))
                 }
@@ -60,14 +59,13 @@ pub(super) fn invoke_regex(
                         patterns.insert(id, re);
                         id
                     };
-                    let mut fields = std::collections::HashMap::new();
-                    fields.insert("__regex".to_string(), Value::Reference(pattern_ref));
-                    fields.insert("__flags".to_string(), Value::Int(flags));
-                    fields.insert("__regex_id".to_string(), Value::Int(regex_id as i32));
                     let heap = &mut vm.heap.lock().unwrap();
                     let obj_ref = heap.allocate(HeapValue::Object {
                         class_name: "java/util/regex/Pattern".to_string(),
-                        fields,
+                        fields: vec![
+                            Value::Reference(pattern_ref),
+                            Value::Int(flags),
+                        ],
                     });
                     Ok(Some(Value::Reference(obj_ref)))
                 }
@@ -91,7 +89,7 @@ pub(super) fn invoke_regex(
             let heap = vm.heap.lock().unwrap();
             let result: Option<String> =
                 if let Ok(HeapValue::Object { fields, .. }) = heap.get(this_ref) {
-                    if let Some(Value::Reference(r)) = fields.get("__regex") {
+                    if let Some(Value::Reference(r)) = fields.get(0) {
                         if let Ok(HeapValue::String(s)) = heap.get(*r) {
                             Some(s.clone())
                         } else {
@@ -116,17 +114,17 @@ pub(super) fn invoke_regex(
         ) => {
             let this_ref = args[0].as_reference()?;
             let input_ref = args[1].as_reference()?;
-            let mut fields = std::collections::HashMap::new();
-            fields.insert("__pattern".to_string(), Value::Reference(this_ref));
-            fields.insert("__input".to_string(), Value::Reference(input_ref));
-            fields.insert("__match_start".to_string(), Value::Int(-1));
-            fields.insert("__match_end".to_string(), Value::Int(-1));
-            fields.insert("__last_match_start".to_string(), Value::Int(-1));
-            fields.insert("__group_count".to_string(), Value::Int(0));
             let heap = &mut vm.heap.lock().unwrap();
             let obj_ref = heap.allocate(HeapValue::Object {
                 class_name: "java/util/regex/Matcher".to_string(),
-                fields,
+                fields: vec![
+                    Value::Reference(this_ref),
+                    Value::Reference(input_ref),
+                    Value::Int(-1),
+                    Value::Int(-1),
+                    Value::Int(-1),
+                    Value::Int(0),
+                ],
             });
             Ok(Some(Value::Reference(obj_ref)))
         }
@@ -171,8 +169,8 @@ pub(super) fn invoke_regex(
             let this_ref = args[2].as_reference()?;
             let heap = &mut vm.heap.lock().unwrap();
             if let Ok(HeapValue::Object { fields, .. }) = heap.get_mut(this_ref) {
-                fields.insert("__pattern".to_string(), Value::Reference(pattern_ref));
-                fields.insert("__input".to_string(), Value::Reference(input_ref));
+                fields[0] = Value::Reference(pattern_ref);
+                fields[1] = Value::Reference(input_ref);
             }
             Ok(None)
         }
@@ -187,14 +185,11 @@ pub(super) fn invoke_regex(
             let heap = &mut vm.heap.lock().unwrap();
             if let Ok(HeapValue::Object { fields, .. }) = heap.get_mut(this_ref) {
                 if is_match {
-                    fields.insert("__match_start".to_string(), Value::Int(0));
-                    fields.insert(
-                        "__match_end".to_string(),
-                        Value::Int(input_str.len() as i32),
-                    );
+                    fields[2] = Value::Int(0);
+                    fields[3] = Value::Int(input_str.len() as i32);
                 } else {
-                    fields.insert("__match_start".to_string(), Value::Int(-1));
-                    fields.insert("__match_end".to_string(), Value::Int(-1));
+                    fields[2] = Value::Int(-1);
+                    fields[3] = Value::Int(-1);
                 }
             }
             Ok(Some(Value::Int(if is_match { 1 } else { 0 })))
@@ -217,9 +212,9 @@ pub(super) fn invoke_regex(
                     let end = search_from as i32 + m.end() as i32;
                     let heap = &mut vm.heap.lock().unwrap();
                     if let Ok(HeapValue::Object { fields, .. }) = heap.get_mut(this_ref) {
-                        fields.insert("__match_start".to_string(), Value::Int(start));
-                        fields.insert("__match_end".to_string(), Value::Int(end));
-                        fields.insert("__last_match_start".to_string(), Value::Int(start));
+                        fields[2] = Value::Int(start);
+                        fields[3] = Value::Int(end);
+                        fields[4] = Value::Int(start);
                     }
                 }
             }
@@ -242,9 +237,9 @@ pub(super) fn invoke_regex(
                     let end = start_idx + m.end() as i32;
                     let heap = &mut vm.heap.lock().unwrap();
                     if let Ok(HeapValue::Object { fields, .. }) = heap.get_mut(this_ref) {
-                        fields.insert("__match_start".to_string(), Value::Int(start));
-                        fields.insert("__match_end".to_string(), Value::Int(end));
-                        fields.insert("__last_match_start".to_string(), Value::Int(start));
+                        fields[2] = Value::Int(start);
+                        fields[3] = Value::Int(end);
+                        fields[4] = Value::Int(start);
                     }
                 }
             }
@@ -261,11 +256,8 @@ pub(super) fn invoke_regex(
             if is_match {
                 let heap = &mut vm.heap.lock().unwrap();
                 if let Ok(HeapValue::Object { fields, .. }) = heap.get_mut(this_ref) {
-                    fields.insert("__match_start".to_string(), Value::Int(0));
-                    fields.insert(
-                        "__match_end".to_string(),
-                        Value::Int(re.find(&input_str).unwrap().end() as i32),
-                    );
+                    fields[2] = Value::Int(0);
+                    fields[3] = Value::Int(re.find(&input_str).unwrap().end() as i32);
                 }
             }
             Ok(Some(Value::Int(if is_match { 1 } else { 0 })))
@@ -274,9 +266,9 @@ pub(super) fn invoke_regex(
             let this_ref = args[0].as_reference()?;
             let heap = &mut vm.heap.lock().unwrap();
             if let Ok(HeapValue::Object { fields, .. }) = heap.get_mut(this_ref) {
-                fields.insert("__match_start".to_string(), Value::Int(-1));
-                fields.insert("__match_end".to_string(), Value::Int(-1));
-                fields.insert("__last_match_start".to_string(), Value::Int(-1));
+                fields[2] = Value::Int(-1);
+                fields[3] = Value::Int(-1);
+                fields[4] = Value::Int(-1);
             }
             Ok(Some(Value::Reference(this_ref)))
         }
@@ -289,10 +281,10 @@ pub(super) fn invoke_regex(
             let this_ref = args[1].as_reference()?;
             let heap = &mut vm.heap.lock().unwrap();
             if let Ok(HeapValue::Object { fields, .. }) = heap.get_mut(this_ref) {
-                fields.insert("__input".to_string(), Value::Reference(input_ref));
-                fields.insert("__match_start".to_string(), Value::Int(-1));
-                fields.insert("__match_end".to_string(), Value::Int(-1));
-                fields.insert("__last_match_start".to_string(), Value::Int(-1));
+                fields[1] = Value::Reference(input_ref);
+                fields[2] = Value::Int(-1);
+                fields[3] = Value::Int(-1);
+                fields[4] = Value::Int(-1);
             }
             Ok(Some(Value::Reference(this_ref)))
         }
@@ -327,7 +319,7 @@ pub(super) fn invoke_regex(
             let this_ref = args[0].as_reference()?;
             let heap = vm.heap.lock().unwrap();
             if let Ok(HeapValue::Object { fields, .. }) = heap.get(this_ref) {
-                if let Some(Value::Int(c)) = fields.get("__group_count") {
+                if let Some(Value::Int(c)) = fields.get(5) {
                     return Ok(Some(Value::Int(*c)));
                 }
             }
@@ -393,7 +385,7 @@ fn char_sequence_to_string(vm: &Vm, cs_ref: Reference) -> Result<String, VmError
 fn get_pattern_regex(vm: &Vm, pattern_ref: Reference) -> Result<String, VmError> {
     let heap = vm.heap.lock().unwrap();
     if let Ok(HeapValue::Object { fields, .. }) = heap.get(pattern_ref) {
-        if let Some(Value::Reference(r)) = fields.get("__regex") {
+        if let Some(Value::Reference(r)) = fields.get(0) {
             if let Ok(HeapValue::String(s)) = heap.get(*r) {
                 return Ok(s.clone());
             }
@@ -411,7 +403,7 @@ fn get_matcher_pattern_and_input(
     let heap = vm.heap.lock().unwrap();
     if let Ok(HeapValue::Object { fields, .. }) = heap.get(matcher_ref) {
         let pattern_ref = fields
-            .get("__pattern")
+            .get(0)
             .and_then(|v| {
                 if let Value::Reference(r) = v {
                     Some(*r)
@@ -421,7 +413,7 @@ fn get_matcher_pattern_and_input(
             })
             .unwrap_or(Reference::Null);
         let input_ref = fields
-            .get("__input")
+            .get(1)
             .and_then(|v| {
                 if let Value::Reference(r) = v {
                     Some(*r)
@@ -444,7 +436,7 @@ fn get_matcher_pattern_and_input(
 fn get_matcher_input(vm: &Vm, matcher_ref: Reference) -> Result<String, VmError> {
     let heap = vm.heap.lock().unwrap();
     let input_ref = if let Ok(HeapValue::Object { fields, .. }) = heap.get(matcher_ref) {
-        fields.get("__input").and_then(|v| {
+        fields.get(1).and_then(|v| {
             if let Value::Reference(r) = v {
                 Some(*r)
             } else {
@@ -465,7 +457,7 @@ fn get_matcher_input(vm: &Vm, matcher_ref: Reference) -> Result<String, VmError>
 fn get_match_start(vm: &Vm, matcher_ref: Reference) -> Result<i32, VmError> {
     let heap = vm.heap.lock().unwrap();
     if let Ok(HeapValue::Object { fields, .. }) = heap.get(matcher_ref) {
-        if let Some(Value::Int(start)) = fields.get("__match_start") {
+        if let Some(Value::Int(start)) = fields.get(2) {
             return Ok(*start);
         }
     }
@@ -475,7 +467,7 @@ fn get_match_start(vm: &Vm, matcher_ref: Reference) -> Result<i32, VmError> {
 fn get_match_end(vm: &Vm, matcher_ref: Reference) -> Result<i32, VmError> {
     let heap = vm.heap.lock().unwrap();
     if let Ok(HeapValue::Object { fields, .. }) = heap.get(matcher_ref) {
-        if let Some(Value::Int(end)) = fields.get("__match_end") {
+        if let Some(Value::Int(end)) = fields.get(3) {
             return Ok(*end);
         }
     }
@@ -485,7 +477,7 @@ fn get_match_end(vm: &Vm, matcher_ref: Reference) -> Result<i32, VmError> {
 fn get_last_match_end(vm: &Vm, matcher_ref: Reference) -> Result<i32, VmError> {
     let heap = vm.heap.lock().unwrap();
     if let Ok(HeapValue::Object { fields, .. }) = heap.get(matcher_ref) {
-        if let Some(Value::Int(end)) = fields.get("__match_end") {
+        if let Some(Value::Int(end)) = fields.get(4) {
             return Ok(*end);
         }
     }

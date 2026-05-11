@@ -13,11 +13,11 @@ use frame::Frame;
 pub use heap::GcStats;
 use heap::{Heap, HeapValue};
 use interpreter::{
-    execute_aconst_null, execute_aload, execute_areturn_full, execute_astore, execute_bipush,
-    execute_dconst, execute_dload, execute_dstore, execute_dup, execute_fconst, execute_fload,
-    execute_fstore, execute_iadd, execute_iconst, execute_iload, execute_imul,
+    execute_aconst_null, execute_aload, execute_astore, execute_bipush,
+    execute_dconst, execute_dup, execute_fconst,
+    execute_iadd, execute_iconst, execute_iload, execute_imul,
     execute_ireturn_full, execute_istore, execute_isub, execute_lconst, execute_ldc, execute_ldc_w,
-    execute_lload, execute_lreturn_full, execute_lstore, execute_pop, execute_return_full,
+    execute_pop, execute_return_full,
     execute_sipush,
 };
 use smallvec::SmallVec;
@@ -41,11 +41,11 @@ use crate::vm::jit::JitCompiler;
 use crate::vm::jit::runtime::JitContext;
 use classloader::{BootstrapClassLoader, ClassLoader, LazyClassLoader};
 
-use crate::vm::jit::runtime::{
-    clear_current_vm, set_current_vm, take_last_deopt_snapshot, take_pending_jit_exception,
-    DeoptReason, DeoptSnapshot,
-};
 use crate::vm::jit::DeoptLocalKind;
+use crate::vm::jit::runtime::{
+    DeoptReason, DeoptSnapshot, clear_current_vm, set_current_vm, take_last_deopt_snapshot,
+    take_pending_jit_exception,
+};
 
 static NEXT_THREAD_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
@@ -244,6 +244,13 @@ impl Vm {
             }
         }
 
+        // Roots from interned strings.
+        for &r in self.string_pool.lock().unwrap().values() {
+            if let Reference::Heap(_) = r {
+                roots.push(r);
+            }
+        }
+
         self.heap.lock().unwrap().gc(&roots);
     }
 
@@ -438,14 +445,21 @@ impl Vm {
         match fallback_vm.execute(method) {
             Ok(result) => Some(InterpreterFallbackResult::Returned(result)),
             Err(VmError::UnhandledException { class_name }) => {
-                let exception_ref = fallback_vm.heap.lock().unwrap().allocate(HeapValue::Object {
-                    class_name,
-                    fields: HashMap::new(),
-                });
+                let exception_ref = fallback_vm
+                    .heap
+                    .lock()
+                    .unwrap()
+                    .allocate(HeapValue::Object {
+                        class_name,
+                        fields: vec![],
+                    });
                 Some(InterpreterFallbackResult::Threw(exception_ref))
             }
             Err(err) => {
-                println!("interpreter fallback failed for JIT exception path: {:?}", err);
+                println!(
+                    "interpreter fallback failed for JIT exception path: {:?}",
+                    err
+                );
                 None
             }
         }
@@ -460,42 +474,48 @@ impl Vm {
             .iter()
             .enumerate()
             .map(|(index, kind)| match kind {
-                DeoptLocalKind::Int => Some(Value::Int(raw_locals.get(index).copied().unwrap_or(0) as i32)),
-                DeoptLocalKind::Long => Some(Value::Long(raw_locals.get(index).copied().unwrap_or(0) as i64)),
+                DeoptLocalKind::Int => Some(Value::Int(
+                    raw_locals.get(index).copied().unwrap_or(0) as i32,
+                )),
+                DeoptLocalKind::Long => Some(Value::Long(
+                    raw_locals.get(index).copied().unwrap_or(0) as i64,
+                )),
                 DeoptLocalKind::Float => Some(Value::Float(f32::from_bits(
                     raw_locals.get(index).copied().unwrap_or(0) as u32,
                 ))),
                 DeoptLocalKind::Double => Some(Value::Double(f64::from_bits(
                     raw_locals.get(index).copied().unwrap_or(0),
                 ))),
-                DeoptLocalKind::Reference => Some(Value::Reference(Vm::jit_raw_reference(
-                    raw_locals.get(index).copied().unwrap_or(0),
-                ).unwrap_or(Reference::Null))),
+                DeoptLocalKind::Reference => Some(Value::Reference(
+                    Vm::jit_raw_reference(raw_locals.get(index).copied().unwrap_or(0))
+                        .unwrap_or(Reference::Null),
+                )),
                 DeoptLocalKind::Top => None,
             })
             .collect()
     }
 
-    fn decode_deopt_stack(
-        &self,
-        stack_kinds: &[DeoptLocalKind],
-        raw_stack: &[u64],
-    ) -> Vec<Value> {
+    fn decode_deopt_stack(&self, stack_kinds: &[DeoptLocalKind], raw_stack: &[u64]) -> Vec<Value> {
         stack_kinds
             .iter()
             .enumerate()
             .filter_map(|(index, kind)| match kind {
-                DeoptLocalKind::Int => Some(Value::Int(raw_stack.get(index).copied().unwrap_or(0) as i32)),
-                DeoptLocalKind::Long => Some(Value::Long(raw_stack.get(index).copied().unwrap_or(0) as i64)),
+                DeoptLocalKind::Int => {
+                    Some(Value::Int(raw_stack.get(index).copied().unwrap_or(0) as i32))
+                }
+                DeoptLocalKind::Long => Some(Value::Long(
+                    raw_stack.get(index).copied().unwrap_or(0) as i64,
+                )),
                 DeoptLocalKind::Float => Some(Value::Float(f32::from_bits(
                     raw_stack.get(index).copied().unwrap_or(0) as u32,
                 ))),
                 DeoptLocalKind::Double => Some(Value::Double(f64::from_bits(
                     raw_stack.get(index).copied().unwrap_or(0),
                 ))),
-                DeoptLocalKind::Reference => Some(Value::Reference(Vm::jit_raw_reference(
-                    raw_stack.get(index).copied().unwrap_or(0),
-                ).unwrap_or(Reference::Null))),
+                DeoptLocalKind::Reference => Some(Value::Reference(
+                    Vm::jit_raw_reference(raw_stack.get(index).copied().unwrap_or(0))
+                        .unwrap_or(Reference::Null),
+                )),
                 DeoptLocalKind::Top => None,
             })
             .collect()
@@ -586,14 +606,22 @@ impl Vm {
                 match fallback_vm.run_interpreter_thread(&mut thread) {
                     Ok(result) => Some(InterpreterFallbackResult::Returned(result)),
                     Err(VmError::UnhandledException { class_name }) => {
-                        let exception_ref = fallback_vm.heap.lock().unwrap().allocate(HeapValue::Object {
-                            class_name,
-                            fields: HashMap::new(),
-                        });
+                        let exception_ref =
+                            fallback_vm
+                                .heap
+                                .lock()
+                                .unwrap()
+                                .allocate(HeapValue::Object {
+                                    class_name,
+                                    fields: vec![],
+                                });
                         Some(InterpreterFallbackResult::Threw(exception_ref))
                     }
                     Err(err) => {
-                        println!("deopt resume failed while continuing in interpreter: {:?}", err);
+                        println!(
+                            "deopt resume failed while continuing in interpreter: {:?}",
+                            err
+                        );
                         None
                     }
                 }
@@ -657,7 +685,9 @@ impl Vm {
                         Some(InterpreterFallbackResult::Returned(ExecutionResult::Void)) => {
                             return Some(JitInvocationResult::Returned(None));
                         }
-                        Some(InterpreterFallbackResult::Returned(ExecutionResult::Value(value))) => {
+                        Some(InterpreterFallbackResult::Returned(ExecutionResult::Value(
+                            value,
+                        ))) => {
                             return Some(JitInvocationResult::Returned(Some(value)));
                         }
                         Some(InterpreterFallbackResult::Threw(exception_ref)) => {
@@ -670,7 +700,9 @@ impl Vm {
                         Some(InterpreterFallbackResult::Returned(ExecutionResult::Void)) => {
                             return Some(JitInvocationResult::Returned(None));
                         }
-                        Some(InterpreterFallbackResult::Returned(ExecutionResult::Value(value))) => {
+                        Some(InterpreterFallbackResult::Returned(ExecutionResult::Value(
+                            value,
+                        ))) => {
                             return Some(JitInvocationResult::Returned(Some(value)));
                         }
                         Some(InterpreterFallbackResult::Threw(exception_ref)) => {
@@ -752,9 +784,10 @@ impl Vm {
         locals: Vec<Option<Value>>,
         entry_pc: usize,
     ) -> Option<JitInvocationResult> {
-        if !locals.iter().all(|value| {
-            !matches!(value, Some(Value::ReturnAddress(_)))
-        }) {
+        if !locals
+            .iter()
+            .all(|value| !matches!(value, Some(Value::ReturnAddress(_))))
+        {
             return None;
         }
         if method.max_locals > 5 {
@@ -840,14 +873,12 @@ impl Vm {
             })?;
 
         match class_method {
-            ClassMethod::Native => self
-                .invoke_native(
-                    &method_ref.class_name,
-                    &method_ref.method_name,
-                    &method_ref.descriptor,
-                    &args,
-                )
-                ,
+            ClassMethod::Native => self.invoke_native(
+                &method_ref.class_name,
+                &method_ref.method_name,
+                &method_ref.descriptor,
+                &args,
+            ),
             ClassMethod::Bytecode(method) => {
                 let callee = method.with_initial_locals(Vm::args_to_locals(args));
                 let saved_jit = self.jit.take();
@@ -973,10 +1004,13 @@ impl Vm {
                 }
             }
             match class_method {
-                ClassMethod::Native => self.invoke_native(bootstrap_class, bootstrap_name, bootstrap_descriptor, &all_args),
-                ClassMethod::Bytecode(_) => {
-                    Ok(Some(Value::Reference(Reference::Null)))
-                }
+                ClassMethod::Native => self.invoke_native(
+                    bootstrap_class,
+                    bootstrap_name,
+                    bootstrap_descriptor,
+                    &all_args,
+                ),
+                ClassMethod::Bytecode(_) => Ok(Some(Value::Reference(Reference::Null))),
             }
         } else {
             Ok(Some(Value::Reference(Reference::Null)))
@@ -1007,7 +1041,12 @@ impl Vm {
             }
             match class_method {
                 ClassMethod::Native => {
-                    let result = self.invoke_native(bootstrap_class, bootstrap_name, bootstrap_descriptor, &all_args)?;
+                    let result = self.invoke_native(
+                        bootstrap_class,
+                        bootstrap_name,
+                        bootstrap_descriptor,
+                        &all_args,
+                    )?;
                     if let Some(value) = result {
                         thread.current_frame_mut().push(value)?;
                     }
@@ -1020,7 +1059,9 @@ impl Vm {
                 }
             }
         } else {
-            thread.current_frame_mut().push(Value::Reference(Reference::Null))?;
+            thread
+                .current_frame_mut()
+                .push(Value::Reference(Reference::Null))?;
             Ok(())
         }
     }
@@ -1047,10 +1088,11 @@ impl Vm {
         field_ref: &FieldRef,
         raw_value: u64,
     ) -> Result<(), VmError> {
-        let value = Vm::jit_raw_field_value_to_value(&field_ref.descriptor, raw_value)
-            .ok_or_else(|| VmError::InvalidDescriptor {
+        let value = Vm::jit_raw_field_value_to_value(&field_ref.descriptor, raw_value).ok_or_else(
+            || VmError::InvalidDescriptor {
                 descriptor: field_ref.descriptor.clone(),
-            })?;
+            },
+        )?;
         self.ensure_class_loaded(&field_ref.class_name)?;
         self.ensure_class_initialized(&field_ref.class_name)?;
         self.put_static_field(&field_ref.class_name, &field_ref.field_name, value)
@@ -1063,13 +1105,18 @@ impl Vm {
     ) -> Result<Value, VmError> {
         let receiver = Vm::jit_raw_reference(receiver_raw).ok_or(VmError::NullReference)?;
         match self.heap.lock().unwrap().get(receiver)? {
-            HeapValue::Object { fields, .. } => fields
-                .get(&field_ref.field_name)
-                .copied()
-                .ok_or_else(|| VmError::FieldNotFound {
-                    class_name: field_ref.class_name.clone(),
-                    field_name: field_ref.field_name.clone(),
-                }),
+            HeapValue::Object { class_name, fields, .. } => {
+                let class = self.get_class(class_name).map_err(|_| VmError::ClassNotFound {
+                    class_name: class_name.clone(),
+                })?;
+                let offset = class.field_offsets.get(&field_ref.field_name).ok_or_else(|| {
+                    VmError::FieldNotFound {
+                        class_name: field_ref.class_name.clone(),
+                        field_name: field_ref.field_name.clone(),
+                    }
+                })?;
+                Ok(fields[*offset])
+            }
             value => Err(VmError::InvalidHeapValue {
                 expected: "object",
                 actual: value.kind_name(),
@@ -1084,10 +1131,11 @@ impl Vm {
         raw_value: u64,
     ) -> Result<(), VmError> {
         let receiver = Vm::jit_raw_reference(receiver_raw).ok_or(VmError::NullReference)?;
-        let value = Vm::jit_raw_field_value_to_value(&field_ref.descriptor, raw_value)
-            .ok_or_else(|| VmError::InvalidDescriptor {
+        let value = Vm::jit_raw_field_value_to_value(&field_ref.descriptor, raw_value).ok_or_else(
+            || VmError::InvalidDescriptor {
                 descriptor: field_ref.descriptor.clone(),
-            })?;
+            },
+        )?;
         self.set_object_field(receiver, &field_ref.field_name, value)
     }
 
@@ -1095,26 +1143,12 @@ impl Vm {
         self.ensure_class_loaded(class_name).ok()?;
         self.ensure_class_initialized(class_name).ok()?;
 
-        let mut all_instance_fields = Vec::new();
-        let mut current_class = class_name.to_string();
-        loop {
-            self.ensure_class_loaded(&current_class).ok()?;
-            let class = self.get_class(&current_class).ok()?;
-            for (name, desc) in &class.instance_fields {
-                if !all_instance_fields.iter().any(|(n, _)| n == name) {
-                    all_instance_fields.push((name.clone(), desc.clone()));
-                }
-            }
-            match &class.super_class {
-                Some(parent) => current_class = parent.clone(),
-                None => break,
-            }
-        }
-
-        let mut fields: HashMap<String, Value> = HashMap::new();
-        for (name, descriptor) in all_instance_fields {
-            fields.insert(name, default_value_for_descriptor(&descriptor));
-        }
+        let class = self.get_class(class_name).ok()?;
+        let all_instance_fields = class.instance_fields.clone();
+        let fields: Vec<Value> = all_instance_fields
+            .iter()
+            .map(|(_, descriptor)| default_value_for_descriptor(descriptor))
+            .collect();
         Some(self.heap.lock().unwrap().allocate(HeapValue::Object {
             class_name: class_name.to_string(),
             fields,
@@ -1217,8 +1251,7 @@ impl Vm {
         argc: usize,
     ) -> Result<Option<Value>, VmError> {
         if class_name.starts_with("__lambda_proxy_")
-            && method_ref.method_name
-                == class_name.trim_start_matches("__lambda_proxy_")
+            && method_ref.method_name == class_name.trim_start_matches("__lambda_proxy_")
         {
             return Ok(None);
         }
@@ -1239,9 +1272,8 @@ impl Vm {
             );
         }
 
-        let (resolved_class, class_method) = self
-            .resolve_method(class_name, &method_ref.method_name, &method_ref.descriptor)
-            ?;
+        let (resolved_class, class_method) =
+            self.resolve_method(class_name, &method_ref.method_name, &method_ref.descriptor)?;
 
         match class_method {
             ClassMethod::Native => self.invoke_native(
@@ -1482,10 +1514,11 @@ impl Vm {
             return existing;
         }
         let name_ref = self.new_string(internal_name.to_string());
-        let mut fields = std::collections::HashMap::new();
-        if let Value::Reference(r) = name_ref {
-            fields.insert("__name".to_string(), Value::Reference(r));
-        }
+        let fields = if let Value::Reference(r) = name_ref {
+            vec![Value::Reference(r)]
+        } else {
+            vec![]
+        };
         let reference = self.heap.lock().unwrap().allocate(HeapValue::Object {
             class_name: "java/lang/Class".to_string(),
             fields,
@@ -1585,6 +1618,7 @@ impl Vm {
             methods: std::collections::HashMap::new(),
             static_fields: std::collections::HashMap::new(),
             instance_fields: vec![],
+            field_offsets: std::collections::HashMap::new(),
             interfaces: vec![],
         };
 
@@ -1685,7 +1719,11 @@ impl Vm {
             })
     }
 
-    pub(super) fn get_static_field(&self, class_name: &str, field_name: &str) -> Result<Value, VmError> {
+    pub(super) fn get_static_field(
+        &self,
+        class_name: &str,
+        field_name: &str,
+    ) -> Result<Value, VmError> {
         let runtime = self.runtime.lock().unwrap();
         let class = runtime
             .classes
@@ -1720,12 +1758,25 @@ impl Vm {
         Ok(())
     }
 
-    pub(super) fn get_instance_field(&self, reference: Reference, field_name: &str) -> Result<Value, VmError> {
+    pub(super) fn get_instance_field(
+        &self,
+        reference: Reference,
+        field_name: &str,
+    ) -> Result<Value, VmError> {
         let heap = self.heap.lock().unwrap();
         match heap.get(reference)? {
-            HeapValue::Object { fields, .. } => Ok(*fields
-                .get(field_name)
-                .unwrap_or(&Value::Reference(Reference::Null))),
+            HeapValue::Object { class_name, fields, .. } => {
+                let class = self.get_class(class_name).map_err(|_| VmError::ClassNotFound {
+                    class_name: class_name.clone(),
+                })?;
+                let offset = class.field_offsets.get(field_name).ok_or_else(|| {
+                    VmError::FieldNotFound {
+                        class_name: class_name.clone(),
+                        field_name: field_name.to_string(),
+                    }
+                })?;
+                Ok(fields[*offset])
+            }
             value => Err(VmError::InvalidHeapValue {
                 expected: "object",
                 actual: value.kind_name(),
@@ -1764,8 +1815,17 @@ impl Vm {
         }
 
         match heap.get_mut(reference)? {
-            HeapValue::Object { fields, .. } => {
-                fields.insert(field_name.to_string(), value);
+            HeapValue::Object { class_name, fields, .. } => {
+                let class = self.get_class(class_name).map_err(|_| VmError::ClassNotFound {
+                    class_name: class_name.clone(),
+                })?;
+                let offset = class.field_offsets.get(field_name).ok_or_else(|| {
+                    VmError::FieldNotFound {
+                        class_name: class_name.clone(),
+                        field_name: field_name.to_string(),
+                    }
+                })?;
+                fields[*offset] = value;
                 Ok(())
             }
             value => Err(VmError::InvalidHeapValue {
@@ -1851,24 +1911,18 @@ impl Vm {
                     HeapValue::String(s) => s.clone(),
                     HeapValue::StringBuilder(s) => s.clone(),
                     HeapValue::Object { class_name, fields } => match class_name.as_str() {
-                        "java/lang/Integer" => {
-                            match fields.get("value") {
-                                Some(Value::Int(i)) => i.to_string(),
-                                _ => "0".to_string(),
-                            }
-                        }
-                        "java/lang/Long" => {
-                            match fields.get("value") {
-                                Some(Value::Long(i)) => i.to_string(),
-                                _ => "0".to_string(),
-                            }
-                        }
-                        "java/lang/Boolean" => {
-                            match fields.get("value") {
-                                Some(Value::Int(i)) if *i != 0 => "true".to_string(),
-                                _ => "false".to_string(),
-                            }
-                        }
+                        "java/lang/Integer" => match &fields[0] {
+                            Value::Int(i) => i.to_string(),
+                            _ => "0".to_string(),
+                        },
+                        "java/lang/Long" => match &fields[0] {
+                            Value::Long(i) => i.to_string(),
+                            _ => "0".to_string(),
+                        },
+                        "java/lang/Boolean" => match &fields[0] {
+                            Value::Int(i) if *i != 0 => "true".to_string(),
+                            _ => "false".to_string(),
+                        },
                         other => format!("{other}@{reference:?}"),
                     },
                     other => format!("{}@{reference:?}", other.kind_name()),
@@ -2123,12 +2177,9 @@ impl Vm {
             let mut all_args = vec![Value::Reference(receiver)];
             all_args.extend(args);
             match class_method {
-                ClassMethod::Native => self.invoke_native(
-                    &resolved_class,
-                    method_name,
-                    descriptor,
-                    &all_args,
-                ),
+                ClassMethod::Native => {
+                    self.invoke_native(&resolved_class, method_name, descriptor, &all_args)
+                }
                 ClassMethod::Bytecode(method) => {
                     let callee = method.with_initial_locals(Vm::args_to_locals(all_args));
                     let saved_jit = self.jit.take();
@@ -2167,14 +2218,20 @@ impl Vm {
         constructor_descriptor: &str,
         args: Vec<Value>,
     ) -> Result<Reference, VmError> {
-        let object = self
-            .invoke_jit_allocate_object(class_name)
-            .ok_or_else(|| VmError::ClassNotFound {
-                class_name: class_name.to_string(),
-            })?;
+        let object =
+            self.invoke_jit_allocate_object(class_name)
+                .ok_or_else(|| VmError::ClassNotFound {
+                    class_name: class_name.to_string(),
+                })?;
         let mut ctor_args = vec![Value::Reference(object)];
         ctor_args.extend(args);
-        self.reflect_invoke_method(class_name, "<init>", constructor_descriptor, None, ctor_args)?;
+        self.reflect_invoke_method(
+            class_name,
+            "<init>",
+            constructor_descriptor,
+            None,
+            ctor_args,
+        )?;
         Ok(object)
     }
 
@@ -3265,13 +3322,18 @@ impl Vm {
                 let field_ref = thread.current_frame().load_field_ref(index)?.clone();
                 let object_ref = thread.current_frame_mut().pop()?.as_reference()?;
                 let value = match self.heap.lock().unwrap().get(object_ref)? {
-                    HeapValue::Object { fields, .. } => fields
-                        .get(&field_ref.field_name)
-                        .copied()
-                        .ok_or_else(|| VmError::FieldNotFound {
-                            class_name: field_ref.class_name.clone(),
-                            field_name: field_ref.field_name.clone(),
-                        })?,
+                    HeapValue::Object { class_name, fields, .. } => {
+                        let class = self.get_class(class_name).map_err(|_| VmError::ClassNotFound {
+                            class_name: class_name.clone(),
+                        })?;
+                        let offset = class.field_offsets.get(&field_ref.field_name).ok_or_else(|| {
+                            VmError::FieldNotFound {
+                                class_name: field_ref.class_name.clone(),
+                                field_name: field_ref.field_name.clone(),
+                            }
+                        })?;
+                        fields[*offset]
+                    }
                     value => {
                         return Err(VmError::InvalidHeapValue {
                             expected: "object",
@@ -3287,8 +3349,17 @@ impl Vm {
                 let value = thread.current_frame_mut().pop()?;
                 let object_ref = thread.current_frame_mut().pop()?.as_reference()?;
                 match self.heap.lock().unwrap().get_mut(object_ref)? {
-                    HeapValue::Object { fields, .. } => {
-                        fields.insert(field_ref.field_name, value);
+                    HeapValue::Object { class_name, fields, .. } => {
+                        let class = self.get_class(class_name).map_err(|_| VmError::ClassNotFound {
+                            class_name: class_name.clone(),
+                        })?;
+                        let offset = class.field_offsets.get(&field_ref.field_name).ok_or_else(|| {
+                            VmError::FieldNotFound {
+                                class_name: field_ref.class_name.clone(),
+                                field_name: field_ref.field_name.clone(),
+                            }
+                        })?;
+                        fields[*offset] = value;
                     }
                     value => {
                         return Err(VmError::InvalidHeapValue {
@@ -3568,7 +3639,7 @@ impl Vm {
                         )?;
                         thread.current_frame_mut().push(self.new_string(concat))?;
                     }
-InvokeDynamicKind::Unknown => {
+                    InvokeDynamicKind::Unknown => {
                         // Unknown bootstrap method — push null as placeholder.
                         thread
                             .current_frame_mut()
@@ -3621,10 +3692,10 @@ InvokeDynamicKind::Unknown => {
                         None => break,
                     }
                 }
-                let mut fields: HashMap<String, Value> = HashMap::new();
-                for (name, descriptor) in &all_instance_fields {
-                    fields.insert(name.clone(), default_value_for_descriptor(descriptor));
-                }
+                let fields: Vec<Value> = all_instance_fields
+                    .iter()
+                    .map(|(_, descriptor)| default_value_for_descriptor(descriptor))
+                    .collect();
                 let reference = self
                     .heap
                     .lock()
@@ -3874,14 +3945,56 @@ InvokeDynamicKind::Unknown => {
         captures: Vec<Value>,
     ) -> Result<Reference, VmError> {
         let class_name = format!("__lambda_proxy_{}", site.name);
-        self.ensure_lambda_proxy_class(&class_name, &site.descriptor)?;
+        self.ensure_lambda_proxy_class(&class_name, &site.descriptor, captures.len())?;
 
-        let mut fields: HashMap<String, Value> = HashMap::new();
-        fields.insert("__target_class".to_string(), Value::Reference(self.heap.lock().unwrap().allocate_string(target_class.to_string())));
-        fields.insert("__target_method".to_string(), Value::Reference(self.heap.lock().unwrap().allocate_string(target_method.to_string())));
-        fields.insert("__target_desc".to_string(), Value::Reference(self.heap.lock().unwrap().allocate_string(target_descriptor.to_string())));
+        let class = self.get_class(&class_name)?;
+        let field_count = class.field_offsets.len();
+        let mut fields = vec![Value::Reference(Reference::Null); field_count];
+        let mut set_field = |name: &str, value: Value| -> Result<(), VmError> {
+            let offset = class
+                .field_offsets
+                .get(name)
+                .copied()
+                .ok_or_else(|| VmError::FieldNotFound {
+                    class_name: class_name.clone(),
+                    field_name: name.to_string(),
+                })?;
+            if offset >= fields.len() {
+                fields.resize(offset + 1, Value::Reference(Reference::Null));
+            }
+            fields[offset] = value;
+            Ok(())
+        };
+
+        set_field(
+            "__target_class",
+            Value::Reference(
+                self.heap
+                    .lock()
+                    .unwrap()
+                    .allocate_string(target_class.to_string()),
+            ),
+        )?;
+        set_field(
+            "__target_method",
+            Value::Reference(
+                self.heap
+                    .lock()
+                    .unwrap()
+                    .allocate_string(target_method.to_string()),
+            ),
+        )?;
+        set_field(
+            "__target_desc",
+            Value::Reference(
+                self.heap
+                    .lock()
+                    .unwrap()
+                    .allocate_string(target_descriptor.to_string()),
+            ),
+        )?;
         for (i, cap) in captures.iter().enumerate() {
-            fields.insert(format!("__capture_{}", i), *cap);
+            set_field(&format!("__capture_{i}"), *cap)?;
         }
 
         Ok(self
@@ -3895,18 +4008,48 @@ InvokeDynamicKind::Unknown => {
         &mut self,
         class_name: &str,
         site_descriptor: &str,
+        capture_count: usize,
     ) -> Result<(), VmError> {
-        if self.runtime.lock().unwrap().classes.contains_key(class_name) {
+        if self
+            .runtime
+            .lock()
+            .unwrap()
+            .classes
+            .contains_key(class_name)
+        {
             return Ok(());
         }
 
         let interfaces = Self::lambda_proxy_interfaces(site_descriptor)?;
+        let mut instance_fields = vec![
+            (
+                "__target_class".to_string(),
+                "Ljava/lang/String;".to_string(),
+            ),
+            (
+                "__target_method".to_string(),
+                "Ljava/lang/String;".to_string(),
+            ),
+            (
+                "__target_desc".to_string(),
+                "Ljava/lang/String;".to_string(),
+            ),
+        ];
+        for i in 0..capture_count {
+            instance_fields.push((format!("__capture_{i}"), "Ljava/lang/Object;".to_string()));
+        }
+        let field_offsets = instance_fields
+            .iter()
+            .enumerate()
+            .map(|(i, (name, _))| (name.clone(), i))
+            .collect();
         self.register_class(RuntimeClass {
             name: class_name.to_string(),
             super_class: Some("java/lang/Object".to_string()),
             methods: HashMap::new(),
             static_fields: HashMap::new(),
-            instance_fields: vec![],
+            instance_fields,
+            field_offsets,
             interfaces,
         });
         Ok(())
@@ -3920,7 +4063,9 @@ InvokeDynamicKind::Unknown => {
         };
         let return_descriptor = &site_descriptor[end + 1..];
         if return_descriptor.starts_with('L') && return_descriptor.ends_with(';') {
-            return Ok(vec![return_descriptor[1..return_descriptor.len() - 1].to_string()]);
+            return Ok(vec![
+                return_descriptor[1..return_descriptor.len() - 1].to_string(),
+            ]);
         }
         Ok(vec![])
     }
@@ -3933,7 +4078,6 @@ InvokeDynamicKind::Unknown => {
         }
     }
 
-    /// Create a new exception object and throw it.
     fn throw_new_exception(
         &mut self,
         thread: &mut Thread,
@@ -3941,7 +4085,7 @@ InvokeDynamicKind::Unknown => {
     ) -> Result<(), VmError> {
         let reference = self.heap.lock().unwrap().allocate(HeapValue::Object {
             class_name: class_name.to_string(),
-            fields: HashMap::new(),
+            fields: vec![],
         });
         self.throw_exception(thread, reference)
     }
@@ -4105,8 +4249,7 @@ InvokeDynamicKind::Unknown => {
     ) -> Result<(), VmError> {
         // Lambda proxy dispatch: redirect to the captured target method.
         if class_name.starts_with("__lambda_proxy_")
-            && method_ref.method_name
-                == class_name.trim_start_matches("__lambda_proxy_")
+            && method_ref.method_name == class_name.trim_start_matches("__lambda_proxy_")
         {
             return self.dispatch_lambda_proxy(thread, receiver, args);
         }
@@ -4165,13 +4308,17 @@ InvokeDynamicKind::Unknown => {
     ) -> Result<(), VmError> {
         let (target_class, target_method, target_desc, captures) = {
             let class_name = self.get_object_class(receiver)?;
+            let class = self.get_class(&class_name)?;
             let fields = match self.heap.lock().unwrap().get(receiver)? {
                 HeapValue::Object { fields, .. } => fields.clone(),
                 _ => return Err(VmError::NullReference),
             };
 
             let get_str = |key: &str| -> Result<std::string::String, VmError> {
-                match fields.get(key) {
+                let Some(offset) = class.field_offsets.get(key).copied() else {
+                    return Ok(std::string::String::new());
+                };
+                match fields.get(offset) {
                     Some(Value::Reference(r)) => self.stringify_reference(*r),
                     _ => Ok(std::string::String::new()),
                 }
@@ -4183,7 +4330,10 @@ InvokeDynamicKind::Unknown => {
 
             let mut captures = Vec::new();
             let mut i = 0;
-            while let Some(Value::Reference(r)) = fields.get(&format!("__capture_{i}")) {
+            while let Some(offset) = class.field_offsets.get(&format!("__capture_{i}")).copied() {
+                let Some(Value::Reference(r)) = fields.get(offset) else {
+                    break;
+                };
                 captures.push(*r);
                 i += 1;
             }
@@ -4191,11 +4341,8 @@ InvokeDynamicKind::Unknown => {
             (tc, tm, td, captures)
         };
 
-            let mut all_args: Vec<Value> = captures
-                .into_iter()
-                .map(Value::Reference)
-                .collect();
-            all_args.extend(args);
+        let mut all_args: Vec<Value> = captures.into_iter().map(Value::Reference).collect();
+        all_args.extend(args);
 
         self.ensure_class_loaded(&target_class)?;
 
@@ -4239,11 +4386,11 @@ InvokeDynamicKind::Unknown => {
 /// Return the JVM default zero-value for a field descriptor.
 #[cfg(test)]
 mod tests {
+    use crate::vm::jit::runtime::DeoptReason;
     use std::collections::HashMap;
     use std::sync::atomic::Ordering;
     use std::sync::mpsc;
     use std::time::Duration;
-    use crate::vm::jit::runtime::DeoptReason;
 
     use super::{
         DeoptLocalKind, DeoptSnapshot, ExceptionHandler, ExecutionResult, FieldRef, HeapValue,
@@ -4406,7 +4553,10 @@ mod tests {
             Value::Int(1),
         ]));
 
-        let result = Vm::new().expect("failed to create VM").execute(method).unwrap();
+        let result = Vm::new()
+            .expect("failed to create VM")
+            .execute(method)
+            .unwrap();
         assert_eq!(result, ExecutionResult::Value(Value::Int(1)));
     }
 
@@ -4903,6 +5053,7 @@ mod tests {
             methods: HashMap::new(),
             static_fields: HashMap::from([("value".to_string(), Value::Int(0))]),
             instance_fields: vec![],
+            field_offsets: HashMap::new(),
             interfaces: vec![],
         });
 
@@ -4952,7 +5103,7 @@ mod tests {
         let vm = Vm::new().expect("failed to create VM");
         let monitor_ref = vm.heap.lock().unwrap().allocate(HeapValue::Object {
             class_name: "java/lang/Object".to_string(),
-            fields: HashMap::new(),
+            fields: vec![],
         });
         vm.enter_monitor(monitor_ref).unwrap();
 
@@ -5225,15 +5376,25 @@ mod tests {
             methods: HashMap::new(),
             static_fields: HashMap::from([("held".to_string(), Value::Reference(string_ref))]),
             instance_fields: vec![],
+            field_offsets: HashMap::new(),
             interfaces: vec![],
         });
 
         vm.request_gc();
 
         let stats = vm.gc_stats();
-        assert!(stats.pause_time_ns > 0, "GC should have measured pause time");
-        assert!(stats.total_heap_bytes > 0, "heap should have allocated bytes");
-        assert_eq!(stats.last_collection_freed, 0, "rooted string should not be freed");
+        assert!(
+            stats.pause_time_ns > 0,
+            "GC should have measured pause time"
+        );
+        assert!(
+            stats.total_heap_bytes > 0,
+            "heap should have allocated bytes"
+        );
+        assert_eq!(
+            stats.last_collection_freed, 0,
+            "rooted string should not be freed"
+        );
     }
 
     #[test]
@@ -5247,7 +5408,10 @@ mod tests {
         vm.request_gc();
 
         let stats = vm.gc_stats();
-        assert!(stats.freed > stats_before.freed, "unrooted object should be freed");
+        assert!(
+            stats.freed > stats_before.freed,
+            "unrooted object should be freed"
+        );
         assert!(stats.freed_bytes > 0, "bytes should be freed");
     }
 
@@ -5265,7 +5429,10 @@ mod tests {
         assert!(stats.pause_time_ns > 0, "pause time should be tracked");
         assert!(stats.freed_bytes > 0, "freed bytes should be tracked");
         assert!(stats.total_heap_bytes > 0, "heap bytes should be tracked");
-        assert!(stats.collections >= 1, "at least one collection should have run");
+        assert!(
+            stats.collections >= 1,
+            "at least one collection should have run"
+        );
     }
 
     #[test]
@@ -5299,6 +5466,7 @@ mod tests {
             methods: HashMap::new(),
             static_fields: HashMap::from([("str".to_string(), string_ref)]),
             instance_fields: vec![],
+            field_offsets: HashMap::new(),
             interfaces: vec![],
         });
 
@@ -5322,7 +5490,11 @@ mod tests {
 
         let stats_before = vm.gc_stats();
         let result = vm.execute(method.clone());
-        assert!(result.is_ok(), "JIT method should execute: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "JIT method should execute: {:?}",
+            result.err()
+        );
 
         vm.request_gc();
         let stats = vm.gc_stats();
@@ -5346,7 +5518,8 @@ mod tests {
         assert!(
             stats.tlab_allocations > 0 || stats.tlab_refills > 0,
             "TLAB stats should be tracked: tlab_allocations={}, tlab_refills={}",
-            stats.tlab_allocations, stats.tlab_refills
+            stats.tlab_allocations,
+            stats.tlab_refills
         );
     }
 
@@ -5400,16 +5573,13 @@ mod tests {
             stack: vec![1, 2],
         };
 
-        let resumed = vm.resume_interpreter_from_deopt(
-            method,
-            &[],
-            &stack_kinds_by_pc,
-            &snapshot,
-            None,
-        );
+        let resumed =
+            vm.resume_interpreter_from_deopt(method, &[], &stack_kinds_by_pc, &snapshot, None);
 
         match resumed {
-            Some(InterpreterFallbackResult::Returned(ExecutionResult::Value(Value::Int(value)))) => {
+            Some(InterpreterFallbackResult::Returned(ExecutionResult::Value(Value::Int(
+                value,
+            )))) => {
                 assert_eq!(value, 3);
             }
             _ => panic!("unexpected deopt resume result"),
@@ -5421,7 +5591,7 @@ mod tests {
         let mut vm = Vm::new().expect("failed to create VM");
         let object_ref = vm.heap.lock().unwrap().allocate(HeapValue::Object {
             class_name: "demo/Holder".to_string(),
-            fields: HashMap::new(),
+            fields: vec![],
         });
         let method = Method::new(
             [
@@ -5452,7 +5622,9 @@ mod tests {
         );
 
         match resumed {
-            Some(InterpreterFallbackResult::Returned(ExecutionResult::Value(Value::Int(value)))) => {
+            Some(InterpreterFallbackResult::Returned(ExecutionResult::Value(Value::Int(
+                value,
+            )))) => {
                 assert_eq!(value, 42);
             }
             _ => panic!("unexpected deopt resume result"),
@@ -5464,7 +5636,7 @@ mod tests {
         let mut vm = Vm::new().expect("failed to create VM");
         let object_ref = vm.heap.lock().unwrap().allocate(HeapValue::Object {
             class_name: "demo/Holder".to_string(),
-            fields: HashMap::new(),
+            fields: vec![],
         });
         let method = Method::new(
             [
@@ -5497,7 +5669,9 @@ mod tests {
         );
 
         match resumed {
-            Some(InterpreterFallbackResult::Returned(ExecutionResult::Value(Value::Int(value)))) => {
+            Some(InterpreterFallbackResult::Returned(ExecutionResult::Value(Value::Int(
+                value,
+            )))) => {
                 assert_eq!(value, 7);
             }
             _ => panic!("unexpected deopt resume result"),
@@ -5509,7 +5683,7 @@ mod tests {
         let mut vm = Vm::new().expect("failed to create VM");
         let exception_ref = vm.heap.lock().unwrap().allocate(HeapValue::Object {
             class_name: "java/lang/RuntimeException".to_string(),
-            fields: HashMap::new(),
+            fields: vec![],
         });
         let method = Method::new(
             [
@@ -5555,7 +5729,9 @@ mod tests {
         );
 
         match resumed {
-            Some(InterpreterFallbackResult::Returned(ExecutionResult::Value(Value::Int(value)))) => {
+            Some(InterpreterFallbackResult::Returned(ExecutionResult::Value(Value::Int(
+                value,
+            )))) => {
                 assert_eq!(value, 99);
             }
             _ => panic!("unexpected deopt resume result"),

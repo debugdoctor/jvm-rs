@@ -33,26 +33,23 @@ pub(super) fn invoke_reflect(
                 &param_descriptors,
                 false,
             )?;
-            let mut fields = std::collections::HashMap::new();
-            fields.insert("__declaring_class".to_string(), Value::Reference(this_ref));
-            fields.insert("__name".to_string(), Value::Reference(name_ref));
-            fields.insert(
-                "__descriptor".to_string(),
-                vm.intern_string(&method_descriptor),
-            );
-            fields.insert(
-                "__parameter_types".to_string(),
-                Value::Reference(param_types_ref),
-            );
-            fields.insert(
-                "__return_type".to_string(),
-                Value::Reference(class_ref_for_return_type(vm, &class_name_str, &method_descriptor)?),
-            );
-            fields.insert("__modifiers".to_string(), Value::Int(1));
+            let descriptor_ref = vm.intern_string(&method_descriptor);
+            let return_type_ref = class_ref_for_return_type(
+                vm,
+                &class_name_str,
+                &method_descriptor,
+            )?;
             let heap = &mut vm.heap.lock().unwrap();
             let obj_ref = heap.allocate(HeapValue::Object {
                 class_name: "java/lang/reflect/Method".to_string(),
-                fields,
+                fields: vec![
+                    Value::Reference(this_ref),
+                    Value::Reference(name_ref),
+                    descriptor_ref,
+                    Value::Reference(param_types_ref),
+                    Value::Reference(return_type_ref),
+                    Value::Int(1),
+                ],
             });
             Ok(Some(Value::Reference(obj_ref)))
         }
@@ -74,26 +71,23 @@ pub(super) fn invoke_reflect(
                 &param_descriptors,
                 true,
             )?;
-            let mut fields = std::collections::HashMap::new();
-            fields.insert("__declaring_class".to_string(), Value::Reference(this_ref));
-            fields.insert("__name".to_string(), Value::Reference(name_ref));
-            fields.insert(
-                "__descriptor".to_string(),
-                vm.intern_string(method_descriptor.clone()),
-            );
-            fields.insert(
-                "__parameter_types".to_string(),
-                Value::Reference(param_types_ref),
-            );
-            fields.insert(
-                "__return_type".to_string(),
-                Value::Reference(class_ref_for_return_type(vm, &class_name_str, &method_descriptor)?),
-            );
-            fields.insert("__modifiers".to_string(), Value::Int(1));
+            let descriptor_ref = vm.intern_string(method_descriptor.clone());
+            let return_type_ref = class_ref_for_return_type(
+                vm,
+                &class_name_str,
+                &method_descriptor,
+            )?;
             let heap = &mut vm.heap.lock().unwrap();
             let obj_ref = heap.allocate(HeapValue::Object {
                 class_name: "java/lang/reflect/Method".to_string(),
-                fields,
+                fields: vec![
+                    Value::Reference(this_ref),
+                    Value::Reference(name_ref),
+                    descriptor_ref,
+                    Value::Reference(param_types_ref),
+                    Value::Reference(return_type_ref),
+                    Value::Int(1),
+                ],
             });
             Ok(Some(Value::Reference(obj_ref)))
         }
@@ -108,26 +102,20 @@ pub(super) fn invoke_reflect(
             let field_name = crate::vm::builtin::helpers::stringify_reference(vm, name_ref)?;
             let (field_descriptor, is_static) =
                 find_field_descriptor(vm, &class_name_str, &field_name, false)?;
-            let mut fields = std::collections::HashMap::new();
-            fields.insert("__declaring_class".to_string(), Value::Reference(this_ref));
-            fields.insert("__name".to_string(), Value::Reference(name_ref));
-            fields.insert(
-                "__descriptor".to_string(),
-                vm.intern_string(field_descriptor.clone()),
-            );
-            fields.insert(
-                "__type".to_string(),
-                Value::Reference(class_ref_for_descriptor(vm, &field_descriptor)?),
-            );
-            fields.insert(
-                "__modifiers".to_string(),
-                Value::Int(if is_static { 0x0001 | 0x0008 } else { 0x0001 }),
-            );
-            fields.insert("__slot".to_string(), Value::Int(0));
+            let type_ref = class_ref_for_descriptor(vm, &field_descriptor)?;
+            let modifiers = if is_static { 0x0001 | 0x0008 } else { 0x0001 };
+            let interned_descriptor = vm.intern_string(field_descriptor.clone());
             let heap = &mut vm.heap.lock().unwrap();
             let obj_ref = heap.allocate(HeapValue::Object {
                 class_name: "java/lang/reflect/Field".to_string(),
-                fields,
+                fields: vec![
+                    Value::Reference(this_ref),
+                    Value::Reference(name_ref),
+                    Value::Reference(type_ref),
+                    interned_descriptor,
+                    Value::Int(modifiers),
+                    Value::Int(0),
+                ],
             });
             Ok(Some(Value::Reference(obj_ref)))
         }
@@ -138,26 +126,20 @@ pub(super) fn invoke_reflect(
             let field_name = crate::vm::builtin::helpers::stringify_reference(vm, name_ref)?;
             let (field_descriptor, is_static) =
                 find_field_descriptor(vm, &class_name_str, &field_name, true)?;
-            let mut fields = std::collections::HashMap::new();
-            fields.insert("__declaring_class".to_string(), Value::Reference(this_ref));
-            fields.insert("__name".to_string(), Value::Reference(name_ref));
-            fields.insert(
-                "__descriptor".to_string(),
-                vm.intern_string(field_descriptor.clone()),
-            );
-            fields.insert(
-                "__type".to_string(),
-                Value::Reference(class_ref_for_descriptor(vm, &field_descriptor)?),
-            );
-            fields.insert(
-                "__modifiers".to_string(),
-                Value::Int(if is_static { 0x0001 | 0x0008 } else { 0x0001 }),
-            );
-            fields.insert("__slot".to_string(), Value::Int(0));
+            let type_ref = class_ref_for_descriptor(vm, &field_descriptor)?;
+            let modifiers = if is_static { 0x0001 | 0x0008 } else { 0x0001 };
+            let interned_descriptor = vm.intern_string(field_descriptor.clone());
             let heap = &mut vm.heap.lock().unwrap();
             let obj_ref = heap.allocate(HeapValue::Object {
                 class_name: "java/lang/reflect/Field".to_string(),
-                fields,
+                fields: vec![
+                    Value::Reference(this_ref),
+                    Value::Reference(name_ref),
+                    Value::Reference(type_ref),
+                    interned_descriptor,
+                    Value::Int(modifiers),
+                    Value::Int(0),
+                ],
             });
             Ok(Some(Value::Reference(obj_ref)))
         }
@@ -179,22 +161,15 @@ pub(super) fn invoke_reflect(
             let param_descriptors = class_array_to_descriptors(vm, parameter_types_ref)?;
             let constructor_descriptor =
                 find_constructor_descriptor(vm, &class_name_str, &param_descriptors, false)?;
-            let mut fields = std::collections::HashMap::new();
-            fields.insert("__declaring_class".to_string(), Value::Reference(this_ref));
-            fields.insert(
-                "__parameter_types".to_string(),
-                Value::Reference(parameter_types_ref),
-            );
-            fields.insert("__modifiers".to_string(), Value::Int(1));
-            fields.insert(
-                "__descriptor".to_string(),
-                vm.intern_string(constructor_descriptor),
-            );
-            fields.insert("__slot".to_string(), Value::Int(0));
             let heap = &mut vm.heap.lock().unwrap();
             let obj_ref = heap.allocate(HeapValue::Object {
                 class_name: "java/lang/reflect/Constructor".to_string(),
-                fields,
+                fields: vec![
+                    Value::Reference(this_ref),
+                    Value::Reference(parameter_types_ref),
+                    Value::Int(1),
+                    Value::Int(0),
+                ],
             });
             Ok(Some(Value::Reference(obj_ref)))
         }
@@ -209,22 +184,15 @@ pub(super) fn invoke_reflect(
             let param_descriptors = class_array_to_descriptors(vm, parameter_types_ref)?;
             let constructor_descriptor =
                 find_constructor_descriptor(vm, &class_name_str, &param_descriptors, true)?;
-            let mut fields = std::collections::HashMap::new();
-            fields.insert("__declaring_class".to_string(), Value::Reference(this_ref));
-            fields.insert(
-                "__parameter_types".to_string(),
-                Value::Reference(parameter_types_ref),
-            );
-            fields.insert("__modifiers".to_string(), Value::Int(1));
-            fields.insert(
-                "__descriptor".to_string(),
-                vm.intern_string(constructor_descriptor),
-            );
-            fields.insert("__slot".to_string(), Value::Int(0));
             let heap = &mut vm.heap.lock().unwrap();
             let obj_ref = heap.allocate(HeapValue::Object {
                 class_name: "java/lang/reflect/Constructor".to_string(),
-                fields,
+                fields: vec![
+                    Value::Reference(this_ref),
+                    Value::Reference(parameter_types_ref),
+                    Value::Int(1),
+                    Value::Int(0),
+                ],
             });
             Ok(Some(Value::Reference(obj_ref)))
         }
@@ -268,7 +236,7 @@ pub(super) fn invoke_reflect(
             let this_ref = args[0].as_reference()?;
             let heap = vm.heap.lock().unwrap();
             if let Ok(HeapValue::Object { fields, .. }) = heap.get(this_ref) {
-                if let Some(Value::Reference(r)) = fields.get("__name") {
+                if let Some(Value::Reference(r)) = fields.get(1) {
                     return Ok(Some(Value::Reference(*r)));
                 }
             }
@@ -278,7 +246,7 @@ pub(super) fn invoke_reflect(
             let this_ref = args[0].as_reference()?;
             let heap = vm.heap.lock().unwrap();
             if let Ok(HeapValue::Object { fields, .. }) = heap.get(this_ref) {
-                if let Some(Value::Reference(r)) = fields.get("__declaring_class") {
+                if let Some(Value::Reference(r)) = fields.get(0) {
                     return Ok(Some(Value::Reference(*r)));
                 }
             }
@@ -294,7 +262,7 @@ pub(super) fn invoke_reflect(
             let this_ref = args[0].as_reference()?;
             let heap = vm.heap.lock().unwrap();
             if let Ok(HeapValue::Object { fields, .. }) = heap.get(this_ref) {
-                if let Some(Value::Int(m)) = fields.get("__modifiers") {
+                if let Some(Value::Int(m)) = fields.get(5) {
                     return Ok(Some(Value::Int(*m)));
                 }
             }
@@ -332,7 +300,7 @@ pub(super) fn invoke_reflect(
             let this_ref = args[0].as_reference()?;
             let heap = vm.heap.lock().unwrap();
             if let Ok(HeapValue::Object { fields, .. }) = heap.get(this_ref) {
-                if let Some(Value::Reference(r)) = fields.get("__name") {
+                if let Some(Value::Reference(r)) = fields.get(1) {
                     return Ok(Some(Value::Reference(*r)));
                 }
             }
@@ -342,7 +310,7 @@ pub(super) fn invoke_reflect(
             let this_ref = args[0].as_reference()?;
             let heap = vm.heap.lock().unwrap();
             if let Ok(HeapValue::Object { fields, .. }) = heap.get(this_ref) {
-                if let Some(Value::Reference(r)) = fields.get("__type") {
+                if let Some(Value::Reference(r)) = fields.get(2) {
                     return Ok(Some(Value::Reference(*r)));
                 }
             }
@@ -352,7 +320,7 @@ pub(super) fn invoke_reflect(
             let this_ref = args[0].as_reference()?;
             let heap = vm.heap.lock().unwrap();
             if let Ok(HeapValue::Object { fields, .. }) = heap.get(this_ref) {
-                if let Some(Value::Reference(r)) = fields.get("__declaring_class") {
+                if let Some(Value::Reference(r)) = fields.get(0) {
                     return Ok(Some(Value::Reference(*r)));
                 }
             }
@@ -362,7 +330,7 @@ pub(super) fn invoke_reflect(
             let this_ref = args[0].as_reference()?;
             let heap = vm.heap.lock().unwrap();
             if let Ok(HeapValue::Object { fields, .. }) = heap.get(this_ref) {
-                if let Some(Value::Int(m)) = fields.get("__modifiers") {
+                if let Some(Value::Int(m)) = fields.get(4) {
                     return Ok(Some(Value::Int(*m)));
                 }
             }
@@ -373,7 +341,11 @@ pub(super) fn invoke_reflect(
             let target_ref = args[1].as_reference()?;
             let metadata = field_metadata(vm, this_ref)?;
             let value = read_field_value(vm, &metadata, target_ref)?;
-            Ok(Some(box_reflection_return(vm, value, &metadata.descriptor)?))
+            Ok(Some(box_reflection_return(
+                vm,
+                value,
+                &metadata.descriptor,
+            )?))
         }
         ("java/lang/reflect/Field", "set", "(Ljava/lang/Object;Ljava/lang/Object;)V") => Ok(None),
         ("java/lang/reflect/Field", "getInt", "(Ljava/lang/Object;)I") => {
@@ -405,7 +377,7 @@ pub(super) fn invoke_reflect(
             let this_ref = args[0].as_reference()?;
             let heap = vm.heap.lock().unwrap();
             if let Ok(HeapValue::Object { fields, .. }) = heap.get(this_ref) {
-                if let Some(Value::Reference(r)) = fields.get("__declaring_class") {
+                if let Some(Value::Reference(r)) = fields.get(0) {
                     return Ok(Some(Value::Reference(*r)));
                 }
             }
@@ -415,7 +387,7 @@ pub(super) fn invoke_reflect(
             let this_ref = args[0].as_reference()?;
             let heap = vm.heap.lock().unwrap();
             if let Ok(HeapValue::Object { fields, .. }) = heap.get(this_ref) {
-                if let Some(Value::Int(m)) = fields.get("__modifiers") {
+                if let Some(Value::Int(m)) = fields.get(2) {
                     return Ok(Some(Value::Int(*m)));
                 }
             }
@@ -430,7 +402,11 @@ pub(super) fn invoke_reflect(
             let params_ref = args[1].as_reference()?;
             let metadata = constructor_metadata(vm, this_ref)?;
             let ctor_args = reflection_arguments(vm, params_ref, &metadata.descriptor)?;
-            let object = vm.reflect_new_instance(&metadata.declaring_class, &metadata.descriptor, ctor_args)?;
+            let object = vm.reflect_new_instance(
+                &metadata.declaring_class,
+                &metadata.descriptor,
+                ctor_args,
+            )?;
             Ok(Some(Value::Reference(object)))
         }
         ("java/lang/reflect/AccessibleObject", "setAccessible", "(Z)V") => Ok(None),
@@ -619,7 +595,13 @@ fn find_constructor_descriptor(
     param_descriptors: &[String],
     include_inherited: bool,
 ) -> Result<String, VmError> {
-    find_method_descriptor(vm, class_name, "<init>", param_descriptors, include_inherited)
+    find_method_descriptor(
+        vm,
+        class_name,
+        "<init>",
+        param_descriptors,
+        include_inherited,
+    )
 }
 
 fn find_field_descriptor(
@@ -720,17 +702,17 @@ fn method_metadata(vm: &Vm, this_ref: Reference) -> Result<ExecutableMetadata, V
         }
     };
     let declaring_class_ref = fields
-        .get("__declaring_class")
+        .get(0)
         .copied()
         .unwrap_or(Value::Reference(Reference::Null))
         .as_reference()?;
     let name_ref = fields
-        .get("__name")
+        .get(1)
         .copied()
         .unwrap_or(Value::Reference(Reference::Null))
         .as_reference()?;
     let descriptor_ref = fields
-        .get("__descriptor")
+        .get(2)
         .copied()
         .unwrap_or(Value::Reference(Reference::Null))
         .as_reference()?;
@@ -754,12 +736,12 @@ fn constructor_metadata(vm: &Vm, this_ref: Reference) -> Result<ExecutableMetada
         }
     };
     let declaring_class_ref = fields
-        .get("__declaring_class")
+        .get(0)
         .copied()
         .unwrap_or(Value::Reference(Reference::Null))
         .as_reference()?;
     let descriptor_ref = fields
-        .get("__descriptor")
+        .get(1)
         .copied()
         .unwrap_or(Value::Reference(Reference::Null))
         .as_reference()?;
@@ -783,22 +765,22 @@ fn field_metadata(vm: &Vm, this_ref: Reference) -> Result<FieldMetadata, VmError
         }
     };
     let declaring_class_ref = fields
-        .get("__declaring_class")
+        .get(0)
         .copied()
         .unwrap_or(Value::Reference(Reference::Null))
         .as_reference()?;
     let name_ref = fields
-        .get("__name")
+        .get(1)
         .copied()
         .unwrap_or(Value::Reference(Reference::Null))
         .as_reference()?;
     let descriptor_ref = fields
-        .get("__descriptor")
+        .get(3)
         .copied()
         .unwrap_or(Value::Reference(Reference::Null))
         .as_reference()?;
     let modifiers = fields
-        .get("__modifiers")
+        .get(4)
         .copied()
         .unwrap_or(Value::Int(0))
         .as_int()?;
@@ -857,17 +839,16 @@ fn unbox_reflection_value(vm: &Vm, value: Value, descriptor: &str) -> Result<Val
             )),
             _ => Ok(Value::Int(0)),
         },
-        "J" => match value {
-            Value::Long(_) => Ok(value),
-            Value::Reference(reference) => match vm.heap.lock().unwrap().get(reference)? {
-                HeapValue::Object { fields, .. } => Ok(fields
-                    .get("value")
-                    .copied()
-                    .unwrap_or(Value::Long(0))),
+            "J" => match value {
+                Value::Long(_) => Ok(value),
+                Value::Reference(reference) => match vm.heap.lock().unwrap().get(reference)? {
+                    HeapValue::Object { fields, .. } => {
+                        Ok(fields.get(0).copied().unwrap_or(Value::Long(0)))
+                    }
+                    _ => Ok(Value::Long(0)),
+                },
                 _ => Ok(Value::Long(0)),
             },
-            _ => Ok(Value::Long(0)),
-        },
         _ => Ok(value),
     }
 }
@@ -876,15 +857,18 @@ fn box_reflection_return(vm: &mut Vm, value: Value, descriptor: &str) -> Result<
     match descriptor {
         "V" => Ok(Value::Reference(Reference::Null)),
         "I" | "Z" | "B" | "C" | "S" => vm
-            .invoke_native("java/lang/Integer", "valueOf", "(I)Ljava/lang/Integer;", &[value])?
+            .invoke_native(
+                "java/lang/Integer",
+                "valueOf",
+                "(I)Ljava/lang/Integer;",
+                &[value],
+            )?
             .ok_or(VmError::NullReference),
         "J" => {
             let long_value = value.as_long()?;
-            let mut fields = std::collections::HashMap::new();
-            fields.insert("value".to_string(), Value::Long(long_value));
             let reference = vm.heap.lock().unwrap().allocate(HeapValue::Object {
                 class_name: "java/lang/Long".to_string(),
-                fields,
+                fields: vec![Value::Long(long_value)],
             });
             Ok(Value::Reference(reference))
         }

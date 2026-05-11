@@ -215,10 +215,8 @@ impl JitCompiler {
         pc: usize,
         reason: DeoptReason,
     ) -> bool {
-        matches!(
-            reason,
-            DeoptReason::ClassCast | DeoptReason::NullCheck
-        ) && self.deopt_site_count(method_key, pc, reason) >= 1
+        matches!(reason, DeoptReason::ClassCast | DeoptReason::NullCheck)
+            && self.deopt_site_count(method_key, pc, reason) >= 1
     }
 
     pub fn site_fallbacks_for_method(&self, method_key: &str) -> HashMap<usize, DeoptReason> {
@@ -280,7 +278,11 @@ impl JitCompiler {
     }
 
     pub fn interpreter_only_reason(&self, method_key: &str) -> Option<DeoptReason> {
-        self.interpreter_only.read().unwrap().get(method_key).copied()
+        self.interpreter_only
+            .read()
+            .unwrap()
+            .get(method_key)
+            .copied()
     }
 
     pub fn get_compiled_code(&self, method_key: &str) -> Option<CompiledCode> {
@@ -293,8 +295,12 @@ impl JitCompiler {
 
     pub fn compile(&self, method: &Method) -> Result<CompiledCode, String> {
         let method_key = format!("{}.{}{}", method.class_name, method.name, method.descriptor);
-        compiler::compile_bytecode(method, self.isa(), self.site_fallbacks_for_method(&method_key))
-            .map_err(|e| format!("JIT compilation failed: {:?}", e))
+        compiler::compile_bytecode(
+            method,
+            self.isa(),
+            self.site_fallbacks_for_method(&method_key),
+        )
+        .map_err(|e| format!("JIT compilation failed: {:?}", e))
     }
 
     pub fn compile_osr(&self, method: &Method, entry_pc: usize) -> Result<CompiledCode, String> {
@@ -425,8 +431,8 @@ mod tests {
     #[test]
     fn interpreter_only_methods_skip_recompilation() {
         let compiler = JitCompiler::new().expect("failed to create JIT compiler");
-        let method = Method::new([0x04, 0xac], 0, 1)
-            .with_metadata("jit/Test", "blacklisted", "()I", 0x0008);
+        let method =
+            Method::new([0x04, 0xac], 0, 1).with_metadata("jit/Test", "blacklisted", "()I", 0x0008);
         let key = format!("{}.{}{}", method.class_name, method.name, method.descriptor);
 
         compiler.mark_interpreter_only(key.clone(), DeoptReason::HelperUnsupported);
@@ -446,7 +452,10 @@ mod tests {
         let compiler = JitCompiler::new().expect("failed to create JIT compiler");
         let key = "jit/Test.guardy()I";
 
-        assert_eq!(compiler.record_deopt(key, DeoptReason::HelperUnsupported), 1);
+        assert_eq!(
+            compiler.record_deopt(key, DeoptReason::HelperUnsupported),
+            1
+        );
         assert!(compiler.should_abandon_jit(key, DeoptReason::HelperUnsupported));
 
         assert_eq!(compiler.record_deopt(key, DeoptReason::NullCheck), 1);
@@ -459,12 +468,24 @@ mod tests {
         let compiler = JitCompiler::new().expect("failed to create JIT compiler");
         let key = "jit/Test.castCheck()I";
 
-        assert_eq!(compiler.record_deopt_site(key, 7, DeoptReason::ClassCast), 1);
-        assert_eq!(compiler.record_deopt_site(key, 7, DeoptReason::ClassCast), 2);
-        assert_eq!(compiler.record_deopt_site(key, 12, DeoptReason::NullCheck), 1);
+        assert_eq!(
+            compiler.record_deopt_site(key, 7, DeoptReason::ClassCast),
+            1
+        );
+        assert_eq!(
+            compiler.record_deopt_site(key, 7, DeoptReason::ClassCast),
+            2
+        );
+        assert_eq!(
+            compiler.record_deopt_site(key, 12, DeoptReason::NullCheck),
+            1
+        );
 
         assert_eq!(compiler.deopt_site_count(key, 7, DeoptReason::ClassCast), 2);
-        assert_eq!(compiler.deopt_site_count(key, 12, DeoptReason::NullCheck), 1);
+        assert_eq!(
+            compiler.deopt_site_count(key, 12, DeoptReason::NullCheck),
+            1
+        );
         assert_eq!(compiler.hottest_deopt_site(key), Some((7, 2)));
     }
 
@@ -498,11 +519,7 @@ mod tests {
         compiler.record_deopt(key, DeoptReason::GuardFailure);
         compiler.record_deopt_site(key, 10, DeoptReason::GuardFailure);
 
-        assert!(!compiler.should_recompile_with_site_fallback(
-            key,
-            10,
-            DeoptReason::GuardFailure
-        ));
+        assert!(!compiler.should_recompile_with_site_fallback(key, 10, DeoptReason::GuardFailure));
         assert!(!compiler.should_abandon_jit_at_site(key, 10, DeoptReason::GuardFailure));
         assert!(!compiler.should_abandon_jit(key, DeoptReason::GuardFailure));
     }
@@ -742,9 +759,12 @@ mod tests {
             static_fields: std::collections::HashMap::new(),
             instance_fields: vec![],
             interfaces: vec![],
+            field_offsets: std::collections::HashMap::new(),
         });
         vm.set_jit_thresholds(1, 1);
-        let result = vm.execute(method).expect("top-level fallback should succeed");
+        let result = vm
+            .execute(method)
+            .expect("top-level fallback should succeed");
 
         assert_eq!(result, ExecutionResult::Value(Value::Int(-1)));
         assert!(
@@ -804,7 +824,10 @@ mod tests {
         let code2 = compiler.compile(&method).expect("recompilation failed");
         compiler.install_code(key.to_string(), code2.clone());
         assert!(compiler.get_compiled_code(key).is_some());
-        assert_eq!(compiler.get_compiled_code(key).unwrap().code_buffer, code2.code_buffer);
+        assert_eq!(
+            compiler.get_compiled_code(key).unwrap().code_buffer,
+            code2.code_buffer
+        );
     }
 
     #[test]

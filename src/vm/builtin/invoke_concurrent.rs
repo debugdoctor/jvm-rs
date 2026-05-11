@@ -14,13 +14,10 @@ pub(super) fn invoke_concurrent(
             let val = {
                 let heap = vm.heap.lock().unwrap();
                 match heap.get(obj_ref)? {
-                    HeapValue::Object { fields, .. } => fields
-                        .get("__value")
-                        .and_then(|v| match v {
-                            Value::Int(i) => Some(*i),
-                            _ => None,
-                        })
-                        .unwrap_or(0),
+                    HeapValue::Object { fields, .. } => match fields.get(0) {
+                        Some(Value::Int(i)) => *i,
+                        _ => 0,
+                    },
                     _ => 0,
                 }
             };
@@ -32,7 +29,7 @@ pub(super) fn invoke_concurrent(
             {
                 let mut heap = vm.heap.lock().unwrap();
                 if let HeapValue::Object { fields, .. } = heap.get_mut(obj_ref)? {
-                    fields.insert("__value".to_string(), Value::Int(new_val));
+                    fields[0] = Value::Int(new_val);
                 }
             }
             Ok(None)
@@ -43,20 +40,17 @@ pub(super) fn invoke_concurrent(
             let old_val = {
                 let heap = vm.heap.lock().unwrap();
                 match heap.get(obj_ref)? {
-                    HeapValue::Object { fields, .. } => fields
-                        .get("__value")
-                        .and_then(|v| match v {
-                            Value::Int(i) => Some(*i),
-                            _ => None,
-                        })
-                        .unwrap_or(0),
+                    HeapValue::Object { fields, .. } => match fields.get(0) {
+                        Some(Value::Int(i)) => *i,
+                        _ => 0,
+                    },
                     _ => 0,
                 }
             };
             {
                 let mut heap = vm.heap.lock().unwrap();
                 if let HeapValue::Object { fields, .. } = heap.get_mut(obj_ref)? {
-                    fields.insert("__value".to_string(), Value::Int(new_val));
+                    fields[0] = Value::Int(new_val);
                 }
             }
             Ok(Some(Value::Int(old_val)))
@@ -67,9 +61,9 @@ pub(super) fn invoke_concurrent(
             let new_val = args[2].as_int()?;
             let mut heap = vm.heap.lock().unwrap();
             let success = match heap.get_mut(obj_ref)? {
-                HeapValue::Object { fields, .. } => match fields.get("__value") {
+                HeapValue::Object { fields, .. } => match fields.get(0) {
                     Some(Value::Int(current)) if *current == expect => {
-                        fields.insert("__value".to_string(), Value::Int(new_val));
+                        fields[0] = Value::Int(new_val);
                         true
                     }
                     _ => false,
@@ -84,15 +78,12 @@ pub(super) fn invoke_concurrent(
                 let mut heap = vm.heap.lock().unwrap();
                 match heap.get_mut(obj_ref)? {
                     HeapValue::Object { fields, .. } => {
-                        let current = fields
-                            .get("__value")
-                            .and_then(|v| match v {
-                                Value::Int(i) => Some(*i),
-                                _ => None,
-                            })
-                            .unwrap_or(0);
+                        let current = match fields.get(0) {
+                            Some(Value::Int(i)) => *i,
+                            _ => 0,
+                        };
                         let new = current + 1;
-                        fields.insert("__value".to_string(), Value::Int(new));
+                        fields[0] = Value::Int(new);
                         new
                     }
                     _ => 0,
@@ -106,63 +97,18 @@ pub(super) fn invoke_concurrent(
                 let mut heap = vm.heap.lock().unwrap();
                 match heap.get_mut(obj_ref)? {
                     HeapValue::Object { fields, .. } => {
-                        let current = fields
-                            .get("__value")
-                            .and_then(|v| match v {
-                                Value::Int(i) => Some(*i),
-                                _ => None,
-                            })
-                            .unwrap_or(0);
+let current = match fields.get(0) {
+                            Some(Value::Int(i)) => *i,
+                            _ => 0,
+                        };
                         let new = current - 1;
-                        fields.insert("__value".to_string(), Value::Int(new));
+                        fields[0] = Value::Int(new);
                         new
                     }
                     _ => 0,
                 }
             };
             Ok(Some(Value::Int(new_val)))
-        }
-        ("java/util/concurrent/atomic/AtomicInteger", "getAndIncrement", "()I") => {
-            let obj_ref = args[0].as_reference()?;
-            let old_val = {
-                let mut heap = vm.heap.lock().unwrap();
-                match heap.get_mut(obj_ref)? {
-                    HeapValue::Object { fields, .. } => {
-                        let current = fields
-                            .get("__value")
-                            .and_then(|v| match v {
-                                Value::Int(i) => Some(*i),
-                                _ => None,
-                            })
-                            .unwrap_or(0);
-                        fields.insert("__value".to_string(), Value::Int(current + 1));
-                        current
-                    }
-                    _ => 0,
-                }
-            };
-            Ok(Some(Value::Int(old_val)))
-        }
-        ("java/util/concurrent/atomic/AtomicInteger", "getAndDecrement", "()I") => {
-            let obj_ref = args[0].as_reference()?;
-            let old_val = {
-                let mut heap = vm.heap.lock().unwrap();
-                match heap.get_mut(obj_ref)? {
-                    HeapValue::Object { fields, .. } => {
-                        let current = fields
-                            .get("__value")
-                            .and_then(|v| match v {
-                                Value::Int(i) => Some(*i),
-                                _ => None,
-                            })
-                            .unwrap_or(0);
-                        fields.insert("__value".to_string(), Value::Int(current - 1));
-                        current
-                    }
-                    _ => 0,
-                }
-            };
-            Ok(Some(Value::Int(old_val)))
         }
         ("java/util/concurrent/atomic/AtomicInteger", "addAndGet", "(I)I") => {
             let obj_ref = args[0].as_reference()?;
@@ -171,15 +117,12 @@ pub(super) fn invoke_concurrent(
                 let mut heap = vm.heap.lock().unwrap();
                 match heap.get_mut(obj_ref)? {
                     HeapValue::Object { fields, .. } => {
-                        let current = fields
-                            .get("__value")
-                            .and_then(|v| match v {
-                                Value::Int(i) => Some(*i),
-                                _ => None,
-                            })
-                            .unwrap_or(0);
+                        let current = match fields.get(0) {
+                            Some(Value::Int(i)) => *i,
+                            _ => 0,
+                        };
                         let new = current + delta;
-                        fields.insert("__value".to_string(), Value::Int(new));
+                        fields[0] = Value::Int(new);
                         new
                     }
                     _ => 0,
@@ -194,14 +137,11 @@ pub(super) fn invoke_concurrent(
                 let mut heap = vm.heap.lock().unwrap();
                 match heap.get_mut(obj_ref)? {
                     HeapValue::Object { fields, .. } => {
-                        let current = fields
-                            .get("__value")
-                            .and_then(|v| match v {
-                                Value::Int(i) => Some(*i),
-                                _ => None,
-                            })
-                            .unwrap_or(0);
-                        fields.insert("__value".to_string(), Value::Int(current + delta));
+                        let current = match fields.get(0) {
+                            Some(Value::Int(i)) => *i,
+                            _ => 0,
+                        };
+                        fields[0] = Value::Int(current + delta);
                         current
                     }
                     _ => 0,
@@ -215,7 +155,7 @@ pub(super) fn invoke_concurrent(
             {
                 let mut heap = vm.heap.lock().unwrap();
                 if let HeapValue::Object { fields, .. } = heap.get_mut(obj_ref)? {
-                    fields.insert("__value".to_string(), Value::Int(initial));
+                    fields[0] = Value::Int(initial);
                 }
             }
             Ok(None)
@@ -226,13 +166,10 @@ pub(super) fn invoke_concurrent(
             let val = {
                 let heap = vm.heap.lock().unwrap();
                 match heap.get(obj_ref)? {
-                    HeapValue::Object { fields, .. } => fields
-                        .get("__value")
-                        .and_then(|v| match v {
-                            Value::Long(l) => Some(*l),
-                            _ => None,
-                        })
-                        .unwrap_or(0),
+                    HeapValue::Object { fields, .. } => match fields.get(0) {
+                        Some(Value::Long(l)) => *l,
+                        _ => 0,
+                    },
                     _ => 0,
                 }
             };
@@ -244,7 +181,7 @@ pub(super) fn invoke_concurrent(
             {
                 let mut heap = vm.heap.lock().unwrap();
                 if let HeapValue::Object { fields, .. } = heap.get_mut(obj_ref)? {
-                    fields.insert("__value".to_string(), Value::Long(new_val));
+                    fields[0] = Value::Long(new_val);
                 }
             }
             Ok(None)
@@ -255,20 +192,17 @@ pub(super) fn invoke_concurrent(
             let old_val = {
                 let heap = vm.heap.lock().unwrap();
                 match heap.get(obj_ref)? {
-                    HeapValue::Object { fields, .. } => fields
-                        .get("__value")
-                        .and_then(|v| match v {
-                            Value::Long(l) => Some(*l),
-                            _ => None,
-                        })
-                        .unwrap_or(0),
+                    HeapValue::Object { fields, .. } => match fields.get(0) {
+                        Some(Value::Long(l)) => *l,
+                        _ => 0,
+                    },
                     _ => 0,
                 }
             };
             {
                 let mut heap = vm.heap.lock().unwrap();
                 if let HeapValue::Object { fields, .. } = heap.get_mut(obj_ref)? {
-                    fields.insert("__value".to_string(), Value::Long(new_val));
+                    fields[0] = Value::Long(new_val);
                 }
             }
             Ok(Some(Value::Long(old_val)))
@@ -279,9 +213,9 @@ pub(super) fn invoke_concurrent(
             let new_val = args[2].as_long()?;
             let mut heap = vm.heap.lock().unwrap();
             let success = match heap.get_mut(obj_ref)? {
-                HeapValue::Object { fields, .. } => match fields.get("__value") {
+                HeapValue::Object { fields, .. } => match fields.get(0) {
                     Some(Value::Long(current)) if *current == expect => {
-                        fields.insert("__value".to_string(), Value::Long(new_val));
+                        fields[0] = Value::Long(new_val);
                         true
                     }
                     _ => false,
@@ -296,15 +230,12 @@ pub(super) fn invoke_concurrent(
                 let mut heap = vm.heap.lock().unwrap();
                 match heap.get_mut(obj_ref)? {
                     HeapValue::Object { fields, .. } => {
-                        let current = fields
-                            .get("__value")
-                            .and_then(|v| match v {
-                                Value::Long(l) => Some(*l),
-                                _ => None,
-                            })
-                            .unwrap_or(0);
+                        let current = match fields.get(0) {
+                            Some(Value::Long(l)) => *l,
+                            _ => 0,
+                        };
                         let new = current + 1;
-                        fields.insert("__value".to_string(), Value::Long(new));
+                        fields[0] = Value::Long(new);
                         new
                     }
                     _ => 0,
@@ -318,15 +249,12 @@ pub(super) fn invoke_concurrent(
                 let mut heap = vm.heap.lock().unwrap();
                 match heap.get_mut(obj_ref)? {
                     HeapValue::Object { fields, .. } => {
-                        let current = fields
-                            .get("__value")
-                            .and_then(|v| match v {
-                                Value::Long(l) => Some(*l),
-                                _ => None,
-                            })
-                            .unwrap_or(0);
+                        let current = match fields.get(0) {
+                            Some(Value::Long(l)) => *l,
+                            _ => 0,
+                        };
                         let new = current - 1;
-                        fields.insert("__value".to_string(), Value::Long(new));
+                        fields[0] = Value::Long(new);
                         new
                     }
                     _ => 0,
@@ -341,15 +269,12 @@ pub(super) fn invoke_concurrent(
                 let mut heap = vm.heap.lock().unwrap();
                 match heap.get_mut(obj_ref)? {
                     HeapValue::Object { fields, .. } => {
-                        let current = fields
-                            .get("__value")
-                            .and_then(|v| match v {
-                                Value::Long(l) => Some(*l),
-                                _ => None,
-                            })
-                            .unwrap_or(0);
+                        let current = match fields.get(0) {
+                            Some(Value::Long(l)) => *l,
+                            _ => 0,
+                        };
                         let new = current + delta;
-                        fields.insert("__value".to_string(), Value::Long(new));
+                        fields[0] = Value::Long(new);
                         new
                     }
                     _ => 0,
@@ -363,7 +288,7 @@ pub(super) fn invoke_concurrent(
             {
                 let mut heap = vm.heap.lock().unwrap();
                 if let HeapValue::Object { fields, .. } = heap.get_mut(obj_ref)? {
-                    fields.insert("__value".to_string(), Value::Long(initial));
+                    fields[0] = Value::Long(initial);
                 }
             }
             Ok(None)
@@ -374,13 +299,10 @@ pub(super) fn invoke_concurrent(
             let val = {
                 let heap = vm.heap.lock().unwrap();
                 match heap.get(obj_ref)? {
-                    HeapValue::Object { fields, .. } => fields
-                        .get("__value")
-                        .and_then(|v| match v {
-                            Value::Reference(r) => Some(*r),
-                            _ => None,
-                        })
-                        .unwrap_or(Reference::Null),
+                    HeapValue::Object { fields, .. } => match fields.get(0) {
+                        Some(Value::Reference(r)) => *r,
+                        _ => Reference::Null,
+                    },
                     _ => Reference::Null,
                 }
             };
@@ -392,7 +314,7 @@ pub(super) fn invoke_concurrent(
             {
                 let mut heap = vm.heap.lock().unwrap();
                 if let HeapValue::Object { fields, .. } = heap.get_mut(obj_ref)? {
-                    fields.insert("__value".to_string(), Value::Reference(new_val));
+                    fields[0] = Value::Reference(new_val);
                 }
             }
             Ok(None)
@@ -407,20 +329,17 @@ pub(super) fn invoke_concurrent(
             let old_val = {
                 let heap = vm.heap.lock().unwrap();
                 match heap.get(obj_ref)? {
-                    HeapValue::Object { fields, .. } => fields
-                        .get("__value")
-                        .and_then(|v| match v {
-                            Value::Reference(r) => Some(*r),
-                            _ => None,
-                        })
-                        .unwrap_or(Reference::Null),
+                    HeapValue::Object { fields, .. } => match fields.get(0) {
+                        Some(Value::Reference(r)) => *r,
+                        _ => Reference::Null,
+                    },
                     _ => Reference::Null,
                 }
             };
             {
                 let mut heap = vm.heap.lock().unwrap();
                 if let HeapValue::Object { fields, .. } = heap.get_mut(obj_ref)? {
-                    fields.insert("__value".to_string(), Value::Reference(new_val));
+                    fields[0] = Value::Reference(new_val);
                 }
             }
             Ok(Some(Value::Reference(old_val)))
@@ -435,9 +354,9 @@ pub(super) fn invoke_concurrent(
             let new_val = args[2].as_reference()?;
             let mut heap = vm.heap.lock().unwrap();
             let success = match heap.get_mut(obj_ref)? {
-                HeapValue::Object { fields, .. } => match fields.get("__value") {
+                HeapValue::Object { fields, .. } => match fields.get(0) {
                     Some(Value::Reference(current)) if *current == expect => {
-                        fields.insert("__value".to_string(), Value::Reference(new_val));
+                        fields[0] = Value::Reference(new_val);
                         true
                     }
                     _ => false,
@@ -452,7 +371,7 @@ pub(super) fn invoke_concurrent(
             {
                 let mut heap = vm.heap.lock().unwrap();
                 if let HeapValue::Object { fields, .. } = heap.get_mut(obj_ref)? {
-                    fields.insert("__value".to_string(), Value::Reference(initial));
+                    fields[0] = Value::Reference(initial);
                 }
             }
             Ok(None)
@@ -464,14 +383,11 @@ pub(super) fn invoke_concurrent(
             {
                 let mut heap = vm.heap.lock().unwrap();
                 if let HeapValue::Object { fields, .. } = heap.get_mut(obj_ref)? {
-                    let current = fields
-                        .get("__value")
-                        .and_then(|v| match v {
-                            Value::Long(l) => Some(*l),
-                            _ => None,
-                        })
-                        .unwrap_or(0);
-                    fields.insert("__value".to_string(), Value::Long(current + delta));
+                    let current = match fields.get(0) {
+                        Some(Value::Long(l)) => *l,
+                        _ => 0,
+                    };
+                    fields[0] = Value::Long(current + delta);
                 }
             }
             Ok(None)
@@ -481,13 +397,10 @@ pub(super) fn invoke_concurrent(
             let val = {
                 let heap = vm.heap.lock().unwrap();
                 match heap.get(obj_ref)? {
-                    HeapValue::Object { fields, .. } => fields
-                        .get("__value")
-                        .and_then(|v| match v {
-                            Value::Long(l) => Some(*l),
-                            _ => None,
-                        })
-                        .unwrap_or(0),
+                    HeapValue::Object { fields, .. } => match fields.get(0) {
+                        Some(Value::Long(l)) => *l,
+                        _ => 0,
+                    },
                     _ => 0,
                 }
             };
@@ -498,14 +411,11 @@ pub(super) fn invoke_concurrent(
             {
                 let mut heap = vm.heap.lock().unwrap();
                 if let HeapValue::Object { fields, .. } = heap.get_mut(obj_ref)? {
-                    let current = fields
-                        .get("__value")
-                        .and_then(|v| match v {
-                            Value::Long(l) => Some(*l),
-                            _ => None,
-                        })
-                        .unwrap_or(0);
-                    fields.insert("__value".to_string(), Value::Long(current + 1));
+                    let current = match fields.get(0) {
+                        Some(Value::Long(l)) => *l,
+                        _ => 0,
+                    };
+                    fields[0] = Value::Long(current + 1);
                 }
             }
             Ok(None)
@@ -515,14 +425,11 @@ pub(super) fn invoke_concurrent(
             {
                 let mut heap = vm.heap.lock().unwrap();
                 if let HeapValue::Object { fields, .. } = heap.get_mut(obj_ref)? {
-                    let current = fields
-                        .get("__value")
-                        .and_then(|v| match v {
-                            Value::Long(l) => Some(*l),
-                            _ => None,
-                        })
-                        .unwrap_or(0);
-                    fields.insert("__value".to_string(), Value::Long(current - 1));
+                    let current = match fields.get(0) {
+                        Some(Value::Long(l)) => *l,
+                        _ => 0,
+                    };
+                    fields[0] = Value::Long(current - 1);
                 }
             }
             Ok(None)
@@ -532,7 +439,7 @@ pub(super) fn invoke_concurrent(
             {
                 let mut heap = vm.heap.lock().unwrap();
                 if let HeapValue::Object { fields, .. } = heap.get_mut(obj_ref)? {
-                    fields.insert("__value".to_string(), Value::Long(0));
+                    fields[0] = Value::Long(0);
                 }
             }
             Ok(None)

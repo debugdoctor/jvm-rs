@@ -574,10 +574,8 @@ impl<'a> BytecodeCompiler<'a> {
                 )));
             }
 
-            for (index, (expected, incoming)) in expected_types
-                .iter()
-                .zip(incoming_types.iter())
-                .enumerate()
+            for (index, (expected, incoming)) in
+                expected_types.iter().zip(incoming_types.iter()).enumerate()
             {
                 if expected != incoming {
                     return Err(JitError::CompilationFailed(format!(
@@ -708,7 +706,11 @@ impl<'a> BytecodeCompiler<'a> {
         }
     }
 
-    fn push_method_result_value(&mut self, value: Value, method_desc: &str) -> Result<(), JitError> {
+    fn push_method_result_value(
+        &mut self,
+        value: Value,
+        method_desc: &str,
+    ) -> Result<(), JitError> {
         match crate::vm::types::parse_return_type(method_desc)
             .map_err(|e| JitError::CompilationFailed(format!("Invalid descriptor: {}", e)))?
         {
@@ -1897,7 +1899,11 @@ impl<'a> BytecodeCompiler<'a> {
             if matches!(arg_type, b'J' | b'D') && index == local_index + 1 {
                 return StackCategory::Category1;
             }
-            local_index += if matches!(arg_type, b'J' | b'D') { 2 } else { 1 };
+            local_index += if matches!(arg_type, b'J' | b'D') {
+                2
+            } else {
+                1
+            };
         }
 
         if let Some(kind) = self.infer_local_kind_from_stores(index) {
@@ -1957,24 +1963,25 @@ impl<'a> BytecodeCompiler<'a> {
                     .get(pc + 1)
                     .copied()
                     .map(|i| (i as usize, types::I32)),
-                0xc4 => self
-                    .method
-                    .code
-                    .get(pc + 1)
-                    .copied()
-                    .and_then(|inner| {
-                        self.method.code.get(pc + 2..pc + 4).map(|bytes| {
-                            (inner, u16::from_be_bytes([bytes[0], bytes[1]]) as usize)
+                0xc4 => {
+                    self.method
+                        .code
+                        .get(pc + 1)
+                        .copied()
+                        .and_then(|inner| {
+                            self.method.code.get(pc + 2..pc + 4).map(|bytes| {
+                                (inner, u16::from_be_bytes([bytes[0], bytes[1]]) as usize)
+                            })
                         })
-                    })
-                    .and_then(|(inner, index)| match inner {
-                        0x36 | 0x84 => Some((index, types::I32)),
-                        0x37 => Some((index, types::I64)),
-                        0x38 => Some((index, types::F32)),
-                        0x39 => Some((index, types::F64)),
-                        0x3a => Some((index, types::I64)),
-                        _ => None,
-                    }),
+                        .and_then(|(inner, index)| match inner {
+                            0x36 | 0x84 => Some((index, types::I32)),
+                            0x37 => Some((index, types::I64)),
+                            0x38 => Some((index, types::F32)),
+                            0x39 => Some((index, types::F64)),
+                            0x3a => Some((index, types::I64)),
+                            _ => None,
+                        })
+                }
                 _ => None,
             };
             if let Some((local, ty)) = hit {
@@ -2033,21 +2040,22 @@ impl<'a> BytecodeCompiler<'a> {
                     .get(pc + 1)
                     .copied()
                     .map(|i| (i as usize, StackCategory::Category1)),
-                0xc4 => self
-                    .method
-                    .code
-                    .get(pc + 1)
-                    .copied()
-                    .and_then(|inner| {
-                        self.method.code.get(pc + 2..pc + 4).map(|bytes| {
-                            (inner, u16::from_be_bytes([bytes[0], bytes[1]]) as usize)
+                0xc4 => {
+                    self.method
+                        .code
+                        .get(pc + 1)
+                        .copied()
+                        .and_then(|inner| {
+                            self.method.code.get(pc + 2..pc + 4).map(|bytes| {
+                                (inner, u16::from_be_bytes([bytes[0], bytes[1]]) as usize)
+                            })
                         })
-                    })
-                    .and_then(|(inner, index)| match inner {
-                        0x36 | 0x38 | 0x3a | 0x84 => Some((index, StackCategory::Category1)),
-                        0x37 | 0x39 => Some((index, StackCategory::Category2)),
-                        _ => None,
-                    }),
+                        .and_then(|(inner, index)| match inner {
+                            0x36 | 0x38 | 0x3a | 0x84 => Some((index, StackCategory::Category1)),
+                            0x37 | 0x39 => Some((index, StackCategory::Category2)),
+                            _ => None,
+                        })
+                }
                 _ => None,
             };
             if let Some((local, kind)) = hit {
@@ -2437,7 +2445,10 @@ impl<'a> BytecodeCompiler<'a> {
     fn emit_deopt_pc(&mut self, pc: usize) {
         let ctx = self.builder.use_var(self.context_var);
         let current = self.builder.ins().load(types::I64, MemFlags::new(), ctx, 0);
-        let pending = self.builder.ins().icmp_imm(IntCC::SignedLessThan, current, 0);
+        let pending = self
+            .builder
+            .ins()
+            .icmp_imm(IntCC::SignedLessThan, current, 0);
         let raw_pc = self.builder.ins().iconst(types::I64, pc as i64);
         let stored = self.builder.ins().select(pending, current, raw_pc);
         self.builder.ins().store(MemFlags::new(), stored, ctx, 0);
@@ -2452,9 +2463,14 @@ impl<'a> BytecodeCompiler<'a> {
 
     fn emit_deopt_stack_state(&mut self) {
         let ctx = self.builder.use_var(self.context_var);
-        let depth = self.builder.ins().iconst(types::I64, self.value_stack.len() as i64);
+        let depth = self
+            .builder
+            .ins()
+            .iconst(types::I64, self.value_stack.len() as i64);
         let depth_offset = ((self.method.max_locals + 1) * 8) as i32;
-        self.builder.ins().store(MemFlags::new(), depth, ctx, depth_offset);
+        self.builder
+            .ins()
+            .store(MemFlags::new(), depth, ctx, depth_offset);
 
         let stack_values = self.value_stack.clone();
         let stack_kinds = self.value_stack_kinds.clone();
@@ -3849,14 +3865,7 @@ pub fn compile_bytecode(
                         compiler.deopt_info(),
                     )
                 };
-                return compile_method(
-                    method,
-                    &mut func,
-                    isa,
-                    frame_size,
-                    stack_slots,
-                    deopt_info,
-                );
+                return compile_method(method, &mut func, isa, frame_size, stack_slots, deopt_info);
             }
             _ => types::I64,
         };
@@ -3868,8 +3877,7 @@ pub fn compile_bytecode(
     let mut fn_ctx = FunctionBuilderContext::new();
     let (frame_size, stack_slots, deopt_info) = {
         let mut builder = FunctionBuilder::new(&mut func, &mut fn_ctx);
-        let mut compiler =
-            BytecodeCompiler::new(method, &mut builder, arg_types, site_fallbacks);
+        let mut compiler = BytecodeCompiler::new(method, &mut builder, arg_types, site_fallbacks);
         compiler.lower()?;
         (
             compiler.frame_size(),
@@ -3935,14 +3943,7 @@ pub fn compile_bytecode_osr(
                         compiler.deopt_info(),
                     )
                 };
-                return compile_method(
-                    method,
-                    &mut func,
-                    isa,
-                    frame_size,
-                    stack_slots,
-                    deopt_info,
-                );
+                return compile_method(method, &mut func, isa, frame_size, stack_slots, deopt_info);
             }
             _ => types::I64,
         };
@@ -4014,9 +4015,10 @@ fn reject_runtime_dependent_bytecode(method: &Method) -> Result<(), JitError> {
                 }
             }
             0xc4 => {
-                let inner = *method.code.get(pc + 1).ok_or_else(|| {
-                    JitError::CompilationFailed("truncated wide".to_string())
-                })?;
+                let inner = *method
+                    .code
+                    .get(pc + 1)
+                    .ok_or_else(|| JitError::CompilationFailed("truncated wide".to_string()))?;
                 if inner == 0xa9 {
                     return Err(JitError::CompilationFailed(
                         "wide ret stays on the interpreter until return-address SSA is supported"

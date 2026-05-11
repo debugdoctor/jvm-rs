@@ -39,7 +39,7 @@ pub(super) fn invoke_text(
             let pattern = crate::vm::builtin::helpers::stringify_reference(vm, pattern_ref)?;
             let heap = &mut vm.heap.lock().unwrap();
             if let Ok(HeapValue::Object { fields, .. }) = heap.get_mut(this_ref) {
-                fields.insert("__pattern".to_string(), Value::Reference(pattern_ref));
+                fields[0] = Value::Reference(pattern_ref);
             }
             Ok(None)
         }
@@ -48,7 +48,7 @@ pub(super) fn invoke_text(
             let this_ref = args[1].as_reference()?;
             let heap = &mut vm.heap.lock().unwrap();
             if let Ok(HeapValue::Object { fields, .. }) = heap.get_mut(this_ref) {
-                fields.insert("__pattern".to_string(), Value::Reference(pattern_ref));
+                fields[0] = Value::Reference(pattern_ref);
             }
             Ok(None)
         }
@@ -58,7 +58,7 @@ pub(super) fn invoke_text(
             let pattern = {
                 let heap = vm.heap.lock().unwrap();
                 if let Ok(HeapValue::Object { fields, .. }) = heap.get(this_ref) {
-                    fields.get("__pattern").and_then(|v| {
+                    fields.get(0).and_then(|v| {
                         if let Value::Reference(r) = v {
                             match heap.get(*r) {
                                 Ok(HeapValue::String(s)) => Some(s.clone()),
@@ -96,7 +96,7 @@ pub(super) fn invoke_text(
             let this_ref = args[1].as_reference()?;
             let heap = &mut vm.heap.lock().unwrap();
             if let Ok(HeapValue::Object { fields, .. }) = heap.get_mut(this_ref) {
-                fields.insert("__pattern".to_string(), Value::Reference(pattern_ref));
+                fields[0] = Value::Reference(pattern_ref);
             }
             Ok(None)
         }

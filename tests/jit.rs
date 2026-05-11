@@ -383,6 +383,7 @@ public class Main {
             static_fields: HashMap::from([("value".to_string(), Value::Int(37))]),
             instance_fields: vec![],
             interfaces: vec![],
+            field_offsets: HashMap::new(),
         });
         vm.set_jit_thresholds(1, 1);
 
@@ -794,6 +795,7 @@ public class Main {
             static_fields: HashMap::new(),
             instance_fields: vec![],
             interfaces: vec![],
+            field_offsets: HashMap::new(),
         });
         vm.set_jit_thresholds(1, 1);
 

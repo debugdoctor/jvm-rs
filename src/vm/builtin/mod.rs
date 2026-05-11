@@ -165,9 +165,16 @@ impl Vm {
                 let current_array = match current {
                     Value::Reference(r) if r != Reference::Null => r,
                     _ => {
-                        let empty = self.heap.lock().unwrap()
+                        let empty = self
+                            .heap
+                            .lock()
+                            .unwrap()
                             .allocate_reference_array("java/lang/Throwable".to_string(), vec![]);
-                        self.set_object_field(obj_ref, "suppressedExceptions", Value::Reference(empty))?;
+                        self.set_object_field(
+                            obj_ref,
+                            "suppressedExceptions",
+                            Value::Reference(empty),
+                        )?;
                         empty
                     }
                 };
@@ -188,7 +195,10 @@ impl Vm {
                 match suppressed {
                     Value::Reference(r) if r != Reference::Null => Ok(Some(Value::Reference(r))),
                     _ => {
-                        let empty = self.heap.lock().unwrap()
+                        let empty = self
+                            .heap
+                            .lock()
+                            .unwrap()
                             .allocate_reference_array("java/lang/Throwable".to_string(), vec![]);
                         Ok(Some(Value::Reference(empty)))
                     }
@@ -262,31 +272,25 @@ impl Vm {
     }
 
     fn native_collectors_to_list(&mut self) -> Result<Option<Value>, VmError> {
-        let mut fields = std::collections::HashMap::new();
-        fields.insert("__mode".to_string(), Value::Int(1));
         let r = self.heap.lock().unwrap().allocate(HeapValue::Object {
             class_name: "__jvm_rs/NativeCollector".to_string(),
-            fields,
+            fields: vec![Value::Reference(Reference::Null), Value::Int(1)],
         });
         Ok(Some(Value::Reference(r)))
     }
 
     fn native_collectors_to_set(&mut self) -> Result<Option<Value>, VmError> {
-        let mut fields = std::collections::HashMap::new();
-        fields.insert("__mode".to_string(), Value::Int(2));
         let r = self.heap.lock().unwrap().allocate(HeapValue::Object {
             class_name: "__jvm_rs/NativeCollector".to_string(),
-            fields,
+            fields: vec![Value::Reference(Reference::Null), Value::Int(2)],
         });
         Ok(Some(Value::Reference(r)))
     }
 
     fn native_collectors_counting(&mut self) -> Result<Option<Value>, VmError> {
-        let mut fields = std::collections::HashMap::new();
-        fields.insert("__mode".to_string(), Value::Int(3));
         let r = self.heap.lock().unwrap().allocate(HeapValue::Object {
             class_name: "__jvm_rs/NativeCollector".to_string(),
-            fields,
+            fields: vec![Value::Reference(Reference::Null), Value::Int(3)],
         });
         Ok(Some(Value::Reference(r)))
     }
@@ -295,16 +299,13 @@ impl Vm {
         &mut self,
         delimiter: Option<Reference>,
     ) -> Result<Option<Value>, VmError> {
-        let mut fields = std::collections::HashMap::new();
-        if let Some(d) = delimiter {
-            fields.insert("__mode".to_string(), Value::Int(5));
-            fields.insert("__array".to_string(), Value::Reference(d));
-        } else {
-            fields.insert("__mode".to_string(), Value::Int(4));
-        }
         let r = self.heap.lock().unwrap().allocate(HeapValue::Object {
             class_name: "__jvm_rs/NativeCollector".to_string(),
-            fields,
+            fields: if let Some(d) = delimiter {
+                vec![Value::Reference(d), Value::Int(5)]
+            } else {
+                vec![Value::Reference(Reference::Null), Value::Int(4)]
+            },
         });
         Ok(Some(Value::Reference(r)))
     }
@@ -314,12 +315,9 @@ impl Vm {
         identity: Reference,
         _combiner: Reference,
     ) -> Result<Option<Value>, VmError> {
-        let mut fields = std::collections::HashMap::new();
-        fields.insert("__mode".to_string(), Value::Int(6));
-        fields.insert("__array".to_string(), Value::Reference(identity));
         let r = self.heap.lock().unwrap().allocate(HeapValue::Object {
             class_name: "__jvm_rs/NativeCollector".to_string(),
-            fields,
+            fields: vec![Value::Reference(identity), Value::Int(6)],
         });
         Ok(Some(Value::Reference(r)))
     }
@@ -329,12 +327,9 @@ impl Vm {
         key_mapper: Reference,
         value_mapper: Reference,
     ) -> Result<Option<Value>, VmError> {
-        let mut fields = std::collections::HashMap::new();
-        fields.insert("__mode".to_string(), Value::Int(7));
-        fields.insert("__array".to_string(), Value::Reference(key_mapper));
         let r = self.heap.lock().unwrap().allocate(HeapValue::Object {
             class_name: "__jvm_rs/NativeCollector".to_string(),
-            fields,
+            fields: vec![Value::Reference(key_mapper), Value::Int(7)],
         });
         Ok(Some(Value::Reference(r)))
     }

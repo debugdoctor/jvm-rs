@@ -186,31 +186,25 @@ pub(super) fn invoke_util(
         }
         ("java/util/Arrays", "stream", "([I)Ljava/util/stream/IntStream;") => {
             let array_ref = args[0].as_reference()?;
-            let mut fields = HashMap::new();
-            fields.insert("__array".to_string(), Value::Reference(array_ref));
             let r = vm.heap.lock().unwrap().allocate(HeapValue::Object {
                 class_name: "__jvm_rs/NativeIntStream".to_string(),
-                fields,
+                fields: vec![Value::Reference(array_ref)],
             });
             Ok(Some(Value::Reference(r)))
         }
         ("java/util/Arrays", "stream", "([J)Ljava/util/stream/LongStream;") => {
             let array_ref = args[0].as_reference()?;
-            let mut fields = HashMap::new();
-            fields.insert("__array".to_string(), Value::Reference(array_ref));
             let r = vm.heap.lock().unwrap().allocate(HeapValue::Object {
                 class_name: "__jvm_rs/NativeLongStream".to_string(),
-                fields,
+                fields: vec![Value::Reference(array_ref)],
             });
             Ok(Some(Value::Reference(r)))
         }
         ("java/util/Arrays", "stream", "([D)Ljava/util/stream/DoubleStream;") => {
             let array_ref = args[0].as_reference()?;
-            let mut fields = HashMap::new();
-            fields.insert("__array".to_string(), Value::Reference(array_ref));
             let r = vm.heap.lock().unwrap().allocate(HeapValue::Object {
                 class_name: "__jvm_rs/NativeDoubleStream".to_string(),
-                fields,
+                fields: vec![Value::Reference(array_ref)],
             });
             Ok(Some(Value::Reference(r)))
         }
@@ -360,11 +354,9 @@ pub(super) fn invoke_util(
                 let min_val = values.iter().min().copied();
                 match min_val {
                     Some(v) => {
-                        let mut fields = HashMap::new();
-                        fields.insert("value".to_string(), Value::Int(v));
                         let r = heap.allocate(HeapValue::Object {
                             class_name: "java/util/OptionalInt".to_string(),
-                            fields,
+                            fields: vec![Value::Int(v)],
                         });
                         Ok(Some(Value::Reference(r)))
                     }
@@ -382,11 +374,9 @@ pub(super) fn invoke_util(
                 let max_val = values.iter().max().copied();
                 match max_val {
                     Some(v) => {
-                        let mut fields = HashMap::new();
-                        fields.insert("value".to_string(), Value::Int(v));
                         let r = heap.allocate(HeapValue::Object {
                             class_name: "java/util/OptionalInt".to_string(),
-                            fields,
+                            fields: vec![Value::Int(v)],
                         });
                         Ok(Some(Value::Reference(r)))
                     }
@@ -406,11 +396,9 @@ pub(super) fn invoke_util(
                 }
                 let sum: i64 = values.iter().map(|v| *v as i64).sum();
                 let avg = sum as f64 / values.len() as f64;
-                let mut fields = HashMap::new();
-                fields.insert("value".to_string(), Value::Double(avg));
                 let r = heap.allocate(HeapValue::Object {
                     class_name: "java/util/OptionalDouble".to_string(),
-                    fields,
+                    fields: vec![Value::Double(avg)],
                 });
                 Ok(Some(Value::Reference(r)))
             } else {
@@ -430,11 +418,9 @@ pub(super) fn invoke_util(
                 let min_val = values.iter().min().copied();
                 match min_val {
                     Some(v) => {
-                        let mut fields = HashMap::new();
-                        fields.insert("value".to_string(), Value::Long(v));
                         let r = heap.allocate(HeapValue::Object {
                             class_name: "java/util/OptionalLong".to_string(),
-                            fields,
+                            fields: vec![Value::Long(v)],
                         });
                         Ok(Some(Value::Reference(r)))
                     }
@@ -452,11 +438,9 @@ pub(super) fn invoke_util(
                 let max_val = values.iter().max().copied();
                 match max_val {
                     Some(v) => {
-                        let mut fields = HashMap::new();
-                        fields.insert("value".to_string(), Value::Long(v));
                         let r = heap.allocate(HeapValue::Object {
                             class_name: "java/util/OptionalLong".to_string(),
-                            fields,
+                            fields: vec![Value::Long(v)],
                         });
                         Ok(Some(Value::Reference(r)))
                     }
@@ -476,11 +460,9 @@ pub(super) fn invoke_util(
                 }
                 let sum: i64 = values.iter().sum();
                 let avg = sum as f64 / values.len() as f64;
-                let mut fields = HashMap::new();
-                fields.insert("value".to_string(), Value::Double(avg));
                 let r = heap.allocate(HeapValue::Object {
                     class_name: "java/util/OptionalDouble".to_string(),
-                    fields,
+                    fields: vec![Value::Double(avg)],
                 });
                 Ok(Some(Value::Reference(r)))
             } else {
@@ -501,11 +483,9 @@ pub(super) fn invoke_util(
                     .min_by(|a, b| a.partial_cmp(b).unwrap());
                 match min_val {
                     Some(v) => {
-                        let mut fields = HashMap::new();
-                        fields.insert("value".to_string(), Value::Double(v));
                         let r = heap.allocate(HeapValue::Object {
                             class_name: "java/util/OptionalDouble".to_string(),
-                            fields,
+                            fields: vec![Value::Double(v)],
                         });
                         Ok(Some(Value::Reference(r)))
                     }
@@ -529,11 +509,9 @@ pub(super) fn invoke_util(
                     .max_by(|a, b| a.partial_cmp(b).unwrap());
                 match max_val {
                     Some(v) => {
-                        let mut fields = HashMap::new();
-                        fields.insert("value".to_string(), Value::Double(v));
                         let r = heap.allocate(HeapValue::Object {
                             class_name: "java/util/OptionalDouble".to_string(),
-                            fields,
+                            fields: vec![Value::Double(v)],
                         });
                         Ok(Some(Value::Reference(r)))
                     }
@@ -568,18 +546,16 @@ pub(super) fn invoke_util(
         }
         ("java/util/Optional", "of", "(Ljava/lang/Object;)Ljava/util/Optional;") => {
             let value_ref = args[0].as_reference()?;
-            let mut fields = HashMap::new();
-            fields.insert("value".to_string(), Value::Reference(value_ref));
             let r = vm.heap.lock().unwrap().allocate(HeapValue::Object {
                 class_name: "java/util/Optional".to_string(),
-                fields,
+                fields: vec![Value::Reference(value_ref)],
             });
             Ok(Some(Value::Reference(r)))
         }
         ("java/util/Optional", "isPresent", "()Z") | ("java/util/Optional", "isEmpty", "()Z") => {
             let opt_ref = args[0].as_reference()?;
             let is_empty = match vm.heap.lock().unwrap().get(opt_ref)? {
-                HeapValue::Object { fields, .. } => match fields.get("value") {
+                HeapValue::Object { fields, .. } => match fields.get(0) {
                     Some(Value::Reference(Reference::Null)) => true,
                     None => true,
                     _ => false,
@@ -596,7 +572,7 @@ pub(super) fn invoke_util(
         ("java/util/Optional", "get", "()Ljava/lang/Object;") => {
             let opt_ref = args[0].as_reference()?;
             match vm.heap.lock().unwrap().get(opt_ref)? {
-                HeapValue::Object { fields, .. } => match fields.get("value") {
+                HeapValue::Object { fields, .. } => match fields.get(0) {
                     Some(Value::Reference(r)) if *r != Reference::Null => {
                         Ok(Some(Value::Reference(*r)))
                     }
@@ -613,7 +589,7 @@ pub(super) fn invoke_util(
             let opt_ref = args[0].as_reference()?;
             let fallback = args[1].as_reference()?;
             let value = match vm.heap.lock().unwrap().get(opt_ref)? {
-                HeapValue::Object { fields, .. } => match fields.get("value") {
+                HeapValue::Object { fields, .. } => match fields.get(0) {
                     Some(Value::Reference(r)) if *r != Reference::Null => *r,
                     _ => fallback,
                 },
@@ -627,7 +603,7 @@ pub(super) fn invoke_util(
                 return Ok(Some(Value::Int(0)));
             }
             match vm.heap.lock().unwrap().get(opt_ref)? {
-                HeapValue::Object { fields, .. } => match fields.get("value") {
+                HeapValue::Object { fields, .. } => match fields.get(0) {
                     Some(Value::Int(_)) => Ok(Some(Value::Int(1))),
                     _ => Ok(Some(Value::Int(0))),
                 },
@@ -642,7 +618,7 @@ pub(super) fn invoke_util(
                 });
             }
             match vm.heap.lock().unwrap().get(opt_ref)? {
-                HeapValue::Object { fields, .. } => match fields.get("value") {
+                HeapValue::Object { fields, .. } => match fields.get(0) {
                     Some(Value::Int(v)) => Ok(Some(Value::Int(*v))),
                     _ => Err(VmError::UnhandledException {
                         class_name: "java/util/NoSuchElementException".to_string(),
@@ -660,7 +636,7 @@ pub(super) fn invoke_util(
                 return Ok(Some(Value::Int(fallback)));
             }
             match vm.heap.lock().unwrap().get(opt_ref)? {
-                HeapValue::Object { fields, .. } => match fields.get("value") {
+                HeapValue::Object { fields, .. } => match fields.get(0) {
                     Some(Value::Int(v)) => Ok(Some(Value::Int(*v))),
                     _ => Ok(Some(Value::Int(fallback))),
                 },
@@ -673,7 +649,7 @@ pub(super) fn invoke_util(
                 return Ok(Some(Value::Int(0)));
             }
             match vm.heap.lock().unwrap().get(opt_ref)? {
-                HeapValue::Object { fields, .. } => match fields.get("value") {
+                HeapValue::Object { fields, .. } => match fields.get(0) {
                     Some(Value::Long(_)) => Ok(Some(Value::Int(1))),
                     _ => Ok(Some(Value::Int(0))),
                 },
@@ -688,7 +664,7 @@ pub(super) fn invoke_util(
                 });
             }
             match vm.heap.lock().unwrap().get(opt_ref)? {
-                HeapValue::Object { fields, .. } => match fields.get("value") {
+                HeapValue::Object { fields, .. } => match fields.get(0) {
                     Some(Value::Long(v)) => Ok(Some(Value::Long(*v))),
                     _ => Err(VmError::UnhandledException {
                         class_name: "java/util/NoSuchElementException".to_string(),
@@ -706,7 +682,7 @@ pub(super) fn invoke_util(
                 return Ok(Some(Value::Long(fallback)));
             }
             match vm.heap.lock().unwrap().get(opt_ref)? {
-                HeapValue::Object { fields, .. } => match fields.get("value") {
+                HeapValue::Object { fields, .. } => match fields.get(0) {
                     Some(Value::Long(v)) => Ok(Some(Value::Long(*v))),
                     _ => Ok(Some(Value::Long(fallback))),
                 },
@@ -719,7 +695,7 @@ pub(super) fn invoke_util(
                 return Ok(Some(Value::Int(0)));
             }
             match vm.heap.lock().unwrap().get(opt_ref)? {
-                HeapValue::Object { fields, .. } => match fields.get("value") {
+                HeapValue::Object { fields, .. } => match fields.get(0) {
                     Some(Value::Double(_)) => Ok(Some(Value::Int(1))),
                     _ => Ok(Some(Value::Int(0))),
                 },
@@ -734,7 +710,7 @@ pub(super) fn invoke_util(
                 });
             }
             match vm.heap.lock().unwrap().get(opt_ref)? {
-                HeapValue::Object { fields, .. } => match fields.get("value") {
+                HeapValue::Object { fields, .. } => match fields.get(0) {
                     Some(Value::Double(v)) => Ok(Some(Value::Double(*v))),
                     _ => Err(VmError::UnhandledException {
                         class_name: "java/util/NoSuchElementException".to_string(),
@@ -752,7 +728,7 @@ pub(super) fn invoke_util(
                 return Ok(Some(Value::Double(fallback)));
             }
             match vm.heap.lock().unwrap().get(opt_ref)? {
-                HeapValue::Object { fields, .. } => match fields.get("value") {
+                HeapValue::Object { fields, .. } => match fields.get(0) {
                     Some(Value::Double(v)) => Ok(Some(Value::Double(*v))),
                     _ => Ok(Some(Value::Double(fallback))),
                 },

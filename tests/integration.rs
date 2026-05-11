@@ -133,6 +133,131 @@ public class Concat {
 }
 
 #[test]
+fn nio_paths_and_files_do_real_io() {
+    let (_, output) = compile_and_run_with_javac_args(
+        "nio_paths_and_files_do_real_io",
+        &["--release", "17"],
+        &[(
+            "demo/NioIo.java",
+            r#"
+package demo;
+
+import java.io.File;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+
+public class NioIo {
+    public static void main(String[] args) throws Exception {
+        Path dir = Paths.get("target", ".", "tmp", "..", "tmp", "jvm-rs-nio");
+        Path normalized = dir.normalize();
+        System.out.println(normalized.toString());
+        System.out.println(normalized.getFileName().toString());
+        System.out.println(normalized.getNameCount() >= 2);
+
+        File dirFile = new File(normalized.toString());
+        dirFile.mkdir();
+
+        Path file = normalized.resolve("note.txt");
+        Files.writeString(file, "hello file io");
+        System.out.println(Files.exists(file));
+        System.out.println(Files.isRegularFile(file));
+        System.out.println(Files.readString(file));
+        System.out.println(Files.size(file));
+
+        File javaFile = new File(file.toString());
+        System.out.println(javaFile.exists());
+        System.out.println(javaFile.isFile());
+        System.out.println(javaFile.getName());
+        System.out.println(javaFile.getParent().endsWith("jvm-rs-nio"));
+        System.out.println(dirFile.list().length);
+        System.out.println(dirFile.listFiles()[0].getName());
+
+        Files.delete(file);
+        dirFile.delete();
+    }
+}
+"#,
+        )],
+    );
+    assert_eq!(
+        output,
+        vec![
+            "target/tmp/jvm-rs-nio",
+            "jvm-rs-nio",
+            "true",
+            "true",
+            "true",
+            "hello file io",
+            "13",
+            "true",
+            "true",
+            "note.txt",
+            "true",
+            "1",
+            "note.txt",
+        ]
+    );
+}
+
+#[test]
+fn nio_file_exceptions_are_catchable() {
+    let (_, output) = compile_and_run_with_javac_args(
+        "nio_file_exceptions_are_catchable",
+        &["--release", "17"],
+        &[(
+            "demo/NioErrors.java",
+            r#"
+package demo;
+
+import java.nio.file.DirectoryNotEmptyException;
+import java.nio.file.FileAlreadyExistsException;
+import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.io.File;
+
+public class NioErrors {
+    public static void main(String[] args) throws Exception {
+        Path dir = Paths.get("target", "jvm-rs-nio-errors");
+        Path file = dir.resolve("data.txt");
+
+        new File(dir.toString()).mkdir();
+        Files.writeString(file, "x");
+
+        try {
+            Files.writeString(file, "y", java.nio.file.StandardOpenOption.CREATE_NEW);
+        } catch (FileAlreadyExistsException e) {
+            System.out.println("already-exists");
+        }
+
+        try {
+            Files.delete(dir);
+        } catch (DirectoryNotEmptyException e) {
+            System.out.println("dir-not-empty");
+        }
+
+        Files.delete(file);
+        Files.delete(dir);
+
+        try {
+            Files.readString(file);
+        } catch (NoSuchFileException e) {
+            System.out.println("missing-file");
+        }
+    }
+}
+"#,
+        )],
+    );
+    assert_eq!(
+        output,
+        vec!["already-exists", "dir-not-empty", "missing-file"]
+    );
+}
+
+#[test]
 fn polymorphism() {
     let (_, output) = compile_and_run(
         "polymorphism",
@@ -2567,7 +2692,10 @@ public class CliProcessor {
         )],
     );
     assert_eq!(result, ExecutionResult::Void);
-    assert_eq!(output, vec!["31", "third line | second line | first line", "0"]);
+    assert_eq!(
+        output,
+        vec!["31", "third line | second line | first line", "0"]
+    );
 }
 
 #[test]

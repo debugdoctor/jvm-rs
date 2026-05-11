@@ -2,6 +2,10 @@ use std::collections::HashMap;
 
 use crate::vm::{ClassMethod, RuntimeClass, Value, Vm};
 
+fn build_field_offsets(fields: &[(String, String)]) -> HashMap<String, usize> {
+    fields.iter().enumerate().map(|(i, (name, _))| (name.clone(), i)).collect()
+}
+
 pub(super) fn bootstrap_java_time(vm: &mut Vm) {
     let mut instant_methods = HashMap::new();
     for (name, desc) in [
@@ -35,6 +39,10 @@ pub(super) fn bootstrap_java_time(vm: &mut Vm) {
             ("__epoch_second".to_string(), "J".to_string()),
             ("__nano".to_string(), "I".to_string()),
         ],
+        field_offsets: build_field_offsets(&vec![
+            ("__epoch_second".to_string(), "J".to_string()),
+            ("__nano".to_string(), "I".to_string()),
+        ]),
         interfaces: vec![],
     });
 
@@ -68,6 +76,10 @@ pub(super) fn bootstrap_java_time(vm: &mut Vm) {
             ("__seconds".to_string(), "J".to_string()),
             ("__nano".to_string(), "I".to_string()),
         ],
+        field_offsets: build_field_offsets(&vec![
+            ("__seconds".to_string(), "J".to_string()),
+            ("__nano".to_string(), "I".to_string()),
+        ]),
         interfaces: vec![],
     });
 
@@ -102,6 +114,11 @@ pub(super) fn bootstrap_java_time(vm: &mut Vm) {
             ("__month".to_string(), "I".to_string()),
             ("__day".to_string(), "I".to_string()),
         ],
+        field_offsets: build_field_offsets(&vec![
+            ("__year".to_string(), "I".to_string()),
+            ("__month".to_string(), "I".to_string()),
+            ("__day".to_string(), "I".to_string()),
+        ]),
         interfaces: vec![],
     });
 
@@ -143,6 +160,15 @@ pub(super) fn bootstrap_java_time(vm: &mut Vm) {
             ("__second".to_string(), "I".to_string()),
             ("__nano".to_string(), "I".to_string()),
         ],
+        field_offsets: build_field_offsets(&vec![
+            ("__year".to_string(), "I".to_string()),
+            ("__month".to_string(), "I".to_string()),
+            ("__day".to_string(), "I".to_string()),
+            ("__hour".to_string(), "I".to_string()),
+            ("__minute".to_string(), "I".to_string()),
+            ("__second".to_string(), "I".to_string()),
+            ("__nano".to_string(), "I".to_string()),
+        ]),
         interfaces: vec![],
     });
 
@@ -176,6 +202,12 @@ pub(super) fn bootstrap_java_time(vm: &mut Vm) {
             ("__second".to_string(), "I".to_string()),
             ("__nano".to_string(), "I".to_string()),
         ],
+        field_offsets: build_field_offsets(&vec![
+            ("__hour".to_string(), "I".to_string()),
+            ("__minute".to_string(), "I".to_string()),
+            ("__second".to_string(), "I".to_string()),
+            ("__nano".to_string(), "I".to_string()),
+        ]),
         interfaces: vec![],
     });
 
@@ -193,8 +225,7 @@ pub(super) fn bootstrap_java_time(vm: &mut Vm) {
         ("SATURDAY", 6),
         ("SUNDAY", 7),
     ] {
-        let mut fields = std::collections::HashMap::new();
-        fields.insert("__value".to_string(), Value::Int(val));
+        let fields = vec![Value::Int(val)];
         let r = vm
             .heap
             .lock()
@@ -211,6 +242,7 @@ pub(super) fn bootstrap_java_time(vm: &mut Vm) {
         methods: dayofweek_methods,
         static_fields: dayofweek_static,
         instance_fields: vec![("__value".to_string(), "I".to_string())],
+        field_offsets: build_field_offsets(&vec![("__value".to_string(), "I".to_string())]),
         interfaces: vec![],
     });
 
@@ -251,6 +283,16 @@ pub(super) fn bootstrap_java_time(vm: &mut Vm) {
             ("__nano".to_string(), "I".to_string()),
             ("__zone_id".to_string(), "Ljava/lang/String;".to_string()),
         ],
+        field_offsets: build_field_offsets(&vec![
+            ("__year".to_string(), "I".to_string()),
+            ("__month".to_string(), "I".to_string()),
+            ("__day".to_string(), "I".to_string()),
+            ("__hour".to_string(), "I".to_string()),
+            ("__minute".to_string(), "I".to_string()),
+            ("__second".to_string(), "I".to_string()),
+            ("__nano".to_string(), "I".to_string()),
+            ("__zone_id".to_string(), "Ljava/lang/String;".to_string()),
+        ]),
         interfaces: vec![],
     });
 
@@ -265,8 +307,7 @@ pub(super) fn bootstrap_java_time(vm: &mut Vm) {
     }
     let mut zoneid_static = HashMap::new();
     let utc_zone = {
-        let mut fields = std::collections::HashMap::new();
-        fields.insert("__id".to_string(), vm.new_string("UTC".to_string()));
+        let fields = vec![vm.new_string("UTC".to_string())];
         let r = vm
             .heap
             .lock()
@@ -284,6 +325,7 @@ pub(super) fn bootstrap_java_time(vm: &mut Vm) {
         methods: zoneid_methods,
         static_fields: zoneid_static,
         instance_fields: vec![("__id".to_string(), "Ljava/lang/String;".to_string())],
+        field_offsets: build_field_offsets(&vec![("__id".to_string(), "Ljava/lang/String;".to_string())]),
         interfaces: vec![],
     });
 
@@ -302,15 +344,14 @@ pub(super) fn bootstrap_java_time(vm: &mut Vm) {
         super_class: Some("java/lang/Object".to_string()),
         methods: clock_methods,
         static_fields: HashMap::new(),
-        instance_fields: vec![
+instance_fields: vec![
             ("__millis".to_string(), "J".to_string()),
             ("__zone_id".to_string(), "Ljava/lang/String;".to_string()),
         ],
+        field_offsets: build_field_offsets(&vec![
+            ("__millis".to_string(), "J".to_string()),
+            ("__zone_id".to_string(), "Ljava/lang/String;".to_string()),
+        ]),
         interfaces: vec![],
     });
-
-    let mut zoneddatetime_methods = HashMap::new();
-    for (name, desc) in [("now", "()Ljava/time/ZonedDateTime;")] {
-        zoneddatetime_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
-    }
 }

@@ -1,7 +1,46 @@
 use std::collections::HashMap;
+use std::fs;
+use std::path::PathBuf;
+
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 use crate::vm::types::stub_return_value_tracked;
 use crate::vm::{ClassMethod, HeapValue, Reference, RuntimeClass, Value, Vm, VmError};
+
+fn file_path_string(vm: &Vm, file_ref: Reference) -> Result<Option<String>, VmError> {
+    let heap = vm.heap.lock().unwrap();
+    match heap.get(file_ref)? {
+        HeapValue::Object { fields, .. } => {
+            let path_ref = fields.get(0).and_then(|value| match value {
+                Value::Reference(reference) => Some(*reference),
+                _ => None,
+            });
+            match path_ref {
+                Some(Reference::Null) | None => Ok(None),
+                Some(path_ref) => match heap.get(path_ref)? {
+                    HeapValue::String(path) => Ok(Some(path.clone())),
+                    value => Err(VmError::InvalidHeapValue {
+                        expected: "string",
+                        actual: value.kind_name(),
+                    }),
+                },
+            }
+        }
+        value => Err(VmError::InvalidHeapValue {
+            expected: "object",
+            actual: value.kind_name(),
+        }),
+    }
+}
+
+fn new_file_object(vm: &mut Vm, path: impl Into<String>) -> Reference {
+    let path_ref = vm.new_string(path.into());
+    vm.heap.lock().unwrap().allocate(HeapValue::Object {
+        class_name: "java/io/File".to_string(),
+        fields: vec![path_ref],
+    })
+}
 
 pub(super) fn invoke_io(
     vm: &mut Vm,
@@ -230,7 +269,11 @@ pub(super) fn invoke_lang(
                 Reference::Null => 0,
                 _ => {
                     if let Ok(b) = crate::vm::builtin::helpers::stringify_reference(vm, b_ref) {
-                        if a == b { 1 } else { 0 }
+                        if a == b {
+                            1
+                        } else {
+                            0
+                        }
                     } else {
                         0
                     }
@@ -433,7 +476,7 @@ pub(super) fn invoke_lang(
             let obj_ref = args[0].as_reference()?;
             match vm.heap.lock().unwrap().get(obj_ref)? {
                 HeapValue::Object { fields, .. } => {
-                    let value = fields.get("value").copied().unwrap_or(Value::Int(0));
+                    let value = fields.get(0).copied().unwrap_or(Value::Int(0));
                     Ok(Some(value))
                 }
                 _ => Ok(Some(Value::Int(0))),
@@ -441,11 +484,9 @@ pub(super) fn invoke_lang(
         }
         ("java/lang/Integer", "valueOf", "(I)Ljava/lang/Integer;") => {
             let value = args[0].as_int()?;
-            let mut fields = HashMap::new();
-            fields.insert("value".to_string(), Value::Int(value));
             let reference = vm.heap.lock().unwrap().allocate(HeapValue::Object {
                 class_name: "java/lang/Integer".to_string(),
-                fields,
+                fields: vec![Value::Int(value)],
             });
             Ok(Some(Value::Reference(reference)))
         }
@@ -515,7 +556,7 @@ pub(super) fn invoke_lang(
             let obj_ref = args[0].as_reference()?;
             let value = args[1].as_int()?;
             if let Ok(HeapValue::Object { fields, .. }) = vm.heap.lock().unwrap().get_mut(obj_ref) {
-                fields.insert("value".to_string(), Value::Int(value));
+                fields[0] = Value::Int(value);
             }
             Ok(None)
         }
@@ -523,7 +564,7 @@ pub(super) fn invoke_lang(
             let obj_ref = args[0].as_reference()?;
             let value = args[1].as_long()?;
             if let Ok(HeapValue::Object { fields, .. }) = vm.heap.lock().unwrap().get_mut(obj_ref) {
-                fields.insert("value".to_string(), Value::Long(value));
+                fields[0] = Value::Long(value);
             }
             Ok(None)
         }
@@ -531,18 +572,16 @@ pub(super) fn invoke_lang(
             let obj_ref = args[0].as_reference()?;
             match vm.heap.lock().unwrap().get(obj_ref)? {
                 HeapValue::Object { fields, .. } => {
-                    Ok(Some(fields.get("value").copied().unwrap_or(Value::Long(0))))
+                    Ok(Some(fields.get(0).copied().unwrap_or(Value::Long(0))))
                 }
                 _ => Ok(Some(Value::Long(0))),
             }
         }
         ("java/lang/Long", "valueOf", "(J)Ljava/lang/Long;") => {
             let value = args[0].as_long()?;
-            let mut fields = HashMap::new();
-            fields.insert("value".to_string(), Value::Long(value));
             let reference = vm.heap.lock().unwrap().allocate(HeapValue::Object {
                 class_name: "java/lang/Long".to_string(),
-                fields,
+                fields: vec![Value::Long(value)],
             });
             Ok(Some(Value::Reference(reference)))
         }
@@ -618,11 +657,9 @@ pub(super) fn invoke_lang(
         }
         ("java/lang/Boolean", "valueOf", "(Z)Ljava/lang/Boolean;") => {
             let value = args[0].as_int()?;
-            let mut fields = HashMap::new();
-            fields.insert("value".to_string(), Value::Int(value));
             let reference = vm.heap.lock().unwrap().allocate(HeapValue::Object {
                 class_name: "java/lang/Boolean".to_string(),
-                fields,
+                fields: vec![Value::Int(value)],
             });
             Ok(Some(Value::Reference(reference)))
         }
@@ -630,7 +667,7 @@ pub(super) fn invoke_lang(
             let obj_ref = args[0].as_reference()?;
             match vm.heap.lock().unwrap().get(obj_ref)? {
                 HeapValue::Object { fields, .. } => {
-                    Ok(Some(fields.get("value").copied().unwrap_or(Value::Int(0))))
+                    Ok(Some(fields.get(0).copied().unwrap_or(Value::Int(0))))
                 }
                 _ => Ok(Some(Value::Int(0))),
             }
@@ -919,7 +956,7 @@ pub(super) fn invoke_lang(
             }
             let reference = vm.heap.lock().unwrap().allocate(HeapValue::Object {
                 class_name: "java/lang/Thread".to_string(),
-                fields: std::collections::HashMap::new(),
+                fields: vec![],
             });
             vm.runtime
                 .lock()
@@ -1080,8 +1117,8 @@ pub(super) fn invoke_lang(
             {
                 let mut heap = vm.heap.lock().unwrap();
                 if let HeapValue::Object { fields, .. } = heap.get_mut(obj_ref)? {
-                    fields.insert("buf".to_string(), Value::Reference(buf));
-                    fields.insert("count".to_string(), Value::Int(0));
+                    fields[0] = Value::Reference(buf);
+                    fields[1] = Value::Int(0);
                 }
             }
             Ok(None)
@@ -1093,14 +1130,14 @@ pub(super) fn invoke_lang(
                 let heap = vm.heap.lock().unwrap();
                 match heap.get(obj_ref)? {
                     HeapValue::Object { fields, .. } => {
-                        let buf_ref = fields.get("buf").and_then(|v| match v {
-                            Value::Reference(r) => Some(*r),
+                        let buf_ref = match fields.get(0) {
+                            Some(Value::Reference(r)) => Some(*r),
                             _ => None,
-                        });
-                        let count = fields.get("count").and_then(|v| match v {
-                            Value::Int(i) => Some(*i),
+                        };
+                        let count = match fields.get(1) {
+                            Some(Value::Int(i)) => Some(*i),
                             _ => None,
-                        });
+                        };
                         (buf_ref, count)
                     }
                     _ => (None, None),
@@ -1116,7 +1153,7 @@ pub(super) fn invoke_lang(
                     }
                     drop(values);
                     if let Ok(HeapValue::Object { fields, .. }) = heap.get_mut(obj_ref) {
-                        fields.insert("count".to_string(), Value::Int(current_count + 1));
+                        fields[1] = Value::Int(current_count + 1);
                     }
                 }
             }
@@ -1145,14 +1182,14 @@ pub(super) fn invoke_lang(
                 let heap = vm.heap.lock().unwrap();
                 match heap.get(obj_ref)? {
                     HeapValue::Object { fields, .. } => {
-                        let target_buf = fields.get("buf").and_then(|v| match v {
-                            Value::Reference(r) => Some(*r),
+                        let target_buf = match fields.get(0) {
+                            Some(Value::Reference(r)) => Some(*r),
                             _ => None,
-                        });
-                        let count = fields.get("count").and_then(|v| match v {
-                            Value::Int(i) => Some(*i),
+                        };
+                        let count = match fields.get(1) {
+                            Some(Value::Int(i)) => Some(*i),
                             _ => None,
-                        });
+                        };
                         (target_buf, count)
                     }
                     _ => (None, None),
@@ -1169,7 +1206,7 @@ pub(super) fn invoke_lang(
                     }
                     drop(target);
                     if let Ok(HeapValue::Object { fields, .. }) = heap.get_mut(obj_ref) {
-                        fields.insert("count".to_string(), Value::Int(current_count + len));
+                        fields[1] = Value::Int(current_count + len);
                     }
                 }
             }
@@ -1181,14 +1218,14 @@ pub(super) fn invoke_lang(
                 let heap = vm.heap.lock().unwrap();
                 match heap.get(obj_ref)? {
                     HeapValue::Object { fields, .. } => {
-                        let buf_ref = fields.get("buf").and_then(|v| match v {
-                            Value::Reference(r) => Some(*r),
+                        let buf_ref = match fields.get(0) {
+                            Some(Value::Reference(r)) => Some(*r),
                             _ => None,
-                        });
-                        let count = fields.get("count").and_then(|v| match v {
-                            Value::Int(i) => Some(*i),
+                        };
+                        let count = match fields.get(1) {
+                            Some(Value::Int(i)) => Some(*i),
                             _ => None,
-                        });
+                        };
                         (buf_ref, count)
                     }
                     _ => (None, None),
@@ -1217,14 +1254,14 @@ pub(super) fn invoke_lang(
                 let heap = vm.heap.lock().unwrap();
                 match heap.get(obj_ref)? {
                     HeapValue::Object { fields, .. } => {
-                        let buf_ref = fields.get("buf").and_then(|v| match v {
-                            Value::Reference(r) => Some(*r),
+                        let buf_ref = match fields.get(0) {
+                            Some(Value::Reference(r)) => Some(*r),
                             _ => None,
-                        });
-                        let count = fields.get("count").and_then(|v| match v {
-                            Value::Int(i) => Some(*i),
+                        };
+                        let count = match fields.get(1) {
+                            Some(Value::Int(i)) => Some(*i),
                             _ => None,
-                        });
+                        };
                         (buf_ref, count)
                     }
                     _ => (None, None),
@@ -1255,10 +1292,10 @@ pub(super) fn invoke_lang(
             let count = {
                 let heap = vm.heap.lock().unwrap();
                 match heap.get(obj_ref)? {
-                    HeapValue::Object { fields, .. } => fields.get("count").and_then(|v| match v {
-                        Value::Int(i) => Some(*i),
+                    HeapValue::Object { fields, .. } => match fields.get(1) {
+                        Some(Value::Int(i)) => Some(*i),
                         _ => None,
-                    }),
+                    },
                     _ => None,
                 }
             };
@@ -1268,7 +1305,7 @@ pub(super) fn invoke_lang(
             let obj_ref = args[0].as_reference()?;
             let mut heap = vm.heap.lock().unwrap();
             if let HeapValue::Object { fields, .. } = heap.get_mut(obj_ref)? {
-                fields.insert("count".to_string(), Value::Int(0));
+                fields[1] = Value::Int(0);
             }
             Ok(None)
         }
@@ -1459,29 +1496,67 @@ pub(super) fn invoke_lang(
         ("java/io/OutputStreamWriter", "write", "(Ljava/lang/String;II)V") => Ok(None),
         ("java/io/OutputStreamWriter", "flush", "()V") => Ok(None),
         ("java/io/OutputStreamWriter", "close", "()V") => Ok(None),
-        // --- File stubs ---
+        // --- File ---
         ("java/io/File", "<init>", "(Ljava/lang/String;)V") => {
             let obj_ref = args[0].as_reference()?;
             let path_str = args[1].as_reference()?;
             if let Ok(HeapValue::Object { fields, .. }) = vm.heap.lock().unwrap().get_mut(obj_ref) {
-                fields.insert("path".to_string(), Value::Reference(path_str));
+                fields[0] = Value::Reference(path_str);
             }
             Ok(None)
         }
-        ("java/io/File", "exists", "()Z") => Ok(Some(Value::Int(0))),
-        ("java/io/File", "isFile", "()Z") => Ok(Some(Value::Int(0))),
-        ("java/io/File", "isDirectory", "()Z") => Ok(Some(Value::Int(0))),
-        ("java/io/File", "isHidden", "()Z") => Ok(Some(Value::Int(0))),
-        ("java/io/File", "length", "()J") => Ok(Some(Value::Long(0))),
+        ("java/io/File", "exists", "()Z") => {
+            let path = file_path_string(vm, args[0].as_reference()?)?;
+            Ok(Some(Value::Int(
+                path.map(|path| PathBuf::from(path).exists() as i32)
+                    .unwrap_or(0),
+            )))
+        }
+        ("java/io/File", "isFile", "()Z") => {
+            let path = file_path_string(vm, args[0].as_reference()?)?;
+            Ok(Some(Value::Int(
+                path.map(|path| PathBuf::from(path).is_file() as i32)
+                    .unwrap_or(0),
+            )))
+        }
+        ("java/io/File", "isDirectory", "()Z") => {
+            let path = file_path_string(vm, args[0].as_reference()?)?;
+            Ok(Some(Value::Int(
+                path.map(|path| PathBuf::from(path).is_dir() as i32)
+                    .unwrap_or(0),
+            )))
+        }
+        ("java/io/File", "isHidden", "()Z") => {
+            let path = file_path_string(vm, args[0].as_reference()?)?;
+            let hidden = path
+                .and_then(|path| {
+                    PathBuf::from(path)
+                        .file_name()
+                        .map(|name| name.to_string_lossy().starts_with('.'))
+                })
+                .unwrap_or(false);
+            Ok(Some(Value::Int(hidden as i32)))
+        }
+        ("java/io/File", "length", "()J") => {
+            let path = file_path_string(vm, args[0].as_reference()?)?;
+            let length = path
+                .and_then(|path| {
+                    fs::metadata(path)
+                        .ok()
+                        .map(|metadata| metadata.len() as i64)
+                })
+                .unwrap_or(0);
+            Ok(Some(Value::Long(length)))
+        }
         ("java/io/File", "getPath", "()Ljava/lang/String;") => {
             let obj_ref = args[0].as_reference()?;
             let path_ref = {
                 let heap = vm.heap.lock().unwrap();
                 match heap.get(obj_ref)? {
-                    HeapValue::Object { fields, .. } => fields.get("path").and_then(|v| match v {
-                        Value::Reference(r) => Some(*r),
+                    HeapValue::Object { fields, .. } => match fields.get(0) {
+                        Some(Value::Reference(r)) => Some(*r),
                         _ => None,
-                    }),
+                    },
                     _ => None,
                 }
             };
@@ -1493,46 +1568,141 @@ pub(super) fn invoke_lang(
         }
         ("java/io/File", "getName", "()Ljava/lang/String;") => {
             let obj_ref = args[0].as_reference()?;
-            let name = {
-                let heap = vm.heap.lock().unwrap();
-                match heap.get(obj_ref)? {
-                    HeapValue::Object { fields, .. } => {
-                        let path_ref = fields.get("path").and_then(|v| match v {
-                            Value::Reference(r) => Some(*r),
-                            _ => None,
-                        });
-                        if let Some(path_ref) = path_ref {
-                            if let HeapValue::String(s) = heap.get(path_ref)? {
-                                Some(s.clone())
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
-                    }
-                    _ => None,
-                }
-            };
+            let name = file_path_string(vm, obj_ref)?;
             let name = name
-                .and_then(|s| s.rsplit('/').next().map(|s| s.to_string()))
+                .and_then(|path| {
+                    PathBuf::from(path)
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                })
                 .unwrap_or_default();
             Ok(Some(vm.new_string(name)))
         }
         ("java/io/File", "getParent", "()Ljava/lang/String;") => {
-            Ok(Some(Value::Reference(Reference::Null)))
+            let obj_ref = args[0].as_reference()?;
+            let parent = file_path_string(vm, obj_ref)?
+                .and_then(|path| {
+                    PathBuf::from(path)
+                        .parent()
+                        .filter(|parent| !parent.as_os_str().is_empty())
+                        .map(|parent| parent.to_string_lossy().into_owned())
+                })
+                .map(|parent| vm.new_string(parent))
+                .unwrap_or(Value::Reference(Reference::Null));
+            Ok(Some(parent))
         }
-        ("java/io/File", "canRead", "()Z") => Ok(Some(Value::Int(0))),
-        ("java/io/File", "canWrite", "()Z") => Ok(Some(Value::Int(0))),
-        ("java/io/File", "canExecute", "()Z") => Ok(Some(Value::Int(0))),
-        ("java/io/File", "mkdir", "()Z") => Ok(Some(Value::Int(0))),
-        ("java/io/File", "createNewFile", "()Z") => Ok(Some(Value::Int(0))),
-        ("java/io/File", "delete", "()Z") => Ok(Some(Value::Int(0))),
+        ("java/io/File", "canRead", "()Z") => {
+            let path = file_path_string(vm, args[0].as_reference()?)?;
+            let can_read = path.and_then(|path| fs::metadata(path).ok()).is_some();
+            Ok(Some(Value::Int(can_read as i32)))
+        }
+        ("java/io/File", "canWrite", "()Z") => {
+            let path = file_path_string(vm, args[0].as_reference()?)?;
+            let can_write = path
+                .and_then(|path| fs::metadata(path).ok())
+                .map(|metadata| !metadata.permissions().readonly())
+                .unwrap_or(false);
+            Ok(Some(Value::Int(can_write as i32)))
+        }
+        ("java/io/File", "canExecute", "()Z") => {
+            let path = file_path_string(vm, args[0].as_reference()?)?;
+            #[cfg(unix)]
+            let can_execute = path
+                .and_then(|path| fs::metadata(path).ok())
+                .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
+                .unwrap_or(false);
+            #[cfg(not(unix))]
+            let can_execute = false;
+            Ok(Some(Value::Int(can_execute as i32)))
+        }
+        ("java/io/File", "mkdir", "()Z") => {
+            let path = file_path_string(vm, args[0].as_reference()?)?;
+            let created = path
+                .map(|path| fs::create_dir(PathBuf::from(path)).is_ok() as i32)
+                .unwrap_or(0);
+            Ok(Some(Value::Int(created)))
+        }
+        ("java/io/File", "createNewFile", "()Z") => {
+            let path = file_path_string(vm, args[0].as_reference()?)?;
+            let Some(path) = path else {
+                return Ok(Some(Value::Int(0)));
+            };
+            let result = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(PathBuf::from(path));
+            match result {
+                Ok(_) => Ok(Some(Value::Int(1))),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    Ok(Some(Value::Int(0)))
+                }
+                Err(_) => Err(VmError::UnhandledException {
+                    class_name: "java/io/IOException".to_string(),
+                }),
+            }
+        }
+        ("java/io/File", "delete", "()Z") => {
+            let path = file_path_string(vm, args[0].as_reference()?)?;
+            let deleted = match path {
+                Some(path) => {
+                    let path = PathBuf::from(path);
+                    match fs::metadata(&path) {
+                        Ok(metadata) if metadata.is_dir() => fs::remove_dir(&path).is_ok(),
+                        Ok(_) => fs::remove_file(&path).is_ok(),
+                        Err(_) => false,
+                    }
+                }
+                None => false,
+            };
+            Ok(Some(Value::Int(deleted as i32)))
+        }
         ("java/io/File", "list", "()[Ljava/lang/String;") => {
-            Ok(Some(Value::Reference(Reference::Null)))
+            let path = file_path_string(vm, args[0].as_reference()?)?;
+            let Some(path) = path else {
+                return Ok(Some(Value::Reference(Reference::Null)));
+            };
+            let entries = match fs::read_dir(PathBuf::from(path)) {
+                Ok(entries) => entries,
+                Err(_) => return Ok(Some(Value::Reference(Reference::Null))),
+            };
+            let mut names = Vec::new();
+            for entry in entries.flatten() {
+                if let Some(name) = entry.file_name().to_str() {
+                    names.push(match vm.new_string(name.to_string()) {
+                        Value::Reference(reference) => reference,
+                        _ => Reference::Null,
+                    });
+                }
+            }
+            let array = vm
+                .heap
+                .lock()
+                .unwrap()
+                .allocate_reference_array("java/lang/String", names);
+            Ok(Some(Value::Reference(array)))
         }
         ("java/io/File", "listFiles", "()[Ljava/io/File;") => {
-            Ok(Some(Value::Reference(Reference::Null)))
+            let path = file_path_string(vm, args[0].as_reference()?)?;
+            let Some(path) = path else {
+                return Ok(Some(Value::Reference(Reference::Null)));
+            };
+            let entries = match fs::read_dir(PathBuf::from(&path)) {
+                Ok(entries) => entries,
+                Err(_) => return Ok(Some(Value::Reference(Reference::Null))),
+            };
+            let mut files = Vec::new();
+            for entry in entries.flatten() {
+                files.push(new_file_object(
+                    vm,
+                    entry.path().to_string_lossy().into_owned(),
+                ));
+            }
+            let array = vm
+                .heap
+                .lock()
+                .unwrap()
+                .allocate_reference_array("java/io/File", files);
+            Ok(Some(Value::Reference(array)))
         }
         _ => Err(VmError::UnhandledException {
             class_name: "".to_string(),

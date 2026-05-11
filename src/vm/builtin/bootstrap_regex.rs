@@ -2,6 +2,10 @@ use std::collections::HashMap;
 
 use crate::vm::{ClassMethod, RuntimeClass, Value, Vm};
 
+fn build_field_offsets(fields: &[(String, String)]) -> HashMap<String, usize> {
+    fields.iter().enumerate().map(|(i, (name, _))| (name.clone(), i)).collect()
+}
+
 pub(super) fn bootstrap_java_util_regex(vm: &mut Vm) {
     let mut pattern_methods = HashMap::new();
     for (name, desc) in [
@@ -27,6 +31,10 @@ pub(super) fn bootstrap_java_util_regex(vm: &mut Vm) {
             ("__regex".to_string(), "Ljava/lang/String;".to_string()),
             ("__flags".to_string(), "I".to_string()),
         ],
+        field_offsets: build_field_offsets(&vec![
+            ("__regex".to_string(), "Ljava/lang/String;".to_string()),
+            ("__flags".to_string(), "I".to_string()),
+        ]),
         interfaces: vec![],
     });
 
@@ -76,6 +84,14 @@ pub(super) fn bootstrap_java_util_regex(vm: &mut Vm) {
             ("__last_match_start".to_string(), "I".to_string()),
             ("__group_count".to_string(), "I".to_string()),
         ],
+        field_offsets: build_field_offsets(&vec![
+            ("__pattern".to_string(), "Ljava/util/regex/Pattern;".to_string()),
+            ("__input".to_string(), "Ljava/lang/CharSequence;".to_string()),
+            ("__match_start".to_string(), "I".to_string()),
+            ("__match_end".to_string(), "I".to_string()),
+            ("__last_match_start".to_string(), "I".to_string()),
+            ("__group_count".to_string(), "I".to_string()),
+        ]),
         interfaces: vec![],
     });
 }

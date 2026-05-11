@@ -26,7 +26,7 @@ pub(super) enum HeapValue {
     },
     Object {
         class_name: String,
-        fields: HashMap<String, Value>,
+        fields: Vec<Value>,
     },
     StringBuilder(std::string::String),
 }
@@ -47,30 +47,18 @@ impl HeapValue {
 
     pub(super) fn heap_size(&self) -> usize {
         match self {
-            Self::IntArray { values } => {
-                std::mem::size_of::<Vec<i32>>() + values.capacity() * 4
-            }
-            Self::LongArray { values } => {
-                std::mem::size_of::<Vec<i64>>() + values.capacity() * 8
-            }
-            Self::FloatArray { values } => {
-                std::mem::size_of::<Vec<f32>>() + values.capacity() * 4
-            }
-            Self::DoubleArray { values } => {
-                std::mem::size_of::<Vec<f64>>() + values.capacity() * 8
-            }
+            Self::IntArray { values } => std::mem::size_of::<Vec<i32>>() + values.capacity() * 4,
+            Self::LongArray { values } => std::mem::size_of::<Vec<i64>>() + values.capacity() * 8,
+            Self::FloatArray { values } => std::mem::size_of::<Vec<f32>>() + values.capacity() * 4,
+            Self::DoubleArray { values } => std::mem::size_of::<Vec<f64>>() + values.capacity() * 8,
             Self::ReferenceArray { values, .. } => {
                 std::mem::size_of::<Vec<Reference>>() + values.capacity() * 8
             }
-            Self::String(s) => {
-                std::mem::size_of::<String>() + s.capacity()
-            }
+            Self::String(s) => std::mem::size_of::<String>() + s.capacity(),
             Self::Object { fields, .. } => {
                 std::mem::size_of::<HashMap<String, Value>>() + fields.capacity() * 32
             }
-            Self::StringBuilder(sb) => {
-                std::mem::size_of::<String>() + sb.capacity()
-            }
+            Self::StringBuilder(sb) => std::mem::size_of::<String>() + sb.capacity(),
         }
     }
 }
@@ -219,7 +207,10 @@ impl Heap {
 
     /// Get references from remembered set for minor GC tracing.
     pub(super) fn get_remembered_set_references(&self) -> Vec<usize> {
-        self.remembered_set.iter().map(|(_, target)| *target).collect()
+        self.remembered_set
+            .iter()
+            .map(|(_, target)| *target)
+            .collect()
     }
 
     pub(super) fn allocate_string(&mut self, value: impl Into<String>) -> Reference {
@@ -345,9 +336,7 @@ impl Heap {
         };
 
         // First check if it's a ReferenceArray
-        let is_ref_array = {
-            matches!(self.get(reference), Ok(HeapValue::ReferenceArray { .. }))
-        };
+        let is_ref_array = { matches!(self.get(reference), Ok(HeapValue::ReferenceArray { .. })) };
 
         if !is_ref_array {
             return Err(VmError::InvalidHeapValue {
@@ -521,7 +510,9 @@ impl Heap {
         let pause_ns = start.elapsed().as_nanos() as u64;
 
         // Calculate total heap bytes from live objects.
-        let total_heap_bytes = self.values.iter()
+        let total_heap_bytes = self
+            .values
+            .iter()
             .filter_map(|v| v.as_ref())
             .map(|v| v.heap_size())
             .sum();
@@ -578,7 +569,7 @@ impl Heap {
                         }
                     }
                     HeapValue::Object { fields, .. } => {
-                        for v in fields.values() {
+                        for v in fields.iter() {
                             if let Value::Reference(Reference::Heap(i)) = v {
                                 if !marked[*i] {
                                     worklist.push(*i);
@@ -655,7 +646,7 @@ impl Heap {
                         }
                     }
                     HeapValue::Object { fields, .. } => {
-                        for v in fields.values() {
+                        for v in fields.iter() {
                             if let Value::Reference(Reference::Heap(i)) = v {
                                 if !marked[*i] {
                                     worklist.push(*i);

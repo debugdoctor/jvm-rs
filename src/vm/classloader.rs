@@ -301,12 +301,18 @@ impl ClassLoader for BootstrapClassLoader {
             }
         }
 
+        let mut field_offsets = HashMap::new();
+        for (i, (name, _)) in instance_fields.iter().enumerate() {
+            field_offsets.insert(name.clone(), i);
+        }
+
         Ok(Some(RuntimeClass {
             name: resolved_name,
             super_class,
             methods,
             static_fields: HashMap::new(),
             instance_fields,
+            field_offsets,
             interfaces,
         }))
     }

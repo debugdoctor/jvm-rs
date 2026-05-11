@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fmt;
 use std::fs;
 use std::io::Read;
@@ -514,12 +515,18 @@ pub(crate) fn register_class(
         .map(str::to_string)
         .collect();
 
+    let mut field_offsets = HashMap::new();
+    for (i, (name, _)) in instance_fields.iter().enumerate() {
+        field_offsets.insert(name.clone(), i);
+    }
+
     vm.register_class(RuntimeClass {
         name: class_name.to_string(),
         super_class,
         methods,
         static_fields,
         instance_fields,
+        field_offsets,
         interfaces,
     });
 
@@ -972,8 +979,8 @@ mod tests {
     use crate::vm::{ExecutionResult, Value, Vm};
 
     use super::{
-        LaunchError, LaunchOptions, configure_vm_for_launch, launch, load_main_method, main_class_path,
-        parse_launch_options, resolve_class_path,
+        LaunchError, LaunchOptions, configure_vm_for_launch, launch, load_main_method,
+        main_class_path, parse_launch_options, resolve_class_path,
     };
 
     #[test]
@@ -1011,10 +1018,7 @@ mod tests {
 
     #[test]
     fn parses_jit_off_launcher_option() {
-        let args = vec![
-            "-Xjit:off".to_string(),
-            "demo.Main".to_string(),
-        ];
+        let args = vec!["-Xjit:off".to_string(), "demo.Main".to_string()];
 
         let options = parse_launch_options(&args).unwrap();
         assert_eq!(options.main_class, "demo.Main");
@@ -1024,10 +1028,7 @@ mod tests {
 
     #[test]
     fn rejects_invalid_jit_threshold() {
-        let args = vec![
-            "-Xjit:threshold=abc".to_string(),
-            "demo.Main".to_string(),
-        ];
+        let args = vec!["-Xjit:threshold=abc".to_string(), "demo.Main".to_string()];
 
         let error = parse_launch_options(&args).unwrap_err();
         assert!(matches!(error, LaunchError::InvalidJitThreshold(value) if value == "abc"));

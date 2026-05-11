@@ -5,8 +5,8 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub struct StubStats {
     pub stub_return_hits: AtomicUsize,
@@ -66,13 +66,12 @@ impl StubStats {
     }
 }
 
-pub static STUB_STATS: std::sync::LazyLock<StubStats> =
-    std::sync::LazyLock::new(|| StubStats {
-        stub_return_hits: AtomicUsize::new(0),
-        unknown_native_hits: AtomicUsize::new(0),
-        dangerous_stub_hits: AtomicUsize::new(0),
-        last_stub_method: Mutex::new(None),
-    });
+pub static STUB_STATS: std::sync::LazyLock<StubStats> = std::sync::LazyLock::new(|| StubStats {
+    stub_return_hits: AtomicUsize::new(0),
+    unknown_native_hits: AtomicUsize::new(0),
+    dangerous_stub_hits: AtomicUsize::new(0),
+    last_stub_method: Mutex::new(None),
+});
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnsafeClassification {
@@ -309,6 +308,9 @@ pub struct RuntimeClass {
     pub static_fields: HashMap<String, Value>,
     /// Instance field definitions: (name, descriptor).
     pub instance_fields: Vec<(String, String)>,
+    /// Field name to slot offset mapping for fast flat field access.
+    /// Populated during class loading based on C++ instance layout ordering.
+    pub field_offsets: HashMap<String, usize>,
     /// Names of directly implemented interfaces. Empty for built-in classes and for
     /// classes that do not declare any interface. Used by `resolve_method` to find
     /// interface `default` methods when no class-hierarchy method matches.

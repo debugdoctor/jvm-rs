@@ -1,4 +1,4 @@
-use crate::vm::types::{classify_unsafe_method, stub_return_value_tracked, UnsafeClassification};
+use crate::vm::types::{UnsafeClassification, classify_unsafe_method, stub_return_value_tracked};
 use crate::vm::{Reference, Value, Vm, VmError};
 
 pub(super) fn invoke_other(
@@ -115,8 +115,11 @@ pub(super) fn invoke_other(
         ("jdk/internal/misc/Unsafe", _, _) => {
             let classification = classify_unsafe_method(method_name, descriptor);
             if classification == UnsafeClassification::DangerousStub {
-                crate::vm::types::STUB_STATS
-                    .record_dangerous_stub(class_name, method_name, descriptor);
+                crate::vm::types::STUB_STATS.record_dangerous_stub(
+                    class_name,
+                    method_name,
+                    descriptor,
+                );
                 if vm.fail_fast {
                     return Err(VmError::UnsupportedNativeMethod {
                         class_name: class_name.to_string(),

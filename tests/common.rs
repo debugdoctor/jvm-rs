@@ -61,9 +61,6 @@ pub fn compile_and_run_with_javac_args(
     (result, output)
 }
 
-pub fn compile_and_run(
-    test_name: &str,
-    files: &[(&str, &str)],
-) -> (ExecutionResult, Vec<String>) {
+pub fn compile_and_run(test_name: &str, files: &[(&str, &str)]) -> (ExecutionResult, Vec<String>) {
     compile_and_run_with_javac_args(test_name, &["--release", "8"], files)
 }

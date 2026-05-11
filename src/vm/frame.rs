@@ -177,7 +177,12 @@ impl Frame {
             return Err(VmError::InvalidLocalIndex { index, max_locals });
         }
 
-        if index > 0 && matches!(self.locals[index - 1], Some(Value::Long(_) | Value::Double(_))) {
+        if index > 0
+            && matches!(
+                self.locals[index - 1],
+                Some(Value::Long(_) | Value::Double(_))
+            )
+        {
             self.locals[index - 1] = None;
         }
 

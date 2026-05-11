@@ -111,7 +111,7 @@ fn record_helper_vm_error(ctx: u64, vm: &mut Vm, helper: &str, err: crate::vm::V
 fn raise_pending_exception(vm: &mut Vm, class_name: &str) -> u64 {
     let exception = vm.heap.lock().unwrap().allocate(HeapValue::Object {
         class_name: class_name.to_string(),
-        fields: HashMap::new(),
+        fields: vec![],
     });
     let raw = encode_reference(exception);
     set_pending_jit_exception(raw);
@@ -462,22 +462,30 @@ pub extern "C" fn jit_helper_load_typed_array_element(
         let outcome = {
             let heap = vm.heap.lock().unwrap();
             match heap.get(array_ref) {
-                Ok(HeapValue::DoubleArray { values }) => match Heap::check_array_index(index, values.len()) {
-                    Ok(i) => Ok(values[i].to_bits() as u64),
-                    Err(_) => Err("java/lang/ArrayIndexOutOfBoundsException"),
-                },
-                Ok(HeapValue::LongArray { values }) => match Heap::check_array_index(index, values.len()) {
-                    Ok(i) => Ok(values[i] as u64),
-                    Err(_) => Err("java/lang/ArrayIndexOutOfBoundsException"),
-                },
-                Ok(HeapValue::IntArray { values }) => match Heap::check_array_index(index, values.len()) {
-                    Ok(i) => Ok(values[i] as u32 as u64),
-                    Err(_) => Err("java/lang/ArrayIndexOutOfBoundsException"),
-                },
-                Ok(HeapValue::FloatArray { values }) => match Heap::check_array_index(index, values.len()) {
-                    Ok(i) => Ok(values[i].to_bits() as u64),
-                    Err(_) => Err("java/lang/ArrayIndexOutOfBoundsException"),
-                },
+                Ok(HeapValue::DoubleArray { values }) => {
+                    match Heap::check_array_index(index, values.len()) {
+                        Ok(i) => Ok(values[i].to_bits() as u64),
+                        Err(_) => Err("java/lang/ArrayIndexOutOfBoundsException"),
+                    }
+                }
+                Ok(HeapValue::LongArray { values }) => {
+                    match Heap::check_array_index(index, values.len()) {
+                        Ok(i) => Ok(values[i] as u64),
+                        Err(_) => Err("java/lang/ArrayIndexOutOfBoundsException"),
+                    }
+                }
+                Ok(HeapValue::IntArray { values }) => {
+                    match Heap::check_array_index(index, values.len()) {
+                        Ok(i) => Ok(values[i] as u32 as u64),
+                        Err(_) => Err("java/lang/ArrayIndexOutOfBoundsException"),
+                    }
+                }
+                Ok(HeapValue::FloatArray { values }) => {
+                    match Heap::check_array_index(index, values.len()) {
+                        Ok(i) => Ok(values[i].to_bits() as u64),
+                        Err(_) => Err("java/lang/ArrayIndexOutOfBoundsException"),
+                    }
+                }
                 Err(_) => Err("java/lang/NullPointerException"),
                 _ => Err("java/lang/ArrayIndexOutOfBoundsException"),
             }
@@ -1712,11 +1720,7 @@ impl JitEntry {
     }
 
     #[cfg(test)]
-    fn from_fn_ptr(
-        fn_ptr: usize,
-        deopt_local_count: usize,
-        deopt_stack_count: usize,
-    ) -> Self {
+    fn from_fn_ptr(fn_ptr: usize, deopt_local_count: usize, deopt_stack_count: usize) -> Self {
         Self {
             code_ptr: fn_ptr,
             alloc_size: 0,
@@ -1824,8 +1828,7 @@ impl JitContext {
         set_current_vm(vm_ptr);
         let deopt_stack_depth_index = 1 + entry.deopt_local_count();
         let deopt_stack_base = deopt_stack_depth_index + 1;
-        let mut deopt_buffer =
-            vec![0u64; deopt_stack_base + entry.deopt_stack_count()];
+        let mut deopt_buffer = vec![0u64; deopt_stack_base + entry.deopt_stack_count()];
 
         let mut int_args: [u64; 6] = [0; 6];
         let mut int_count = 1;
@@ -2210,14 +2213,7 @@ mod tests {
             RECORDED_ARGS.get_or_init(|| Mutex::new(Vec::new()))
         }
 
-        extern "C" fn abi_record_all(
-            _: u64,
-            a: u64,
-            b: u64,
-            c: u64,
-            d: u64,
-            e: u64,
-        ) -> u64 {
+        extern "C" fn abi_record_all(_: u64, a: u64, b: u64, c: u64, d: u64, e: u64) -> u64 {
             *recorded_args().lock().unwrap() = vec![a, b, c, d, e];
             99
         }
@@ -2332,10 +2328,7 @@ mod tests {
         let _ = context.execute_typed(
             0,
             "jit/Test.wideDouble(D)J",
-            &[
-                Value::Double(1.0),
-                Value::Int(99),
-            ],
+            &[Value::Double(1.0), Value::Int(99)],
             JitReturn::Long,
         );
 
@@ -2352,14 +2345,7 @@ mod tests {
             RECORDED_ARGS.get_or_init(|| Mutex::new(Vec::new()))
         }
 
-        extern "C" fn abi_record_mixed(
-            _: u64,
-            a: u64,
-            b: u64,
-            c: u64,
-            d: u64,
-            e: u64,
-        ) -> u64 {
+        extern "C" fn abi_record_mixed(_: u64, a: u64, b: u64, c: u64, d: u64, e: u64) -> u64 {
             *recorded_args().lock().unwrap() = vec![a, b, c, d, e];
             0
         }
@@ -2446,10 +2432,34 @@ mod tests {
         }
 
         let mut context = JitContext::new();
-        install_test_entry(&mut context, "jit/Test.retInt(I)I", abi_ret_int as *const () as usize, 0, 0);
-        install_test_entry(&mut context, "jit/Test.retLong(J)J", abi_ret_long as *const () as usize, 0, 0);
-        install_test_entry(&mut context, "jit/Test.retFloat(F)F", abi_ret_float as *const () as usize, 0, 0);
-        install_test_entry(&mut context, "jit/Test.retDouble(D)D", abi_ret_double as *const () as usize, 0, 0);
+        install_test_entry(
+            &mut context,
+            "jit/Test.retInt(I)I",
+            abi_ret_int as *const () as usize,
+            0,
+            0,
+        );
+        install_test_entry(
+            &mut context,
+            "jit/Test.retLong(J)J",
+            abi_ret_long as *const () as usize,
+            0,
+            0,
+        );
+        install_test_entry(
+            &mut context,
+            "jit/Test.retFloat(F)F",
+            abi_ret_float as *const () as usize,
+            0,
+            0,
+        );
+        install_test_entry(
+            &mut context,
+            "jit/Test.retDouble(D)D",
+            abi_ret_double as *const () as usize,
+            0,
+            0,
+        );
 
         let r_int = context
             .execute_typed(0, "jit/Test.retInt(I)I", &[Value::Int(50)], JitReturn::Int)
@@ -2457,17 +2467,32 @@ mod tests {
         assert_eq!(r_int, Value::Int(150));
 
         let r_long = context
-            .execute_typed(0, "jit/Test.retLong(J)J", &[Value::Long(100)], JitReturn::Long)
+            .execute_typed(
+                0,
+                "jit/Test.retLong(J)J",
+                &[Value::Long(100)],
+                JitReturn::Long,
+            )
             .expect("long return");
         assert_eq!(r_long, Value::Long(300));
 
         let r_float = context
-            .execute_typed(0, "jit/Test.retFloat(F)F", &[Value::Float(25.0)], JitReturn::Float)
+            .execute_typed(
+                0,
+                "jit/Test.retFloat(F)F",
+                &[Value::Float(25.0)],
+                JitReturn::Float,
+            )
             .expect("float return");
         assert_eq!(r_float, Value::Float(5.0));
 
         let r_double = context
-            .execute_typed(0, "jit/Test.retDouble(D)D", &[Value::Double(100.0)], JitReturn::Double)
+            .execute_typed(
+                0,
+                "jit/Test.retDouble(D)D",
+                &[Value::Double(100.0)],
+                JitReturn::Double,
+            )
             .expect("double return");
         assert_eq!(r_double, Value::Double(10.0));
     }

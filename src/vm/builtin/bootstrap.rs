@@ -2,6 +2,14 @@ use std::collections::HashMap;
 
 use crate::vm::{ClassMethod, HeapValue, RuntimeClass, Value, Vm};
 
+fn build_field_offsets(fields: &[(String, String)]) -> HashMap<String, usize> {
+    fields
+        .iter()
+        .enumerate()
+        .map(|(i, (name, _))| (name.clone(), i))
+        .collect()
+}
+
 pub(super) fn bootstrap_java_lang(vm: &mut Vm) {
     let mut object_methods = HashMap::new();
     for (name, desc) in [
@@ -22,6 +30,7 @@ pub(super) fn bootstrap_java_lang(vm: &mut Vm) {
         methods: object_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -43,6 +52,10 @@ pub(super) fn bootstrap_java_lang(vm: &mut Vm) {
         methods: class_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![("__name".to_string(), "Ljava/lang/String;".to_string())],
+        field_offsets: build_field_offsets(&vec![(
+            "__name".to_string(),
+            "Ljava/lang/String;".to_string(),
+        )]),
         interfaces: vec![],
     });
 
@@ -86,6 +99,7 @@ pub(super) fn bootstrap_java_lang(vm: &mut Vm) {
         methods: string_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -128,6 +142,7 @@ pub(super) fn bootstrap_java_lang(vm: &mut Vm) {
         methods: integer_methods,
         static_fields: integer_static,
         instance_fields: vec![("value".to_string(), "I".to_string())],
+        field_offsets: build_field_offsets(&vec![("value".to_string(), "I".to_string())]),
         interfaces: vec![],
     });
 
@@ -148,6 +163,7 @@ pub(super) fn bootstrap_java_lang(vm: &mut Vm) {
         methods: long_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![("value".to_string(), "J".to_string())],
+        field_offsets: build_field_offsets(&vec![("value".to_string(), "J".to_string())]),
         interfaces: vec![],
     });
 
@@ -171,6 +187,7 @@ pub(super) fn bootstrap_java_lang(vm: &mut Vm) {
         methods: character_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -190,6 +207,7 @@ pub(super) fn bootstrap_java_lang(vm: &mut Vm) {
         methods: boolean_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![("value".to_string(), "Z".to_string())],
+        field_offsets: build_field_offsets(&vec![("value".to_string(), "Z".to_string())]),
         interfaces: vec![],
     });
 
@@ -241,6 +259,7 @@ pub(super) fn bootstrap_java_lang(vm: &mut Vm) {
         methods: sb_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -287,6 +306,7 @@ pub(super) fn bootstrap_java_lang(vm: &mut Vm) {
         methods: math_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -296,6 +316,7 @@ pub(super) fn bootstrap_java_lang(vm: &mut Vm) {
         methods: HashMap::new(),
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -330,6 +351,7 @@ pub(super) fn bootstrap_java_lang(vm: &mut Vm) {
         methods: thread_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![("target".to_string(), "Ljava/lang/Runnable;".to_string())],
+        field_offsets: build_field_offsets(&vec![("target".to_string(), "Ljava/lang/Runnable;".to_string())]),
         interfaces: vec![],
     });
 
@@ -337,6 +359,10 @@ pub(super) fn bootstrap_java_lang(vm: &mut Vm) {
         ("java/lang/Throwable", "java/lang/Object"),
         ("java/lang/Exception", "java/lang/Throwable"),
         ("java/lang/RuntimeException", "java/lang/Exception"),
+        (
+            "java/lang/IllegalArgumentException",
+            "java/lang/RuntimeException",
+        ),
         (
             "java/lang/IllegalThreadStateException",
             "java/lang/RuntimeException",
@@ -366,6 +392,24 @@ pub(super) fn bootstrap_java_lang(vm: &mut Vm) {
             "java/lang/IllegalMonitorStateException",
             "java/lang/RuntimeException",
         ),
+        ("java/io/IOException", "java/lang/Exception"),
+        ("java/nio/file/FileSystemException", "java/io/IOException"),
+        (
+            "java/nio/file/NoSuchFileException",
+            "java/nio/file/FileSystemException",
+        ),
+        (
+            "java/nio/file/FileAlreadyExistsException",
+            "java/nio/file/FileSystemException",
+        ),
+        (
+            "java/nio/file/DirectoryNotEmptyException",
+            "java/nio/file/FileSystemException",
+        ),
+        (
+            "java/nio/file/AccessDeniedException",
+            "java/nio/file/FileSystemException",
+        ),
     ];
     for (name, parent) in exception_chain {
         let mut methods = HashMap::new();
@@ -392,7 +436,8 @@ pub(super) fn bootstrap_java_lang(vm: &mut Vm) {
             super_class: Some(parent.to_string()),
             methods,
             static_fields: HashMap::new(),
-            instance_fields,
+            instance_fields: instance_fields.clone(),
+            field_offsets: build_field_offsets(&instance_fields),
             interfaces: vec![],
         });
     }
@@ -403,6 +448,7 @@ pub(super) fn bootstrap_java_lang(vm: &mut Vm) {
         methods: HashMap::new(),
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -412,6 +458,7 @@ pub(super) fn bootstrap_java_lang(vm: &mut Vm) {
         methods: HashMap::new(),
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -461,17 +508,18 @@ pub(super) fn bootstrap_java_io(vm: &mut Vm) {
         methods: ps_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
     let print_stream_ref = vm.heap.lock().unwrap().allocate(HeapValue::Object {
         class_name: "java/io/PrintStream".to_string(),
-        fields: HashMap::new(),
+        fields: vec![],
     });
 
     let err_stream_ref = vm.heap.lock().unwrap().allocate(HeapValue::Object {
         class_name: "java/io/PrintStream".to_string(),
-        fields: HashMap::new(),
+        fields: vec![],
     });
 
     let mut system_static = HashMap::new();
@@ -495,6 +543,7 @@ pub(super) fn bootstrap_java_io(vm: &mut Vm) {
         methods: system_methods,
         static_fields: system_static,
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -519,6 +568,7 @@ pub(super) fn bootstrap_java_io(vm: &mut Vm) {
         methods: input_stream_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -539,6 +589,7 @@ pub(super) fn bootstrap_java_io(vm: &mut Vm) {
         methods: output_stream_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -570,6 +621,10 @@ pub(super) fn bootstrap_java_io(vm: &mut Vm) {
             ("buf".to_string(), "[B".to_string()),
             ("count".to_string(), "I".to_string()),
         ],
+        field_offsets: build_field_offsets(&vec![
+            ("buf".to_string(), "[B".to_string()),
+            ("count".to_string(), "I".to_string()),
+        ]),
         interfaces: vec![],
     });
 }
@@ -594,6 +649,7 @@ pub(super) fn bootstrap_java_io_writer(vm: &mut Vm) {
         methods: writer_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -615,6 +671,7 @@ pub(super) fn bootstrap_java_io_writer(vm: &mut Vm) {
         methods: bw_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -686,6 +743,7 @@ pub(super) fn bootstrap_java_io_writer(vm: &mut Vm) {
         methods: pw_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -713,6 +771,7 @@ pub(super) fn bootstrap_java_io_writer(vm: &mut Vm) {
         methods: br_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -738,6 +797,7 @@ pub(super) fn bootstrap_java_io_writer(vm: &mut Vm) {
         methods: reader_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -759,6 +819,7 @@ pub(super) fn bootstrap_java_io_writer(vm: &mut Vm) {
         methods: isr_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -782,6 +843,7 @@ pub(super) fn bootstrap_java_io_writer(vm: &mut Vm) {
         methods: osr_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -814,6 +876,7 @@ pub(super) fn bootstrap_java_io_writer(vm: &mut Vm) {
         methods: file_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![("path".to_string(), "Ljava/lang/String;".to_string())],
+        field_offsets: build_field_offsets(&vec![("path".to_string(), "Ljava/lang/String;".to_string())]),
         interfaces: vec![],
     });
 }
@@ -825,6 +888,7 @@ pub(super) fn bootstrap_java_util(vm: &mut Vm) {
         methods: HashMap::new(),
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
     vm.register_class(RuntimeClass {
@@ -833,6 +897,7 @@ pub(super) fn bootstrap_java_util(vm: &mut Vm) {
         methods: HashMap::new(),
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -859,6 +924,7 @@ pub(super) fn bootstrap_java_util(vm: &mut Vm) {
         methods: native_int_stream_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![("__array".to_string(), "[I".to_string())],
+        field_offsets: build_field_offsets(&vec![("__array".to_string(), "[I".to_string())]),
         interfaces: vec!["java/util/stream/IntStream".to_string()],
     });
 
@@ -885,6 +951,7 @@ pub(super) fn bootstrap_java_util(vm: &mut Vm) {
         methods: native_long_stream_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![("__array".to_string(), "[J".to_string())],
+        field_offsets: build_field_offsets(&vec![("__array".to_string(), "[J".to_string())]),
         interfaces: vec!["java/util/stream/LongStream".to_string()],
     });
 
@@ -910,6 +977,7 @@ pub(super) fn bootstrap_java_util(vm: &mut Vm) {
         methods: native_double_stream_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![("__array".to_string(), "[D".to_string())],
+        field_offsets: build_field_offsets(&vec![("__array".to_string(), "[D".to_string())]),
         interfaces: vec!["java/util/stream/DoubleStream".to_string()],
     });
 
@@ -928,6 +996,10 @@ pub(super) fn bootstrap_java_util(vm: &mut Vm) {
             ("__array".to_string(), "[Ljava/lang/Object;".to_string()),
             ("__mode".to_string(), "I".to_string()),
         ],
+        field_offsets: build_field_offsets(&vec![
+            ("__array".to_string(), "[Ljava/lang/Object;".to_string()),
+            ("__mode".to_string(), "I".to_string()),
+        ]),
         interfaces: vec![],
     });
 
@@ -937,6 +1009,7 @@ pub(super) fn bootstrap_java_util(vm: &mut Vm) {
         methods: HashMap::new(),
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -946,6 +1019,7 @@ pub(super) fn bootstrap_java_util(vm: &mut Vm) {
         methods: HashMap::new(),
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
     vm.register_class(RuntimeClass {
@@ -954,6 +1028,7 @@ pub(super) fn bootstrap_java_util(vm: &mut Vm) {
         methods: HashMap::new(),
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -988,7 +1063,8 @@ pub(super) fn bootstrap_java_util(vm: &mut Vm) {
             super_class: Some("java/lang/Object".to_string()),
             methods,
             static_fields: HashMap::new(),
-            instance_fields: fields,
+            instance_fields: fields.clone(),
+            field_offsets: build_field_offsets(&fields),
             interfaces: vec![],
         });
     }
@@ -1014,6 +1090,7 @@ pub(super) fn bootstrap_java_util(vm: &mut Vm) {
         methods: optional_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![("value".to_string(), "Ljava/lang/Object;".to_string())],
+        field_offsets: build_field_offsets(&vec![("value".to_string(), "Ljava/lang/Object;".to_string())]),
         interfaces: vec![],
     });
 
@@ -1041,6 +1118,7 @@ pub(super) fn bootstrap_java_util(vm: &mut Vm) {
         methods: scanner_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![("__input".to_string(), "Ljava/lang/String;".to_string())],
+        field_offsets: build_field_offsets(&vec![("__input".to_string(), "Ljava/lang/String;".to_string())]),
         interfaces: vec![],
     });
 }
@@ -1081,6 +1159,10 @@ pub(super) fn bootstrap_java_nio(vm: &mut Vm) {
             ("__backing".to_string(), "[B".to_string()),
             ("__offset".to_string(), "I".to_string()),
         ],
+        field_offsets: build_field_offsets(&vec![
+            ("__backing".to_string(), "[B".to_string()),
+            ("__offset".to_string(), "I".to_string()),
+        ]),
         interfaces: vec![],
     });
 
@@ -1111,6 +1193,11 @@ pub(super) fn bootstrap_java_nio(vm: &mut Vm) {
             ("__position".to_string(), "I".to_string()),
             ("__limit".to_string(), "I".to_string()),
         ],
+        field_offsets: build_field_offsets(&vec![
+            ("__capacity".to_string(), "I".to_string()),
+            ("__position".to_string(), "I".to_string()),
+            ("__limit".to_string(), "I".to_string()),
+        ]),
         interfaces: vec![],
     });
 
@@ -1149,17 +1236,23 @@ pub(super) fn bootstrap_java_nio(vm: &mut Vm) {
             ("__backing".to_string(), "[C".to_string()),
             ("__offset".to_string(), "I".to_string()),
         ],
+        field_offsets: build_field_offsets(&vec![
+            ("__backing".to_string(), "[C".to_string()),
+            ("__offset".to_string(), "I".to_string()),
+        ]),
         interfaces: vec!["java/lang/Appendable".to_string()],
     });
 
     // java.nio.file.Path - file system path representation
     let mut path_methods = HashMap::new();
     for (name, desc) in [
+        ("getFileName", "()Ljava/nio/file/Path;"),
         ("getFileName", "()Ljava/lang/String;"),
         ("getParent", "()Ljava/nio/file/Path;"),
         ("getRoot", "()Ljava/nio/file/Path;"),
         ("isAbsolute", "()Z"),
         ("getNameCount", "()I"),
+        ("getName", "(I)Ljava/nio/file/Path;"),
         ("getName", "(I)Ljava/lang/String;"),
         ("subpath", "(II)Ljava/nio/file/Path;"),
         ("toString", "()Ljava/lang/String;"),
@@ -1178,6 +1271,7 @@ pub(super) fn bootstrap_java_nio(vm: &mut Vm) {
         methods: path_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![("__path".to_string(), "Ljava/lang/String;".to_string())],
+        field_offsets: build_field_offsets(&vec![("__path".to_string(), "Ljava/lang/String;".to_string())]),
         interfaces: vec![],
     });
 
@@ -1196,12 +1290,17 @@ pub(super) fn bootstrap_java_nio(vm: &mut Vm) {
         methods: paths_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
     // java.nio.file.Files - file operations utility
     let mut files_methods = HashMap::new();
     for (name, desc) in [
+        (
+            "exists",
+            "(Ljava/nio/file/Path;[Ljava/nio/file/LinkOption;)Z",
+        ),
         (
             "exists",
             "(Ljava/nio/file/Path;[Ljava/nio/file/attribute/FileAttribute;)Z",
@@ -1257,6 +1356,7 @@ pub(super) fn bootstrap_java_nio(vm: &mut Vm) {
         methods: files_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -1278,6 +1378,7 @@ pub(super) fn bootstrap_java_nio(vm: &mut Vm) {
         methods: filestore_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -1309,6 +1410,7 @@ pub(super) fn bootstrap_java_nio(vm: &mut Vm) {
         methods: channels_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -1334,7 +1436,7 @@ pub(super) fn bootstrap_java_nio(vm: &mut Vm) {
     }
     let console_ref = vm.heap.lock().unwrap().allocate(HeapValue::Object {
         class_name: "java/io/Console".to_string(),
-        fields: HashMap::new(),
+        fields: vec![],
     });
     let mut console_static = HashMap::new();
     console_static.insert("__instance".to_string(), Value::Reference(console_ref));
@@ -1344,6 +1446,7 @@ pub(super) fn bootstrap_java_nio(vm: &mut Vm) {
         methods: console_methods,
         static_fields: console_static,
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -1354,6 +1457,17 @@ pub(super) fn bootstrap_java_nio(vm: &mut Vm) {
         methods: HashMap::new(),
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
+        interfaces: vec![],
+    });
+
+    vm.register_class(RuntimeClass {
+        name: "java/nio/file/LinkOption".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: HashMap::new(),
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -1368,6 +1482,11 @@ pub(super) fn bootstrap_java_nio(vm: &mut Vm) {
         ClassMethod::Native,
     );
 
+    let standard_open_option_instance_fields = vec![
+        ("name".to_string(), "Ljava/lang/String;".to_string()),
+        ("ordinal".to_string(), "I".to_string()),
+    ];
+
     // Create enum constant instances
     let read_name = vm.new_string("READ");
     let write_name = vm.new_string("WRITE");
@@ -1379,66 +1498,31 @@ pub(super) fn bootstrap_java_nio(vm: &mut Vm) {
 
     let read_ref = vm.heap.lock().unwrap().allocate(HeapValue::Object {
         class_name: "java/nio/file/StandardOpenOption".to_string(),
-        fields: {
-            let mut f = HashMap::new();
-            f.insert("name".to_string(), read_name);
-            f.insert("ordinal".to_string(), Value::Int(0));
-            f
-        },
+        fields: vec![read_name, Value::Int(0)],
     });
     let write_ref = vm.heap.lock().unwrap().allocate(HeapValue::Object {
         class_name: "java/nio/file/StandardOpenOption".to_string(),
-        fields: {
-            let mut f = HashMap::new();
-            f.insert("name".to_string(), write_name);
-            f.insert("ordinal".to_string(), Value::Int(1));
-            f
-        },
+        fields: vec![write_name, Value::Int(1)],
     });
     let append_ref = vm.heap.lock().unwrap().allocate(HeapValue::Object {
         class_name: "java/nio/file/StandardOpenOption".to_string(),
-        fields: {
-            let mut f = HashMap::new();
-            f.insert("name".to_string(), append_name);
-            f.insert("ordinal".to_string(), Value::Int(2));
-            f
-        },
+        fields: vec![append_name, Value::Int(2)],
     });
     let truncate_existing_ref = vm.heap.lock().unwrap().allocate(HeapValue::Object {
         class_name: "java/nio/file/StandardOpenOption".to_string(),
-        fields: {
-            let mut f = HashMap::new();
-            f.insert("name".to_string(), truncate_existing_name);
-            f.insert("ordinal".to_string(), Value::Int(3));
-            f
-        },
+        fields: vec![truncate_existing_name, Value::Int(3)],
     });
     let create_ref = vm.heap.lock().unwrap().allocate(HeapValue::Object {
         class_name: "java/nio/file/StandardOpenOption".to_string(),
-        fields: {
-            let mut f = HashMap::new();
-            f.insert("name".to_string(), create_name);
-            f.insert("ordinal".to_string(), Value::Int(4));
-            f
-        },
+        fields: vec![create_name, Value::Int(4)],
     });
     let create_new_ref = vm.heap.lock().unwrap().allocate(HeapValue::Object {
         class_name: "java/nio/file/StandardOpenOption".to_string(),
-        fields: {
-            let mut f = HashMap::new();
-            f.insert("name".to_string(), create_new_name);
-            f.insert("ordinal".to_string(), Value::Int(5));
-            f
-        },
+        fields: vec![create_new_name, Value::Int(5)],
     });
     let delete_on_close_ref = vm.heap.lock().unwrap().allocate(HeapValue::Object {
         class_name: "java/nio/file/StandardOpenOption".to_string(),
-        fields: {
-            let mut f = HashMap::new();
-            f.insert("name".to_string(), delete_on_close_name);
-            f.insert("ordinal".to_string(), Value::Int(6));
-            f
-        },
+        fields: vec![delete_on_close_name, Value::Int(6)],
     });
 
     let mut static_fields = HashMap::new();
@@ -1465,6 +1549,10 @@ pub(super) fn bootstrap_java_nio(vm: &mut Vm) {
             ("name".to_string(), "Ljava/lang/String;".to_string()),
             ("ordinal".to_string(), "I".to_string()),
         ],
+        field_offsets: build_field_offsets(&vec![
+            ("name".to_string(), "Ljava/lang/String;".to_string()),
+            ("ordinal".to_string(), "I".to_string()),
+        ]),
         interfaces: vec!["java/nio/file/OpenOption".to_string()],
     });
 
@@ -1475,6 +1563,7 @@ pub(super) fn bootstrap_java_nio(vm: &mut Vm) {
         methods: HashMap::new(),
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 }
@@ -1524,7 +1613,7 @@ pub(super) fn bootstrap_other(vm: &mut Vm) {
     }
     let unsafe_instance_ref = vm.heap.lock().unwrap().allocate(HeapValue::Object {
         class_name: "jdk/internal/misc/Unsafe".to_string(),
-        fields: HashMap::new(),
+        fields: vec![],
     });
     let mut unsafe_static = HashMap::new();
     unsafe_static.insert(
@@ -1545,6 +1634,7 @@ pub(super) fn bootstrap_other(vm: &mut Vm) {
         methods: unsafe_methods,
         static_fields: unsafe_static,
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 }
@@ -1573,6 +1663,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: atomic_integer_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![("__value".to_string(), "I".to_string())],
+        field_offsets: build_field_offsets(&vec![("__value".to_string(), "I".to_string())]),
         interfaces: vec![],
     });
 
@@ -1595,6 +1686,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: atomic_long_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![("__value".to_string(), "J".to_string())],
+        field_offsets: build_field_offsets(&vec![("__value".to_string(), "J".to_string())]),
         interfaces: vec![],
     });
 
@@ -1614,6 +1706,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: atomic_reference_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![("__value".to_string(), "Ljava/lang/Object;".to_string())],
+        field_offsets: build_field_offsets(&vec![("__value".to_string(), "Ljava/lang/Object;".to_string())]),
         interfaces: vec![],
     });
 
@@ -1634,6 +1727,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: long_adder_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![("__value".to_string(), "J".to_string())],
+        field_offsets: build_field_offsets(&vec![("__value".to_string(), "J".to_string())]),
         interfaces: vec![],
     });
 
@@ -1652,6 +1746,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: double_adder_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![("__value".to_string(), "D".to_string())],
+        field_offsets: build_field_offsets(&vec![("__value".to_string(), "D".to_string())]),
         interfaces: vec![],
     });
 
@@ -1671,6 +1766,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: long_accumulator_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -1691,6 +1787,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: double_accumulator_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -1713,6 +1810,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: reentrant_lock_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![("__held".to_string(), "I".to_string())],
+        field_offsets: build_field_offsets(&vec![("__held".to_string(), "I".to_string())]),
         interfaces: vec!["java/util/concurrent/locks/Lock".to_string()],
     });
 
@@ -1729,6 +1827,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: read_write_lock_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -1747,6 +1846,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: lock_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -1760,6 +1860,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: condition_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -1788,6 +1889,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: stamped_lock_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -1805,6 +1907,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: abstract_ownable_synchronizer_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -1842,6 +1945,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: concurrent_hash_map_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -1866,6 +1970,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: concurrent_linked_queue_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec!["java/util/concurrent/BlockingQueue".to_string()],
     });
 
@@ -1895,6 +2000,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: concurrent_linked_deque_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -1923,6 +2029,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: copy_on_write_array_list_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -1948,6 +2055,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: semaphore_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![("__permits".to_string(), "I".to_string())],
+        field_offsets: build_field_offsets(&vec![("__permits".to_string(), "I".to_string())]),
         interfaces: vec![],
     });
 
@@ -1967,6 +2075,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: count_down_latch_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![("__count".to_string(), "J".to_string())],
+        field_offsets: build_field_offsets(&vec![("__count".to_string(), "J".to_string())]),
         interfaces: vec![],
     });
 
@@ -1988,6 +2097,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: cyclic_barrier_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![("__parties".to_string(), "I".to_string())],
+        field_offsets: build_field_offsets(&vec![("__parties".to_string(), "I".to_string())]),
         interfaces: vec![],
     });
 
@@ -2008,6 +2118,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: exchanger_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -2035,6 +2146,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: phaser_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -2062,6 +2174,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: array_blocking_queue_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec!["java/util/concurrent/BlockingQueue".to_string()],
     });
 
@@ -2097,6 +2210,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: linked_blocking_queue_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec!["java/util/concurrent/BlockingQueue".to_string()],
     });
 
@@ -2137,6 +2251,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: linked_blocking_deque_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec!["java/util/concurrent/BlockingDeque".to_string()],
     });
 
@@ -2165,6 +2280,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: synchronous_queue_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec!["java/util/concurrent/BlockingQueue".to_string()],
     });
 
@@ -2200,6 +2316,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: priority_blocking_queue_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec!["java/util/concurrent/BlockingQueue".to_string()],
     });
 
@@ -2232,6 +2349,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: delay_queue_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec!["java/util/concurrent/BlockingQueue".to_string()],
     });
 
@@ -2258,6 +2376,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: blocking_queue_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -2267,6 +2386,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: HashMap::new(),
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -2299,6 +2419,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: executor_service_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec!["java/util/concurrent/Executor".to_string()],
     });
 
@@ -2315,6 +2436,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         },
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -2367,6 +2489,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: thread_pool_executor_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -2404,6 +2527,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: abstract_executor_service_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec!["java/util/concurrent/ExecutorService".to_string()],
     });
 
@@ -2438,6 +2562,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: executors_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -2470,6 +2595,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: scheduled_executor_service_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec!["java/util/concurrent/ExecutorService".to_string()],
     });
 
@@ -2487,6 +2613,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: scheduled_future_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec!["java/util/concurrent/Delayed".to_string()],
     });
 
@@ -2504,6 +2631,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: delayed_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec!["java/lang/Comparable".to_string()],
     });
 
@@ -2551,6 +2679,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: fork_join_pool_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -2580,6 +2709,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: fork_join_task_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec!["java/util/concurrent/Future".to_string()],
     });
 
@@ -2597,6 +2727,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: counted_completer_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -2613,6 +2744,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: recursive_task_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -2626,6 +2758,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: recursive_action_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -2649,6 +2782,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: future_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -2703,6 +2837,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: completable_future_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![
             "java/util/concurrent/Future".to_string(),
             "java/util/concurrent/CompletionStage".to_string(),
@@ -2764,6 +2899,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: completion_stage_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -2784,6 +2920,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: time_unit_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -2815,6 +2952,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: concurrent_skip_list_map_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -2842,6 +2980,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: concurrent_skip_list_set_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -2866,6 +3005,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: key_set_view_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -2893,6 +3033,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: submission_publisher_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec!["java/util/concurrent/Flow$Publisher".to_string()],
     });
 
@@ -2911,6 +3052,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: flow_subscriber_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -2924,6 +3066,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: flow_subscription_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -2942,6 +3085,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: flow_processor_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![
             "java/util/concurrent/Flow$Subscriber".to_string(),
             "java/util/concurrent/Flow$Publisher".to_string(),
@@ -2962,6 +3106,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: flow_publisher_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -2977,6 +3122,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: callable_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -2994,6 +3140,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: thread_factory_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -3011,6 +3158,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: rejected_execution_handler_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 
@@ -3040,6 +3188,7 @@ pub(super) fn bootstrap_java_util_concurrent(vm: &mut Vm) {
         methods: varhandle_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
         interfaces: vec![],
     });
 }

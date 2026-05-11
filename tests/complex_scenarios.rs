@@ -164,10 +164,9 @@ interface Level1If {
 
 #[test]
 fn exception_nesting_5_levels() {
-    let files = &[
-        (
-            "complex/exc/ExcNesting.java",
-            r#"
+    let files = &[(
+        "complex/exc/ExcNesting.java",
+        r#"
 package complex.exc;
 public class ExcNesting {
     static String log = "";
@@ -201,22 +200,17 @@ public class ExcNesting {
     }
 }
 "#,
-        ),
-    ];
+    )];
     let (result, output) = compile_and_run("exc_nesting_5", files);
     assert_eq!(result, ExecutionResult::Void);
-    assert_eq!(
-        output,
-        vec!["A5A4A3A2A1fin1fin2fin3fin4fin5caught:boom:0"]
-    );
+    assert_eq!(output, vec!["A5A4A3A2A1fin1fin2fin3fin4fin5caught:boom:0"]);
 }
 
 #[test]
 fn exception_finally_return_priority() {
-    let files = &[
-        (
-            "complex/exc/FinallyReturn.java",
-            r#"
+    let files = &[(
+        "complex/exc/FinallyReturn.java",
+        r#"
 package complex.exc;
 public class FinallyReturn {
     static String log = "";
@@ -250,8 +244,7 @@ public class FinallyReturn {
     }
 }
 "#,
-        ),
-    ];
+    )];
     let (result, output) = compile_and_run("exc_finally_return", files);
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["2,-1,99"]);
@@ -259,10 +252,9 @@ public class FinallyReturn {
 
 #[test]
 fn exception_suppressed_and_rethrow() {
-    let files = &[
-        (
-            "complex/exc/Suppressed.java",
-            r#"
+    let files = &[(
+        "complex/exc/Suppressed.java",
+        r#"
 package complex.exc;
 public class Suppressed {
     public static void main(String[] args) {
@@ -283,8 +275,7 @@ public class Suppressed {
     }
 }
 "#,
-        ),
-    ];
+    )];
     let (result, output) = compile_and_run("exc_suppressed", files);
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["msg:primary,suppressed:1,"]);
@@ -292,10 +283,9 @@ public class Suppressed {
 
 #[test]
 fn concurrency_synchronized_chain() {
-    let files = &[
-        (
-            "complex/conc/ChainSync.java",
-            r#"
+    let files = &[(
+        "complex/conc/ChainSync.java",
+        r#"
 package complex.conc;
 public class ChainSync {
     static final Object LOCK = new Object();
@@ -334,8 +324,7 @@ public class ChainSync {
     }
 }
 "#,
-        ),
-    ];
+    )];
     let (result, output) = compile_and_run("conc_sync_chain", files);
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["phase0,phase1,phase2,", "done"]);
@@ -343,10 +332,9 @@ public class ChainSync {
 
 #[test]
 fn concurrency_wait_notify_cycles() {
-    let files = &[
-        (
-            "complex/conc/WaitNotify.java",
-            r#"
+    let files = &[(
+        "complex/conc/WaitNotify.java",
+        r#"
 package complex.conc;
 public class WaitNotify {
     static final Object MONITOR = new Object();
@@ -401,8 +389,7 @@ public class WaitNotify {
     }
 }
 "#,
-        ),
-    ];
+    )];
     let (result, output) = compile_and_run("conc_wait_notify", files);
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(
@@ -628,10 +615,7 @@ public class Tree {
     ];
     let (result, output) = compile_and_run("recursion_tree", files);
     assert_eq!(result, ExecutionResult::Void);
-    assert_eq!(
-        output,
-        vec!["28", "3", "true", "false", "1,2,3,4,5,6,7"]
-    );
+    assert_eq!(output, vec!["28", "3", "true", "false", "1,2,3,4,5,6,7"]);
 }
 
 #[test]
@@ -687,10 +671,9 @@ public class MathUtil {
 
 #[test]
 fn arrays_multidim_and_jagged() {
-    let files = &[
-        (
-            "complex/arrays/MultiArray.java",
-            r#"
+    let files = &[(
+        "complex/arrays/MultiArray.java",
+        r#"
 package complex.arrays;
 public class MultiArray {
     public static void main(String[] args) {
@@ -720,8 +703,7 @@ public class MultiArray {
     }
 }
 "#,
-        ),
-    ];
+    )];
     let (result, output) = compile_and_run("arrays_multidim", files);
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["1830", "60", "eg"]);
@@ -729,10 +711,9 @@ public class MultiArray {
 
 #[test]
 fn arrays_object_array_and_storecheck() {
-    let files = &[
-        (
-            "complex/arrays/ObjArray.java",
-            r#"
+    let files = &[(
+        "complex/arrays/ObjArray.java",
+        r#"
 package complex.arrays;
 public class ObjArray {
     public static void main(String[] args) {
@@ -755,8 +736,7 @@ public class ObjArray {
     }
 }
 "#,
-        ),
-    ];
+    )];
     let (result, output) = compile_and_run("arrays_obj_storecheck", files);
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["b", "2", "c", "abcxyz"]);
@@ -764,10 +744,9 @@ public class ObjArray {
 
 #[test]
 fn static_init_order_and_circular() {
-    let files = &[
-        (
-            "complex/clinit/InitOrder.java",
-            r#"
+    let files = &[(
+        "complex/clinit/InitOrder.java",
+        r#"
 package complex.clinit;
 public class InitOrder {
     static String log = "";
@@ -786,22 +765,17 @@ public class InitOrder {
     }
 }
 "#,
-        ),
-    ];
+    )];
     let (result, output) = compile_and_run("clinit_order", files);
     assert_eq!(result, ExecutionResult::Void);
-    assert_eq!(
-        output,
-        vec!["A=1,B=2,C=3,", "A=1 B=2 C=3"]
-    );
+    assert_eq!(output, vec!["A=1,B=2,C=3,", "A=1 B=2 C=3"]);
 }
 
 #[test]
 fn interface_clinit_and_constant_folding() {
-    let files = &[
-        (
-            "complex/clinit/Constants.java",
-            r#"
+    let files = &[(
+        "complex/clinit/Constants.java",
+        r#"
 package complex.clinit;
 public class Constants {
     interface Defaults {
@@ -818,8 +792,7 @@ public class Constants {
     }
 }
 "#,
-        ),
-    ];
+    )];
     let (result, output) = compile_and_run("clinit_interface", files);
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["10", "15", "hello", "10"]);
@@ -827,10 +800,9 @@ public class Constants {
 
 #[test]
 fn hashmap_collision_handling() {
-    let files = &[
-        (
-            "complex/hash/Collision.java",
-            r#"
+    let files = &[(
+        "complex/hash/Collision.java",
+        r#"
 package complex.hash;
 import java.util.HashMap;
 import java.util.Map;
@@ -862,8 +834,7 @@ public class Collision {
     }
 }
 "#,
-        ),
-    ];
+    )];
     let (result, output) = compile_and_run("hash_collision", files);
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(
@@ -877,10 +848,9 @@ public class Collision {
 
 #[test]
 fn hashset_custom_objects() {
-    let files = &[
-        (
-            "complex/hash/PersonMain.java",
-            r#"
+    let files = &[(
+        "complex/hash/PersonMain.java",
+        r#"
 package complex.hash;
 import java.util.HashSet;
 import java.util.Set;
@@ -911,8 +881,7 @@ public class PersonMain {
     }
 }
 "#,
-        ),
-    ];
+    )];
     let (result, output) = compile_and_run("hashset_custom", files);
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["2", "true", "true"]);
@@ -920,10 +889,9 @@ public class PersonMain {
 
 #[test]
 fn string_intern_and_identity() {
-    let files = &[
-        (
-            "complex/strs/Intern.java",
-            r#"
+    let files = &[(
+        "complex/strs/Intern.java",
+        r#"
 package complex.strs;
 public class Intern {
     public static void main(String[] args) {
@@ -941,8 +909,7 @@ public class Intern {
     }
 }
 "#,
-        ),
-    ];
+    )];
     let (result, output) = compile_and_run("str_intern", files);
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["false", "true", "false", "true", "true"]);
@@ -950,10 +917,9 @@ public class Intern {
 
 #[test]
 fn string_switch_and_interpolation() {
-    let files = &[
-        (
-            "complex/strs/SwitchStr.java",
-            r#"
+    let files = &[(
+        "complex/strs/SwitchStr.java",
+        r#"
 package complex.strs;
 public class SwitchStr {
     static String command(String op, int a, int b) {
@@ -975,8 +941,7 @@ public class SwitchStr {
     }
 }
 "#,
-        ),
-    ];
+    )];
     let (result, output) = compile_and_run("str_switch", files);
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["13", "30", "not_integer", "3", "unknown"]);
@@ -984,10 +949,9 @@ public class SwitchStr {
 
 #[test]
 fn lambda_metafactory_chained() {
-    let files = &[
-        (
-            "complex/lambda/LambdaChain.java",
-            r#"
+    let files = &[(
+        "complex/lambda/LambdaChain.java",
+        r#"
 package complex.lambda;
 import java.util.function.*;
 
@@ -1011,8 +975,7 @@ public class LambdaChain {
     }
 }
 "#,
-        ),
-    ];
+    )];
     let (result, output) = compile_and_run("lambda_chain", files);
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["12", "11", "16", "lambda"]);
@@ -1020,10 +983,9 @@ public class LambdaChain {
 
 #[test]
 fn method_reference_indirection() {
-    let files = &[
-        (
-            "complex/lambda/MethodRef.java",
-            r#"
+    let files = &[(
+        "complex/lambda/MethodRef.java",
+        r#"
 package complex.lambda;
 import java.util.function.*;
 
@@ -1048,8 +1010,7 @@ public class MethodRef {
     }
 }
 "#,
-        ),
-    ];
+    )];
     let (result, output) = compile_and_run("method_ref", files);
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["HELLO", "5", "java", "method reference"]);
@@ -1057,10 +1018,9 @@ public class MethodRef {
 
 #[test]
 fn switch_tableswitch_full_coverage() {
-    let files = &[
-        (
-            "complex/switchcase/SwitchBench.java",
-            r#"
+    let files = &[(
+        "complex/switchcase/SwitchBench.java",
+        r#"
 package complex.switchcase;
 public class SwitchBench {
     static String dayName(int d) {
@@ -1104,8 +1064,7 @@ public class SwitchBench {
     }
 }
 "#,
-        ),
-    ];
+    )];
     let (_result, output) = compile_and_run("switch_bench", files);
     assert_eq!(
         output,
@@ -1123,10 +1082,9 @@ public class SwitchBench {
 
 #[test]
 fn assertion_and_state_machine() {
-    let files = &[
-        (
-            "complex/asserts/StateMachine.java",
-            r#"
+    let files = &[(
+        "complex/asserts/StateMachine.java",
+        r#"
 package complex.asserts;
 public class StateMachine {
     enum State { INIT, RUNNING, PAUSED, STOPPED }
@@ -1167,8 +1125,7 @@ public class StateMachine {
     }
 }
 "#,
-        ),
-    ];
+    )];
     let (result, output) = compile_and_run("assert_state", files);
     assert_eq!(result, ExecutionResult::Void);
     assert_eq!(output, vec!["start,pause,resume,stop,", "true"]);

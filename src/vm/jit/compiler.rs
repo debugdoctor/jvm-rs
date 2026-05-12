@@ -1755,16 +1755,28 @@ impl<'a> BytecodeCompiler<'a> {
         }
 
         if self.osr_entry {
+            // Block params: [vm_ptr, locals_ptr]. Load each local from
+            // `locals_ptr + i * 8` and coerce to its declared type.
+            let locals_ptr = block_params
+                .get(1)
+                .copied()
+                .ok_or_else(|| JitError::CompilationFailed(
+                    "OSR entry missing locals buffer pointer".to_string(),
+                ))?;
             for local_index in 0..num_locals {
-                let block_param_index = local_index + 1;
-                if let Some(&param) = block_params.get(block_param_index) {
-                    let param =
-                        self.coerce_entry_param_for_type(param, self.local_var_type(local_index));
-                    let var = self.local_var(local_index)?;
-                    self.builder.def_var(var, param);
-                    self.emit_deopt_local_store(local_index, param);
-                    initialized_locals[local_index] = true;
-                }
+                let offset = (local_index * 8) as i32;
+                let raw = self.builder.ins().load(
+                    types::I64,
+                    cranelift::codegen::ir::MemFlags::trusted(),
+                    locals_ptr,
+                    offset,
+                );
+                let param =
+                    self.coerce_entry_param_for_type(raw, self.local_var_type(local_index));
+                let var = self.local_var(local_index)?;
+                self.builder.def_var(var, param);
+                self.emit_deopt_local_store(local_index, param);
+                initialized_locals[local_index] = true;
             }
         } else {
             let mut local_index = 0;
@@ -3918,11 +3930,14 @@ pub fn compile_bytecode_osr(
     let return_type = crate::vm::types::parse_return_type(&method.descriptor)
         .map_err(|e| JitError::CompilationFailed(format!("Invalid descriptor: {}", e)))?;
 
+    // OSR ABI: `fn(vm_ptr, locals_ptr) -> ret`. The locals buffer is an array
+    // of `max_locals` i64 slots that the OSR entry block decodes per-local
+    // (coercing each slot to its declared Cranelift type). This decoupling
+    // lets OSR support arbitrary local counts without exhausting the
+    // platform's argument-register budget.
     let mut signature = cranelift::codegen::ir::Signature::new(isa.default_call_conv());
-    signature.params.insert(0, AbiParam::new(types::I64));
-    for _ in 0..method.max_locals {
-        signature.params.push(AbiParam::new(types::I64));
-    }
+    signature.params.push(AbiParam::new(types::I64));
+    signature.params.push(AbiParam::new(types::I64));
 
     if let Some(ret) = return_type {
         let clif_type = match ret {
@@ -4016,11 +4031,13 @@ fn reject_runtime_dependent_bytecode(method: &Method) -> Result<(), JitError> {
                 }
             }
             0xbf | 0xff => {
-                if !method.exception_handlers.is_empty() {
-                    return Err(JitError::CompilationFailed(format!(
-                        "opcode 0x{opcode:02x} with an exception table stays on the interpreter until JIT frame unwinding is supported"
-                    )));
-                }
+                // `athrow` inside a method with exception handlers is now
+                // permitted: the JIT helper raises the exception via
+                // `set_pending_jit_exception` plus a deopt snapshot, and
+                // `complete_jit_execution` resumes the interpreter with the
+                // exception pending so `throw_exception` finds the right
+                // handler frame. Per-bytecode-handler dispatch from compiled
+                // code remains future work.
             }
             0xc4 => {
                 let inner = *method

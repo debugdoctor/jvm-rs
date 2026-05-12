@@ -410,6 +410,94 @@ pub(super) fn invoke_util(
                 crate::vm::builtin::helpers::native_int_stream_array(vm, args[0].as_reference()?)?;
             Ok(Some(Value::Reference(array)))
         }
+        (
+            "__jvm_rs/NativeIntStream",
+            "map",
+            "(Ljava/util/function/IntUnaryOperator;)Ljava/util/stream/IntStream;",
+        ) => {
+            let array =
+                crate::vm::builtin::helpers::native_int_stream_array(vm, args[0].as_reference()?)?;
+            let fn_ref = args[1].as_reference()?;
+            let values = match vm.heap.lock().unwrap().get(array)? {
+                HeapValue::IntArray { values } => values.clone(),
+                _ => return Ok(Some(Value::Reference(Reference::Null))),
+            };
+            let mut mapped = Vec::with_capacity(values.len());
+            for v in values {
+                let res = vm.call_virtual(
+                    fn_ref,
+                    "applyAsInt",
+                    "(I)I",
+                    vec![Value::Int(v)],
+                )?;
+                if let crate::vm::types::ExecutionResult::Value(Value::Int(n)) = res {
+                    mapped.push(n);
+                }
+            }
+            let mut heap = vm.heap.lock().unwrap();
+            let new_array = heap.allocate(HeapValue::IntArray { values: mapped });
+            let new_stream = heap.allocate(HeapValue::Object {
+                class_name: "__jvm_rs/NativeIntStream".to_string(),
+                fields: vec![Value::Reference(new_array)],
+            });
+            Ok(Some(Value::Reference(new_stream)))
+        }
+        (
+            "__jvm_rs/NativeIntStream",
+            "filter",
+            "(Ljava/util/function/IntPredicate;)Ljava/util/stream/IntStream;",
+        ) => {
+            let array =
+                crate::vm::builtin::helpers::native_int_stream_array(vm, args[0].as_reference()?)?;
+            let pred_ref = args[1].as_reference()?;
+            let values = match vm.heap.lock().unwrap().get(array)? {
+                HeapValue::IntArray { values } => values.clone(),
+                _ => return Ok(Some(Value::Reference(Reference::Null))),
+            };
+            let mut kept = Vec::with_capacity(values.len());
+            for v in values {
+                let res = vm.call_virtual(
+                    pred_ref,
+                    "test",
+                    "(I)Z",
+                    vec![Value::Int(v)],
+                )?;
+                if let crate::vm::types::ExecutionResult::Value(Value::Int(n)) = res {
+                    if n != 0 {
+                        kept.push(v);
+                    }
+                }
+            }
+            let mut heap = vm.heap.lock().unwrap();
+            let new_array = heap.allocate(HeapValue::IntArray { values: kept });
+            let new_stream = heap.allocate(HeapValue::Object {
+                class_name: "__jvm_rs/NativeIntStream".to_string(),
+                fields: vec![Value::Reference(new_array)],
+            });
+            Ok(Some(Value::Reference(new_stream)))
+        }
+        (
+            "__jvm_rs/NativeIntStream",
+            "forEach",
+            "(Ljava/util/function/IntConsumer;)V",
+        ) => {
+            let array =
+                crate::vm::builtin::helpers::native_int_stream_array(vm, args[0].as_reference()?)?;
+            let consumer_ref = args[1].as_reference()?;
+            let values = match vm.heap.lock().unwrap().get(array)? {
+                HeapValue::IntArray { values } => values.clone(),
+                _ => return Ok(None),
+            };
+            for v in values {
+                vm.call_virtual(
+                    consumer_ref,
+                    "accept",
+                    "(I)V",
+                    vec![Value::Int(v)],
+                )?;
+            }
+            Ok(None)
+        }
         ("__jvm_rs/NativeLongStream", "min", "()Ljava/util/OptionalLong;") => {
             let array =
                 crate::vm::builtin::helpers::native_long_stream_array(vm, args[0].as_reference()?)?;
@@ -734,6 +822,17 @@ pub(super) fn invoke_util(
                 },
                 _ => Ok(Some(Value::Double(fallback))),
             }
+        }
+        // --- ServiceLoader stubs ---
+        ("java/util/ServiceLoader", "load", "(Ljava/lang/Class;)Ljava/util/ServiceLoader;") => {
+            Ok(Some(Value::Reference(Reference::Null)))
+        }
+        ("java/util/ServiceLoader", "loadInstalledProviders", "(Ljava/lang/Class;)Ljava/util/ServiceLoader;") => {
+            Ok(Some(Value::Reference(Reference::Null)))
+        }
+        ("java/util/ServiceLoader", "reload", "()V") => Ok(None),
+        ("java/util/ServiceLoader", "iterator", "()Ljava/util/Iterator;") => {
+            Ok(Some(Value::Reference(Reference::Null)))
         }
         // --- Scanner stubs ---
         ("java/util/Scanner", "<init>", "(Ljava/io/InputStream;)V") => Ok(None),

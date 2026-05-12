@@ -1576,6 +1576,35 @@ public class TestArrStream {
 }
 
 #[test]
+fn java_util_int_stream_pipeline() {
+    // map/filter/forEach on NativeIntStream invoke the lambda-proxied
+    // IntUnaryOperator/IntPredicate/IntConsumer for each element.
+    let (result, output) = compile_and_run(
+        "java_util_int_stream_pipeline",
+        &[(
+            "demo/TestIntStreamPipe.java",
+            r#"
+package demo;
+import java.util.Arrays;
+public class TestIntStreamPipe {
+    public static void main(String[] args) {
+        int[] a = {1, 2, 3, 4, 5};
+        int sum = Arrays.stream(a)
+            .map(x -> x * 2)
+            .filter(x -> x > 4)
+            .sum();
+        System.out.println(sum);
+        Arrays.stream(a).filter(x -> x % 2 == 1).forEach(x -> System.out.println(x));
+    }
+}
+"#,
+        )],
+    );
+    assert_eq!(result, ExecutionResult::Void);
+    assert_eq!(output, vec!["24", "1", "3", "5"]);
+}
+
+#[test]
 fn java_util_hashmap_iterator() {
     // HashMap.entrySet().iterator() exercises a second Iterator implementation
     // (HashMap$EntryIterator) and confirms the Iterable machinery isn't

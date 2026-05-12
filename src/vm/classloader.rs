@@ -139,15 +139,24 @@ impl BootstrapClassLoader {
         None
     }
 
-    fn search_path(&self, path: &Path, file_name: &str) -> Option<Vec<u8>> {
+    pub fn find_resource_bytes(&self, resource_path: &str) -> Option<Vec<u8>> {
+        for path in &self.paths {
+            if let Some(bytes) = self.search_path(path, resource_path) {
+                return Some(bytes);
+            }
+        }
+        None
+    }
+
+    fn search_path(&self, path: &Path, resource_path: &str) -> Option<Vec<u8>> {
         if path.extension().and_then(|e| e.to_str()) == Some("jmod") {
-            return self.search_jmod(path, file_name);
+            return self.search_jmod(path, resource_path);
         }
         if path.extension().and_then(|e| e.to_str()) == Some("jar") {
-            return self.search_jar(path, file_name);
+            return self.search_jar(path, resource_path);
         }
         if path.is_dir() {
-            return self.search_dir(path, file_name);
+            return self.search_dir(path, resource_path);
         }
         None
     }
@@ -168,10 +177,10 @@ impl BootstrapClassLoader {
         None
     }
 
-    fn search_jar(&self, jar_path: &Path, file_name: &str) -> Option<Vec<u8>> {
+    fn search_jar(&self, jar_path: &Path, resource_path: &str) -> Option<Vec<u8>> {
         let file = fs::File::open(jar_path).ok()?;
         let mut archive = ZipArchive::new(file).ok()?;
-        if let Ok(mut entry) = archive.by_name(file_name) {
+        if let Ok(mut entry) = archive.by_name(resource_path) {
             let mut bytes = Vec::new();
             entry.read_to_end(&mut bytes).ok()?;
             return Some(bytes);
@@ -179,8 +188,8 @@ impl BootstrapClassLoader {
         None
     }
 
-    fn search_dir(&self, dir: &Path, file_name: &str) -> Option<Vec<u8>> {
-        let candidate = dir.join(file_name);
+    fn search_dir(&self, dir: &Path, resource_path: &str) -> Option<Vec<u8>> {
+        let candidate = dir.join(resource_path);
         if candidate.exists() {
             fs::read(&candidate).ok()
         } else {
@@ -209,6 +218,10 @@ pub trait ClassLoader {
     #[allow(dead_code)]
     fn load_class(&mut self, class_name: &str) -> Result<Option<RuntimeClass>, VmError>;
     fn load_classfile(&mut self, class_name: &str) -> Result<Option<ClassFile>, VmError>;
+    fn find_resource_bytes(&mut self, resource_path: &str) -> Option<Vec<u8>> {
+        let _ = resource_path;
+        None
+    }
 }
 
 impl ClassLoader for BootstrapClassLoader {
@@ -325,6 +338,10 @@ impl<C: ClassLoader> ClassLoader for LazyClassLoader<C> {
 
     fn load_classfile(&mut self, class_name: &str) -> Result<Option<ClassFile>, VmError> {
         self.inner.load_classfile(class_name)
+    }
+
+    fn find_resource_bytes(&mut self, resource_path: &str) -> Option<Vec<u8>> {
+        self.inner.find_resource_bytes(resource_path)
     }
 }
 

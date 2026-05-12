@@ -346,6 +346,15 @@ impl Vm {
             }
         }
 
+        drop(runtime);
+
+        // Roots from any in-progress JIT-compiled frame on this thread. The
+        // helper reads each frame's deopt buffer, which compiled code keeps
+        // in sync with current locals via `emit_deopt_local_store`.
+        for r in crate::vm::jit::runtime::jit_active_frame_roots() {
+            roots.push(r);
+        }
+
         self.heap.lock().unwrap().gc(&roots);
     }
 
@@ -480,6 +489,16 @@ impl Vm {
     /// Set the classpath entries used for on-demand class loading.
     pub fn set_class_path(&mut self, paths: Vec<PathBuf>) {
         self.class_path = paths;
+    }
+
+    /// Find a resource from the bootstrap classpath.
+    pub fn find_resource(&mut self, resource_path: &str) -> Option<Vec<u8>> {
+        if let Some(ref mut loader) = self.class_loader {
+            if let Some(bytes) = ClassLoader::find_resource_bytes(loader, resource_path) {
+                return Some(bytes);
+            }
+        }
+        None
     }
 
     /// Register a class loaded from a `.class` file.
@@ -911,9 +930,6 @@ impl Vm {
         {
             return None;
         }
-        if method.max_locals > 5 {
-            return None;
-        }
 
         let method_key = JitCompiler::osr_method_key(&method, entry_pc);
         let code = self.jit.as_ref()?.get_or_compile_osr(&method, entry_pc)?;
@@ -928,9 +944,10 @@ impl Vm {
             return None;
         }
 
-        let args = Self::osr_locals_to_args(locals);
+        let osr_locals = Self::osr_locals_to_buffer(&locals, method.max_locals);
         let ret = crate::vm::jit::runtime::JitReturn::from_descriptor(&method.descriptor);
-        let result = jit_context.execute_typed(vm_ptr, &method_key, &args, ret)?;
+        let result =
+            jit_context.execute_osr_typed(vm_ptr, &method_key, &osr_locals, ret)?;
         self.runtime.lock().unwrap().jit_executions += 1;
         let snapshot = take_last_deopt_snapshot();
         self.complete_jit_execution(
@@ -940,17 +957,21 @@ impl Vm {
             &deopt_stack_kinds_by_pc,
             snapshot,
             take_pending_jit_exception(),
-            Some(Vm::args_to_locals(args)),
+            Some(Vm::args_to_locals(osr_locals)),
             result,
             ret,
         )
     }
 
-    fn osr_locals_to_args(locals: Vec<Option<Value>>) -> Vec<Value> {
-        locals
-            .into_iter()
-            .map(|value| value.unwrap_or(Value::Int(0)))
-            .collect()
+    /// Pack an interpreter local table into a contiguous, fixed-length buffer
+    /// that matches the OSR-compiled function's `locals_ptr` ABI: one i64 slot
+    /// per declared local (uninitialized slots become zero ints).
+    fn osr_locals_to_buffer(locals: &[Option<Value>], max_locals: usize) -> Vec<Value> {
+        let mut out = Vec::with_capacity(max_locals);
+        for i in 0..max_locals {
+            out.push(locals.get(i).and_then(|v| v.clone()).unwrap_or(Value::Int(0)));
+        }
+        out
     }
 
     pub(crate) fn invoke_jit_static_method_ref(
@@ -3946,6 +3967,11 @@ impl Vm {
         extra_args: Vec<Value>,
     ) -> Result<ExecutionResult, VmError> {
         let class_name = self.get_object_class(receiver)?;
+        if class_name.starts_with("__lambda_proxy_")
+            && method_name == class_name.trim_start_matches("__lambda_proxy_")
+        {
+            return self.call_lambda_proxy(receiver, extra_args);
+        }
         let (resolved_class, class_method) =
             self.resolve_method(&class_name, method_name, descriptor)?;
         let mut all_args = vec![Value::Reference(receiver)];
@@ -3954,6 +3980,70 @@ impl Vm {
             ClassMethod::Native => {
                 let result =
                     self.invoke_native(&resolved_class, method_name, descriptor, &all_args)?;
+                Ok(match result {
+                    Some(v) => ExecutionResult::Value(v),
+                    None => ExecutionResult::Void,
+                })
+            }
+            ClassMethod::Bytecode(method) => {
+                let callee = method.with_initial_locals(Vm::args_to_locals(all_args));
+                self.execute(callee)
+            }
+        }
+    }
+
+    /// Invoke a lambda proxy's single abstract method, returning the result
+    /// synchronously. Mirrors `dispatch_lambda_proxy` but produces a value
+    /// instead of pushing onto a thread frame.
+    fn call_lambda_proxy(
+        &mut self,
+        receiver: Reference,
+        extra_args: Vec<Value>,
+    ) -> Result<ExecutionResult, VmError> {
+        let (target_class, target_method, target_desc, captures) = {
+            let class_name = self.get_object_class(receiver)?;
+            let class = self.get_class(&class_name)?;
+            let fields = match self.heap.lock().unwrap().get(receiver)? {
+                HeapValue::Object { fields, .. } => fields.clone(),
+                _ => return Err(VmError::NullReference),
+            };
+
+            let get_str = |key: &str| -> Result<std::string::String, VmError> {
+                let Some(offset) = class.field_offsets.get(key).copied() else {
+                    return Ok(std::string::String::new());
+                };
+                match fields.get(offset) {
+                    Some(Value::Reference(r)) => self.stringify_reference(*r),
+                    _ => Ok(std::string::String::new()),
+                }
+            };
+
+            let tc = get_str("__target_class")?;
+            let tm = get_str("__target_method")?;
+            let td = get_str("__target_desc")?;
+
+            let mut captures = Vec::new();
+            let mut i = 0;
+            while let Some(offset) = class.field_offsets.get(&format!("__capture_{i}")).copied() {
+                let Some(Value::Reference(r)) = fields.get(offset) else {
+                    break;
+                };
+                captures.push(*r);
+                i += 1;
+            }
+            (tc, tm, td, captures)
+        };
+
+        let mut all_args: Vec<Value> = captures.into_iter().map(Value::Reference).collect();
+        all_args.extend(extra_args);
+
+        self.ensure_class_loaded(&target_class)?;
+        let (resolved_class, class_method) =
+            self.resolve_method(&target_class, &target_method, &target_desc)?;
+        match class_method {
+            ClassMethod::Native => {
+                let result =
+                    self.invoke_native(&resolved_class, &target_method, &target_desc, &all_args)?;
                 Ok(match result {
                     Some(v) => ExecutionResult::Value(v),
                     None => ExecutionResult::Void,

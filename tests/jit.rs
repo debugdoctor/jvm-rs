@@ -202,6 +202,87 @@ public class Main {
         );
     }
 
+    /// OSR formerly bailed out when `method.max_locals > 5` because the
+    /// runtime only passed 6 args via SysV registers. Now locals are passed
+    /// via a buffer pointer, so methods with arbitrary local counts can
+    /// OSR-promote.
+    #[test]
+    fn jit_osr_enters_hot_loop_with_many_locals() {
+        let root = compile_java(
+            "osr_many_locals",
+            &[(
+                "demo/Main.java",
+                r#"
+package demo;
+public class Main {
+    // 9 locals (n, sum, i, a, b, c, d, e, f). Pre-fix this would skip OSR.
+    static int hotMany(int n) {
+        int sum = 0;
+        int a = 1, b = 2, c = 3, d = 4, e = 5, f = 6;
+        for (int i = 0; i < n; i++) {
+            sum += (i * 3) - 1 + a + b + c + d + e + f;
+        }
+        return sum;
+    }
+    public static void main(String[] args) {
+        System.out.println(hotMany(25));
+    }
+}
+"#,
+            )],
+        );
+
+        let interp = run_with_jit_thresholds(root.path(), "demo.Main", u32::MAX, u32::MAX);
+        let osr = run_with_jit_thresholds(root.path(), "demo.Main", u32::MAX, 1);
+
+        assert_eq!(osr.output, interp.output);
+        assert!(
+            osr.jit_executions > 0,
+            "expected OSR to enter the JIT tier for a method with >5 locals"
+        );
+    }
+
+    /// Mixed primitive and reference locals must survive the OSR transition.
+    /// Each local is decoded per its declared Cranelift type from the
+    /// runtime-supplied locals buffer.
+    #[test]
+    fn jit_osr_mixed_primitive_and_reference_locals() {
+        let root = compile_java(
+            "osr_mixed_locals",
+            &[(
+                "demo/Main.java",
+                r#"
+package demo;
+public class Main {
+    static int mixed(int n) {
+        String tag = "v";
+        long acc = 0L;
+        double scale = 1.5;
+        int sum = 0;
+        for (int i = 0; i < n; i++) {
+            acc += i;
+            sum += (int)(acc * scale) + tag.length();
+        }
+        return sum;
+    }
+    public static void main(String[] args) {
+        System.out.println(mixed(30));
+    }
+}
+"#,
+            )],
+        );
+
+        let interp = run_with_jit_thresholds(root.path(), "demo.Main", u32::MAX, u32::MAX);
+        let osr = run_with_jit_thresholds(root.path(), "demo.Main", u32::MAX, 1);
+
+        assert_eq!(osr.output, interp.output);
+        assert!(
+            osr.jit_executions > 0,
+            "expected OSR to enter the JIT tier for a method with mixed local kinds"
+        );
+    }
+
     #[test]
     fn jit_osr_enters_hot_loop_from_interpreter() {
         let root = compile_java(
@@ -3691,6 +3772,49 @@ public class Main {
             assert!(
                 jit.jit_executions >= 2,
                 "expected top-level JIT/deopt plus compiled safeLoad() to reach JIT, got {}",
+                jit.jit_executions
+            );
+        }
+
+        /// Methods that explicitly `athrow` inside a try block used to be
+        /// rejected by the JIT entirely. Now they JIT-compile and rely on the
+        /// helper-recorded pending exception plus deopt snapshot to let the
+        /// interpreter resume at the matching handler.
+        #[test]
+        fn jit_explicit_athrow_in_try_block() {
+            let root = compile_java(
+                "jit_explicit_athrow_in_try_block",
+                &[(
+                    "demo/Main.java",
+                    r#"
+package demo;
+public class Main {
+    static int doIt(int n) {
+        try {
+            if (n < 0) {
+                throw new IllegalArgumentException("neg");
+            }
+            return n * 2;
+        } catch (IllegalArgumentException e) {
+            return -1;
+        }
+    }
+    public static void main(String[] args) {
+        System.out.println(doIt(7));
+        System.out.println(doIt(-3));
+    }
+}
+"#,
+                )],
+            );
+            let interp = run_with_jit_threshold(&root, "demo.Main", u32::MAX);
+            let jit = run_with_jit_threshold(&root, "demo.Main", 1);
+
+            assert_eq!(jit.output, interp.output);
+            assert_eq!(jit.output, vec!["14".to_string(), "-1".to_string()]);
+            assert!(
+                jit.jit_executions >= 2,
+                "expected compiled doIt() with athrow + handler to reach JIT, got {}",
                 jit.jit_executions
             );
         }

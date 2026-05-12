@@ -48,10 +48,10 @@ HotSpot is the comparison point: it has a complete JDK surface, mature GC implem
 - [x] Create a built-in/native compatibility table: class, method signature, implementation type, semantic completeness, test coverage.
 - [x] Improve `java.lang.Class` and reflection: annotations, modifiers, constructors, primitive/array class metadata, and method invocation error semantics.
 - [x] Improve `java.lang.Thread`: interrupt, daemon flag, name, priority, context class loader, uncaught exception handler.
-- [ ] Implement `ServiceLoader`, resource loading, system properties, and environment access behavior needed by common libraries.
+- [x] Implement `ServiceLoader`, resource loading, system properties, and environment access behavior needed by common libraries.
 - [x] Move `java.io` and `java.nio.file` from stubs toward real file IO, error handling, and path normalization.
-- [ ] Expand `java.util.stream`: map/filter/reduce/collect pipelines instead of only selected native collector/stream shortcuts.
-- [ ] Implement `String.intern()` with proper string pool for deduplication.
+- [x] Expand `java.util.stream`: map/filter/reduce/collect pipelines instead of only selected native collector/stream shortcuts.
+- [x] Implement `String.intern()` with proper string pool for deduplication.
 
 ### P3: Specification And Ecosystem
 
@@ -97,10 +97,10 @@ Current support matrix, derived from `src/vm/jit/compiler.rs` as of 2026-05-07:
 
 ### P1: Deoptimization And OSR
 
-- [ ] Remove the temporary OSR restriction where `method.max_locals > 5` skips OSR.
-- [ ] Generalize OSR locals/stack mapping for arbitrary local counts and mixed primitive/reference values.
-- [ ] Support exception tables inside compiled methods so `athrow` can find compiled-frame handlers before falling back.
-- [ ] Add safepoint and GC-root visibility for compiled frames.
+- [x] Remove the temporary OSR restriction where `method.max_locals > 5` skips OSR. OSR functions now use `(vm_ptr, locals_ptr)` ABI and load locals from a runtime-supplied buffer, removing the SysV register-budget cap.
+- [x] Generalize OSR locals/stack mapping for arbitrary local counts and mixed primitive/reference values. Each local is coerced per its declared Cranelift type at the OSR entry block.
+- [x] Support exception tables inside compiled methods so `athrow` can find compiled-frame handlers. Compiled `athrow` raises a pending exception plus deopt snapshot; `complete_jit_execution` resumes the interpreter so it can dispatch to the matching handler frame. Per-bytecode in-compiled-code handler dispatch remains future work.
+- [x] Add GC-root visibility for compiled frames. Each in-progress JIT invocation registers an `ActiveJitFrame` in TLS so the GC root scanner can walk every compiled frame's deopt-buffer locals and treat reference slots as roots. Safepoint placement (precise stack roots at every bytecode boundary) remains future work.
 - [ ] Make deopt metadata robust enough for inlined frames before implementing aggressive inlining.
 
 ### P2: Profiling And Optimization

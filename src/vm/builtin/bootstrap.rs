@@ -1040,31 +1040,55 @@ pub(super) fn bootstrap_java_util(vm: &mut Vm) {
         interfaces: vec![],
     });
 
-    let mut native_int_stream_methods = HashMap::new();
+    // IntStream base methods for pipeline support
+    let mut int_stream_methods = HashMap::new();
     for (name, desc) in [
+        ("map", "(Ljava/util/function/IntUnaryOperator;)Ljava/util/stream/IntStream;"),
+        ("filter", "(Ljava/util/function/IntPredicate;)Ljava/util/stream/IntStream;"),
+        ("forEach", "(Ljava/util/function/IntConsumer;)V"),
+        ("toArray", "()[I"),
         ("sum", "()I"),
         ("count", "()J"),
-        ("min", "()Ljava/util/OptionalInt;"),
-        ("max", "()Ljava/util/OptionalInt;"),
-        ("average", "()Ljava/util/OptionalDouble;"),
-        ("toArray", "()[I"),
-        ("asLongStream", "()Ljava/util/stream/LongStream;"),
-        ("asDoubleStream", "()Ljava/util/stream/DoubleStream;"),
-        (
-            "collect",
-            "(Ljava/util/stream/Collector;)Ljava/lang/Object;",
-        ),
     ] {
-        native_int_stream_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+        int_stream_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
     }
     vm.register_class(RuntimeClass {
         name: "__jvm_rs/NativeIntStream".to_string(),
         super_class: Some("java/lang/Object".to_string()),
-        methods: native_int_stream_methods,
+        methods: int_stream_methods,
         static_fields: HashMap::new(),
         instance_fields: vec![("__array".to_string(), "[I".to_string())],
         field_offsets: build_field_offsets(&vec![("__array".to_string(), "[I".to_string())]),
         interfaces: vec!["java/util/stream/IntStream".to_string()],
+    });
+
+    // IntStream specialized functional interfaces
+    vm.register_class(RuntimeClass {
+        name: "java/util/function/IntUnaryOperator".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: HashMap::new(),
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
+        interfaces: vec![],
+    });
+    vm.register_class(RuntimeClass {
+        name: "java/util/function/IntPredicate".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: HashMap::new(),
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
+        interfaces: vec![],
+    });
+    vm.register_class(RuntimeClass {
+        name: "java/util/function/IntConsumer".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: HashMap::new(),
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
+        interfaces: vec![],
     });
 
     let mut native_long_stream_methods = HashMap::new();
@@ -1264,6 +1288,100 @@ pub(super) fn bootstrap_java_util(vm: &mut Vm) {
             "__input".to_string(),
             "Ljava/lang/String;".to_string(),
         )]),
+        interfaces: vec![],
+    });
+
+    // java.util.function interfaces for Stream pipeline support
+    vm.register_class(RuntimeClass {
+        name: "java/util/function/Function".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: HashMap::new(),
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
+        interfaces: vec![],
+    });
+    vm.register_class(RuntimeClass {
+        name: "java/util/function/Predicate".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: HashMap::new(),
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
+        interfaces: vec![],
+    });
+    vm.register_class(RuntimeClass {
+        name: "java/util/function/Consumer".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: HashMap::new(),
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
+        interfaces: vec![],
+    });
+    vm.register_class(RuntimeClass {
+        name: "java/util/function/Supplier".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: HashMap::new(),
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
+        interfaces: vec![],
+    });
+    vm.register_class(RuntimeClass {
+        name: "java/util/function/UnaryOperator".to_string(),
+        super_class: Some("java/util/function/Function".to_string()),
+        methods: HashMap::new(),
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
+        interfaces: vec![],
+    });
+    vm.register_class(RuntimeClass {
+        name: "java/util/function/BiFunction".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: HashMap::new(),
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
+        interfaces: vec![],
+    });
+    vm.register_class(RuntimeClass {
+        name: "java/util/function/BiConsumer".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: HashMap::new(),
+        static_fields: HashMap::new(),
+        instance_fields: vec![],
+        field_offsets: build_field_offsets(&vec![]),
+        interfaces: vec![],
+    });
+
+    let mut service_loader_methods = HashMap::new();
+    for (name, desc) in [
+        ("load", "(Ljava/lang/Class;)Ljava/util/ServiceLoader;"),
+        ("loadInstalledProviders", "(Ljava/lang/Class;)Ljava/util/ServiceLoader;"),
+        ("reload", "()V"),
+        ("iterator", "()Ljava/util/Iterator;"),
+    ] {
+        service_loader_methods.insert((name.to_string(), desc.to_string()), ClassMethod::Native);
+    }
+    vm.register_class(RuntimeClass {
+        name: "java/util/ServiceLoader".to_string(),
+        super_class: Some("java/lang/Object".to_string()),
+        methods: service_loader_methods,
+        static_fields: HashMap::new(),
+        instance_fields: vec![
+            ("service".to_string(), "Ljava/lang/Class;".to_string()),
+            ("loader".to_string(), "Ljava/lang/ClassLoader;".to_string()),
+            ("__providers".to_string(), "Ljava/lang/String;".to_string()),
+            ("__loadedProviders".to_string(), "Ljava/lang/String;".to_string()),
+        ],
+        field_offsets: build_field_offsets(&vec![
+            ("service".to_string(), "Ljava/lang/Class;".to_string()),
+            ("loader".to_string(), "Ljava/lang/ClassLoader;".to_string()),
+            ("__providers".to_string(), "Ljava/lang/String;".to_string()),
+            ("__loadedProviders".to_string(), "Ljava/lang/String;".to_string()),
+        ]),
         interfaces: vec![],
     });
 }

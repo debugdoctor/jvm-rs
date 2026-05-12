@@ -19,6 +19,67 @@ thread_local! {
     static CURRENT_VM: std::cell::UnsafeCell<u64> = std::cell::UnsafeCell::new(0);
     static PENDING_JIT_EXCEPTION: std::cell::UnsafeCell<u64> = std::cell::UnsafeCell::new(0);
     static LAST_DEOPT_SNAPSHOT: std::cell::RefCell<Option<DeoptSnapshot>> = const { std::cell::RefCell::new(None) };
+    static ACTIVE_JIT_FRAMES: std::cell::RefCell<Vec<ActiveJitFrame>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Bookkeeping for one in-progress JIT invocation so the GC can scan compiled
+/// frames for live references. The `deopt_buffer_ptr` always references the
+/// live buffer owned by `execute_typed`/`execute_osr_typed`; compiled code
+/// updates the locals slots continuously via `emit_deopt_local_store`, so a
+/// snapshot read from this buffer reflects the JIT frame's current locals.
+pub struct ActiveJitFrame {
+    pub deopt_buffer_ptr: *const u64,
+    pub deopt_local_count: usize,
+    pub deopt_stack_count: usize,
+    pub local_kinds: Vec<super::DeoptLocalKind>,
+}
+
+/// RAII guard that ensures `pop_active_jit_frame` runs even if the compiled
+/// code unwinds (panics) through `execute_typed`.
+pub(super) struct ActiveJitFrameGuard;
+
+impl Drop for ActiveJitFrameGuard {
+    fn drop(&mut self) {
+        ACTIVE_JIT_FRAMES.with(|cell| {
+            cell.borrow_mut().pop();
+        });
+    }
+}
+
+pub(super) fn push_active_jit_frame(frame: ActiveJitFrame) -> ActiveJitFrameGuard {
+    ACTIVE_JIT_FRAMES.with(|cell| cell.borrow_mut().push(frame));
+    ActiveJitFrameGuard
+}
+
+/// Walk every in-progress JIT frame on this thread and collect heap
+/// references from its deopt locals buffer. Called by the GC root scanner so
+/// references live only in compiled frames stay reachable across collections.
+pub fn jit_active_frame_roots() -> Vec<crate::vm::Reference> {
+    ACTIVE_JIT_FRAMES.with(|cell| {
+        let frames = cell.borrow();
+        let mut roots = Vec::new();
+        for frame in frames.iter() {
+            // SAFETY: `deopt_buffer_ptr` references the still-live deopt buffer
+            // owned by an ancestor `execute_typed`/`execute_osr_typed` call on
+            // this same thread. The guard mechanism ensures the entry is
+            // removed before that frame returns.
+            for i in 0..frame.deopt_local_count {
+                let kind = match frame.local_kinds.get(i) {
+                    Some(k) => k,
+                    None => continue,
+                };
+                if !matches!(kind, super::DeoptLocalKind::Reference) {
+                    continue;
+                }
+                let raw = unsafe { *frame.deopt_buffer_ptr.add(1 + i) };
+                let reference = decode_reference(raw);
+                if matches!(reference, crate::vm::Reference::Heap(_)) {
+                    roots.push(reference);
+                }
+            }
+        }
+        roots
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -1589,6 +1650,9 @@ pub struct JitEntry {
     num_slots: usize,
     deopt_local_count: usize,
     deopt_stack_count: usize,
+    /// Per-local descriptor kept alongside the compiled code so the GC can
+    /// decode the deopt-buffer slots that mirror the compiled frame's locals.
+    local_kinds: Vec<super::DeoptLocalKind>,
 }
 
 impl JitEntry {
@@ -1598,6 +1662,7 @@ impl JitEntry {
         num_slots: usize,
         deopt_local_count: usize,
         deopt_stack_count: usize,
+        local_kinds: Vec<super::DeoptLocalKind>,
     ) -> Option<Self> {
         let (code_ptr, alloc_size) = Self::make_executable(&code)?;
         Some(JitEntry {
@@ -1607,7 +1672,12 @@ impl JitEntry {
             num_slots,
             deopt_local_count,
             deopt_stack_count,
+            local_kinds,
         })
+    }
+
+    pub fn local_kinds(&self) -> &[super::DeoptLocalKind] {
+        &self.local_kinds
     }
 
     fn make_executable(code: &[u8]) -> Option<(usize, usize)> {
@@ -1728,6 +1798,7 @@ impl JitEntry {
             num_slots: 0,
             deopt_local_count,
             deopt_stack_count,
+            local_kinds: Vec::new(),
         }
     }
 }
@@ -1780,6 +1851,7 @@ impl JitContext {
         let num_slots = code.stack_slots.len();
         let deopt_local_count = code.deopt_info.local_kinds.len();
         let deopt_stack_count = code.deopt_info.max_stack_depth;
+        let local_kinds = code.deopt_info.local_kinds.clone();
 
         match JitEntry::new(
             code.code_buffer,
@@ -1787,6 +1859,7 @@ impl JitContext {
             num_slots,
             deopt_local_count,
             deopt_stack_count,
+            local_kinds,
         ) {
             Some(entry) => {
                 self.entries.insert(key, entry);
@@ -1811,6 +1884,109 @@ impl JitContext {
         args: &[crate::vm::types::Value],
     ) -> Option<crate::vm::types::Value> {
         self.execute_typed(vm_ptr, key, args, JitReturn::Int)
+    }
+
+    /// Invoke an OSR-compiled method. OSR functions take `(vm_ptr, locals_ptr)`
+    /// rather than per-local register arguments; this lets methods with any
+    /// `max_locals` enter OSR without exhausting the platform argument-register
+    /// budget.
+    pub fn execute_osr_typed(
+        &self,
+        vm_ptr: u64,
+        key: &str,
+        locals: &[crate::vm::types::Value],
+        ret: JitReturn,
+    ) -> Option<crate::vm::types::Value> {
+        let entry = self.entries.get(key)?;
+        let fn_ptr = entry.code_ptr();
+        clear_pending_jit_exception();
+        clear_last_deopt_snapshot();
+        set_current_vm(vm_ptr);
+        let deopt_stack_depth_index = 1 + entry.deopt_local_count();
+        let deopt_stack_base = deopt_stack_depth_index + 1;
+        let mut deopt_buffer = vec![0u64; deopt_stack_base + entry.deopt_stack_count()];
+
+        let mut locals_buffer: Vec<u64> = Vec::with_capacity(locals.len());
+        for value in locals {
+            let raw = match value {
+                crate::vm::types::Value::Int(v) => *v as u32 as u64,
+                crate::vm::types::Value::Long(v) => *v as u64,
+                crate::vm::types::Value::Float(v) => v.to_bits() as u64,
+                crate::vm::types::Value::Double(v) => v.to_bits(),
+                crate::vm::types::Value::Reference(r) => encode_reference(*r),
+                crate::vm::types::Value::ReturnAddress(_) => 0,
+            };
+            locals_buffer.push(raw);
+        }
+
+        let deopt_ptr = deopt_buffer.as_mut_ptr() as u64;
+        let locals_ptr = locals_buffer.as_ptr() as u64;
+
+        // Register the deopt buffer as a GC-root provider for the duration of
+        // this call. The buffer's reference slots are continuously updated by
+        // `emit_deopt_local_store` in compiled code, so any GC that fires from
+        // a helper while this JIT frame is on the stack will see live
+        // references through `jit_active_frame_roots`.
+        let _root_guard = push_active_jit_frame(ActiveJitFrame {
+            deopt_buffer_ptr: deopt_buffer.as_ptr(),
+            deopt_local_count: entry.deopt_local_count(),
+            deopt_stack_count: entry.deopt_stack_count(),
+            local_kinds: entry.local_kinds().to_vec(),
+        });
+
+        let result = unsafe {
+            match ret {
+                JitReturn::Void => {
+                    let f: extern "C" fn(u64, u64) = std::mem::transmute(fn_ptr);
+                    f(deopt_ptr, locals_ptr);
+                    Some(crate::vm::types::Value::Int(0))
+                }
+                JitReturn::Int => {
+                    let f: extern "C" fn(u64, u64) -> u64 = std::mem::transmute(fn_ptr);
+                    Some(crate::vm::types::Value::Int(f(deopt_ptr, locals_ptr) as i32))
+                }
+                JitReturn::Long => {
+                    let f: extern "C" fn(u64, u64) -> u64 = std::mem::transmute(fn_ptr);
+                    Some(crate::vm::types::Value::Long(f(deopt_ptr, locals_ptr) as i64))
+                }
+                JitReturn::Float => {
+                    let f: extern "C" fn(u64, u64) -> f32 = std::mem::transmute(fn_ptr);
+                    Some(crate::vm::types::Value::Float(f(deopt_ptr, locals_ptr)))
+                }
+                JitReturn::Double => {
+                    let f: extern "C" fn(u64, u64) -> f64 = std::mem::transmute(fn_ptr);
+                    Some(crate::vm::types::Value::Double(f(deopt_ptr, locals_ptr)))
+                }
+                JitReturn::Reference => {
+                    let f: extern "C" fn(u64, u64) -> u64 = std::mem::transmute(fn_ptr);
+                    let r = f(deopt_ptr, locals_ptr);
+                    Some(crate::vm::types::Value::Reference(decode_reference(r)))
+                }
+            }
+        };
+
+        // Keep the locals buffer alive across the call (the JIT may read from
+        // it during deopt reconstruction).
+        std::hint::black_box(&locals_buffer);
+
+        let stack_depth = deopt_buffer
+            .get(deopt_stack_depth_index)
+            .copied()
+            .unwrap_or(0) as usize;
+        let stack_end = deopt_stack_base + stack_depth.min(entry.deopt_stack_count());
+        let deopt_flags = deopt_buffer[0];
+        set_last_deopt_snapshot(DeoptSnapshot {
+            reason: if deopt_flags & DEOPT_PENDING_MARKER != 0 {
+                decode_deopt_reason(deopt_flags)
+            } else {
+                None
+            },
+            pc: (deopt_flags & !(DEOPT_PENDING_MARKER | DEOPT_REASON_MASK)) as usize,
+            locals: deopt_buffer[1..deopt_stack_depth_index].to_vec(),
+            stack: deopt_buffer[deopt_stack_base..stack_end].to_vec(),
+        });
+        clear_current_vm();
+        result
     }
 
     pub fn execute_typed(
@@ -1870,6 +2046,16 @@ impl JitContext {
                 crate::vm::types::Value::ReturnAddress(_) => {}
             }
         }
+
+        // Register the deopt buffer as a GC-root provider for the duration of
+        // this call so references that live only in the compiled frame's
+        // locals survive any GC triggered by a helper.
+        let _root_guard = push_active_jit_frame(ActiveJitFrame {
+            deopt_buffer_ptr: deopt_buffer.as_ptr(),
+            deopt_local_count: entry.deopt_local_count(),
+            deopt_stack_count: entry.deopt_stack_count(),
+            local_kinds: entry.local_kinds().to_vec(),
+        });
 
         let result = unsafe {
             match ret {
@@ -2055,6 +2241,44 @@ mod tests {
             key.to_string(),
             JitEntry::from_fn_ptr(fn_ptr, deopt_local_count, deopt_stack_count),
         );
+    }
+
+    /// The GC root scanner reads each active JIT frame's deopt buffer using
+    /// the saved per-local kinds, so reference slots become roots while
+    /// primitive slots are filtered out. Verifies the contract independently
+    /// of any real compiled code.
+    #[test]
+    fn jit_active_frame_roots_returns_reference_locals() {
+        use super::super::DeoptLocalKind;
+
+        let deopt_buffer: Vec<u64> = vec![
+            0,                                                  // [0] flags
+            super::encode_reference(crate::vm::Reference::Heap(11)),   // [1] local 0: Reference
+            42,                                                 // [2] local 1: Int
+            super::encode_reference(crate::vm::Reference::Heap(22)),   // [3] local 2: Reference
+            7,                                                  // [4] local 3: Int
+        ];
+        let frame = super::ActiveJitFrame {
+            deopt_buffer_ptr: deopt_buffer.as_ptr(),
+            deopt_local_count: 4,
+            deopt_stack_count: 0,
+            local_kinds: vec![
+                DeoptLocalKind::Reference,
+                DeoptLocalKind::Int,
+                DeoptLocalKind::Reference,
+                DeoptLocalKind::Int,
+            ],
+        };
+        let _guard = super::push_active_jit_frame(frame);
+
+        let roots = super::jit_active_frame_roots();
+        assert_eq!(
+            roots,
+            vec![crate::vm::Reference::Heap(11), crate::vm::Reference::Heap(22)],
+        );
+
+        drop(_guard);
+        assert!(super::jit_active_frame_roots().is_empty());
     }
 
     #[test]

@@ -1088,12 +1088,34 @@ pub(super) fn invoke_lang(
         }
         ("java/lang/Thread", "<init>", "()V") => {
             let obj_ref = args[0].as_reference()?;
+            let index = match obj_ref {
+                Reference::Heap(idx) => idx,
+                Reference::Null => return Err(VmError::NullReference),
+            };
+            let thread_name = vm.new_string(format!("Thread-{}", index));
             vm.set_object_field(obj_ref, "target", Value::Reference(Reference::Null))?;
+            vm.set_object_field(obj_ref, "name", thread_name)?;
+            vm.set_object_field(obj_ref, "priority", Value::Int(5))?;
+            vm.set_object_field(obj_ref, "daemon", Value::Int(0))?;
+            vm.set_object_field(obj_ref, "threadGroup", Value::Reference(Reference::Null))?;
+            vm.set_object_field(obj_ref, "contextClassLoader", Value::Reference(Reference::Null))?;
+            vm.set_object_field(obj_ref, "uncaughtExceptionHandler", Value::Reference(Reference::Null))?;
             Ok(None)
         }
         ("java/lang/Thread", "<init>", "(Ljava/lang/Runnable;)V") => {
             let obj_ref = args[0].as_reference()?;
-            vm.set_object_field(obj_ref, "target", args[1])?;
+            let index = match obj_ref {
+                Reference::Heap(idx) => idx,
+                Reference::Null => return Err(VmError::NullReference),
+            };
+            let thread_name = vm.new_string(format!("Thread-{}", index));
+            vm.set_object_field(obj_ref, "target", args[1].clone())?;
+            vm.set_object_field(obj_ref, "name", thread_name)?;
+            vm.set_object_field(obj_ref, "priority", Value::Int(5))?;
+            vm.set_object_field(obj_ref, "daemon", Value::Int(0))?;
+            vm.set_object_field(obj_ref, "threadGroup", Value::Reference(Reference::Null))?;
+            vm.set_object_field(obj_ref, "contextClassLoader", Value::Reference(Reference::Null))?;
+            vm.set_object_field(obj_ref, "uncaughtExceptionHandler", Value::Reference(Reference::Null))?;
             Ok(None)
         }
         ("java/lang/Thread", "start", "()V") => {
@@ -1142,6 +1164,109 @@ pub(super) fn invoke_lang(
         ("java/lang/Thread", "join", "()V") => {
             let thread_ref = args[0].as_reference()?;
             vm.join_java_thread(thread_ref)?;
+            Ok(None)
+        }
+        ("java/lang/Thread", "getName", "()Ljava/lang/String;") => {
+            let thread_ref = args[0].as_reference()?;
+            let name = vm.get_object_field(thread_ref, "name")?;
+            Ok(Some(name))
+        }
+        ("java/lang/Thread", "setName", "(Ljava/lang/String;)V") => {
+            let thread_ref = args[0].as_reference()?;
+            let name = args[1].clone();
+            vm.set_object_field(thread_ref, "name", name)?;
+            Ok(None)
+        }
+        ("java/lang/Thread", "getPriority", "()I") => {
+            let thread_ref = args[0].as_reference()?;
+            let priority = vm.get_object_field(thread_ref, "priority")?;
+            Ok(Some(priority))
+        }
+        ("java/lang/Thread", "setPriority", "(I)V") => {
+            let thread_ref = args[0].as_reference()?;
+            let priority = args[1].clone();
+            vm.set_object_field(thread_ref, "priority", priority)?;
+            Ok(None)
+        }
+        ("java/lang/Thread", "isDaemon", "()Z") => {
+            let thread_ref = args[0].as_reference()?;
+            let daemon = vm.get_object_field(thread_ref, "daemon")?;
+            Ok(Some(daemon))
+        }
+        ("java/lang/Thread", "setDaemon", "(Z)V") => {
+            let thread_ref = args[0].as_reference()?;
+            let daemon = args[1].clone();
+            vm.set_object_field(thread_ref, "daemon", daemon)?;
+            Ok(None)
+        }
+        ("java/lang/Thread", "getId", "()J") => {
+            let thread_ref = args[0].as_reference()?;
+            let index = match thread_ref {
+                Reference::Heap(idx) => idx as i64,
+                Reference::Null => return Err(VmError::NullReference),
+            };
+            Ok(Some(Value::Long(index)))
+        }
+        ("java/lang/Thread", "isAlive", "()Z") => {
+            let thread_ref = args[0].as_reference()?;
+            let index = match thread_ref {
+                Reference::Heap(idx) => idx,
+                Reference::Null => return Err(VmError::NullReference),
+            };
+            let started = vm.threads.states.lock().unwrap()
+                .get(&index)
+                .map(|s| s.started)
+                .unwrap_or(false);
+            Ok(Some(Value::Int(i32::from(started))))
+        }
+        ("java/lang/Thread", "isInterrupted", "()Z") => {
+            let thread_ref = args[0].as_reference()?;
+            let index = match thread_ref {
+                Reference::Heap(idx) => idx,
+                Reference::Null => return Err(VmError::NullReference),
+            };
+            let interrupted = vm.threads.states.lock().unwrap()
+                .get(&index)
+                .map(|s| s.interrupted)
+                .unwrap_or(false);
+            Ok(Some(Value::Int(i32::from(interrupted))))
+        }
+        ("java/lang/Thread", "interrupt", "()V") => {
+            let thread_ref = args[0].as_reference()?;
+            let index = match thread_ref {
+                Reference::Heap(idx) => idx,
+                Reference::Null => return Err(VmError::NullReference),
+            };
+            vm.threads.states.lock().unwrap()
+                .get_mut(&index)
+                .map(|s| s.interrupted = true);
+            Ok(None)
+        }
+        ("java/lang/Thread", "getThreadGroup", "()Ljava/lang/ThreadGroup;") => {
+            let thread_ref = args[0].as_reference()?;
+            let group = vm.get_object_field(thread_ref, "threadGroup")?;
+            Ok(Some(group))
+        }
+        ("java/lang/Thread", "getContextClassLoader", "()Ljava/lang/ClassLoader;") => {
+            let thread_ref = args[0].as_reference()?;
+            let ccl = vm.get_object_field(thread_ref, "contextClassLoader")?;
+            Ok(Some(ccl))
+        }
+        ("java/lang/Thread", "setContextClassLoader", "(Ljava/lang/ClassLoader;)V") => {
+            let thread_ref = args[0].as_reference()?;
+            let ccl = args[1].clone();
+            vm.set_object_field(thread_ref, "contextClassLoader", ccl)?;
+            Ok(None)
+        }
+        ("java/lang/Thread", "getUncaughtExceptionHandler", "()Ljava/lang/Thread$UncaughtExceptionHandler;") => {
+            let thread_ref = args[0].as_reference()?;
+            let handler = vm.get_object_field(thread_ref, "uncaughtExceptionHandler")?;
+            Ok(Some(handler))
+        }
+        ("java/lang/Thread", "setUncaughtExceptionHandler", "(Ljava/lang/Thread$UncaughtExceptionHandler;)V") => {
+            let thread_ref = args[0].as_reference()?;
+            let handler = args[1].clone();
+            vm.set_object_field(thread_ref, "uncaughtExceptionHandler", handler)?;
             Ok(None)
         }
         ("java/lang/Thread", _, _) => {

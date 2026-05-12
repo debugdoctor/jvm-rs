@@ -4500,6 +4500,7 @@ impl Vm {
             index,
             JavaThreadState {
                 started: true,
+                interrupted: false,
                 handle: Some(handle),
             },
         );

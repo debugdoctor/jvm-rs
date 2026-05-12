@@ -54,6 +54,7 @@ pub(super) struct SharedThreads {
 
 pub(super) struct JavaThreadState {
     pub(super) started: bool,
+    pub(super) interrupted: bool,
     pub(super) handle: Option<JvmThread>,
 }
 

@@ -47,7 +47,7 @@ HotSpot is the comparison point: it has a complete JDK surface, mature GC implem
 
 - [x] Create a built-in/native compatibility table: class, method signature, implementation type, semantic completeness, test coverage.
 - [x] Improve `java.lang.Class` and reflection: annotations, modifiers, constructors, primitive/array class metadata, and method invocation error semantics.
-- [ ] Improve `java.lang.Thread`: interrupt, daemon flag, name, priority, context class loader, uncaught exception handler.
+- [x] Improve `java.lang.Thread`: interrupt, daemon flag, name, priority, context class loader, uncaught exception handler.
 - [ ] Implement `ServiceLoader`, resource loading, system properties, and environment access behavior needed by common libraries.
 - [x] Move `java.io` and `java.nio.file` from stubs toward real file IO, error handling, and path normalization.
 - [ ] Expand `java.util.stream`: map/filter/reduce/collect pipelines instead of only selected native collector/stream shortcuts.

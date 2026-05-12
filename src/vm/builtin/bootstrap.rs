@@ -350,11 +350,24 @@ pub(super) fn bootstrap_java_lang(vm: &mut Vm) {
         super_class: Some("java/lang/Object".to_string()),
         methods: thread_methods,
         static_fields: HashMap::new(),
-        instance_fields: vec![("target".to_string(), "Ljava/lang/Runnable;".to_string())],
-        field_offsets: build_field_offsets(&vec![(
-            "target".to_string(),
-            "Ljava/lang/Runnable;".to_string(),
-        )]),
+        instance_fields: vec![
+            ("target".to_string(), "Ljava/lang/Runnable;".to_string()),
+            ("name".to_string(), "Ljava/lang/String;".to_string()),
+            ("priority".to_string(), "I".to_string()),
+            ("daemon".to_string(), "Z".to_string()),
+            ("threadGroup".to_string(), "Ljava/lang/ThreadGroup;".to_string()),
+            ("contextClassLoader".to_string(), "Ljava/lang/ClassLoader;".to_string()),
+            ("uncaughtExceptionHandler".to_string(), "Ljava/lang/Thread$UncaughtExceptionHandler;".to_string()),
+        ],
+        field_offsets: build_field_offsets(&vec![
+            ("target".to_string(), "Ljava/lang/Runnable;".to_string()),
+            ("name".to_string(), "Ljava/lang/String;".to_string()),
+            ("priority".to_string(), "I".to_string()),
+            ("daemon".to_string(), "Z".to_string()),
+            ("threadGroup".to_string(), "Ljava/lang/ThreadGroup;".to_string()),
+            ("contextClassLoader".to_string(), "Ljava/lang/ClassLoader;".to_string()),
+            ("uncaughtExceptionHandler".to_string(), "Ljava/lang/Thread$UncaughtExceptionHandler;".to_string()),
+        ]),
         interfaces: vec![],
     });
 

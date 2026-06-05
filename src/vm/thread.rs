@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::{Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 
 use smallvec::SmallVec;
 
@@ -47,15 +47,38 @@ pub(super) struct SharedMonitors {
     pub(super) changed: Condvar,
 }
 
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(super) enum ThreadStatus {
+    #[default]
+    New,
+    Runnable,
+    Waiting,
+    TimedWaiting,
+    Blocked,
+    Terminated,
+}
+
 pub(super) struct SharedThreads {
     pub(super) states: Mutex<HashMap<usize, JavaThreadState>>,
+    /// Per-thread parking permit: `(Mutex<bool>, Condvar)` where the bool is
+    /// `true` when a permit has been pre-granted (via `unpark`).
+    pub(super) parking: Mutex<HashMap<usize, Arc<(Mutex<bool>, Condvar)>>>,
+}
+
+impl Default for SharedThreads {
+    fn default() -> Self {
+        Self {
+            states: Mutex::new(HashMap::new()),
+            parking: Mutex::new(HashMap::new()),
+        }
+    }
 }
 
 pub(super) struct JavaThreadState {
     pub(super) started: bool,
     pub(super) interrupted: bool,
     pub(super) handle: Option<JvmThread>,
+    pub(super) status: ThreadStatus,
 }
 
 impl fmt::Debug for SharedThreads {

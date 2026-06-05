@@ -111,11 +111,12 @@ pub fn classify_unsafe_method(method_name: &str, descriptor: &str) -> UnsafeClas
         | ("getAndSetLong", _)
         | ("getAndSetReference", _)
         | ("getAndSetObject", _) => UnsafeClassification::Real,
-        ("getInt", _) | ("putInt", _) => UnsafeClassification::DangerousStub,
-        ("getLong", _) | ("putLong", _) => UnsafeClassification::DangerousStub,
-        ("getObject", _) | ("putObject", _) => UnsafeClassification::DangerousStub,
-        ("getBoolean", _) | ("putBoolean", _) => UnsafeClassification::DangerousStub,
-        ("getByte", _) | ("putByte", _) => UnsafeClassification::DangerousStub,
+        ("getInt", _) | ("putInt", _) => UnsafeClassification::Real,
+        ("getLong", _) | ("putLong", _) => UnsafeClassification::Real,
+        ("getObject", _) | ("putObject", _) => UnsafeClassification::Real,
+        ("getReference", _) | ("putReference", _) => UnsafeClassification::Real,
+        ("getBoolean", _) | ("putBoolean", _) => UnsafeClassification::Real,
+        ("getByte", _) | ("putByte", _) => UnsafeClassification::Real,
         ("getChar", _) | ("putChar", _) => UnsafeClassification::DangerousStub,
         ("getShort", _) | ("putShort", _) => UnsafeClassification::DangerousStub,
         ("getFloat", _) | ("putFloat", _) => UnsafeClassification::DangerousStub,
@@ -250,6 +251,11 @@ pub struct Method {
     /// for non-condy entries.
     pub condy_sites: Vec<Option<CondySite>>,
     pub initial_locals: Vec<Option<Value>>,
+    /// Lazy-parsing infrastructure hook.  Always `true` in the current implementation
+    /// because all methods parse their `Code` attribute eagerly during class loading.
+    /// A future lazy-loading path would set this to `false` until the method is first
+    /// invoked, then promote the raw bytes to the fully-parsed `code` field.
+    pub code_parsed: bool,
 }
 
 /// Resolved info for an `invokedynamic` constant pool entry.
@@ -420,6 +426,7 @@ impl Method {
             invoke_dynamic_sites: Vec::new(),
             condy_sites: Vec::new(),
             initial_locals: Vec::new(),
+            code_parsed: true,
         }
     }
 

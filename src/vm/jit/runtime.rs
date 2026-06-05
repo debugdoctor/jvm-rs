@@ -96,12 +96,41 @@ pub enum DeoptReason {
     SiteFallback,
 }
 
+/// Captured state of a single inlined callee frame at a deopt point.
+/// When method A is inlined into B, deopt during B's compiled code must
+/// reconstruct both B's outer frame and A's inlined frame.
+#[derive(Debug, Clone)]
+pub struct InlinedFrameSnapshot {
+    pub class_name: String,
+    pub method_name: String,
+    pub descriptor: String,
+    /// Bytecode PC within the inlined method at the deopt point.
+    pub bytecode_pc: u32,
+    /// Locals captured at deopt (same encoding as DeoptSnapshot.locals).
+    pub locals: Vec<u64>,
+    /// Operand stack at deopt.
+    pub stack: Vec<u64>,
+}
+
 #[derive(Clone)]
 pub struct DeoptSnapshot {
     pub reason: Option<DeoptReason>,
     pub pc: usize,
     pub locals: Vec<u64>,
     pub stack: Vec<u64>,
+    pub inlined_frames: Vec<InlinedFrameSnapshot>,
+}
+
+impl DeoptSnapshot {
+    /// Record an inlined frame that was active at this deopt point.
+    pub fn push_inlined_frame(&mut self, frame: InlinedFrameSnapshot) {
+        self.inlined_frames.push(frame);
+    }
+
+    /// True when this deopt snapshot has inlined frame data attached.
+    pub fn has_inlined_frames(&self) -> bool {
+        !self.inlined_frames.is_empty()
+    }
 }
 
 pub fn set_current_vm(vm_ptr: u64) {
@@ -1984,6 +2013,7 @@ impl JitContext {
             pc: (deopt_flags & !(DEOPT_PENDING_MARKER | DEOPT_REASON_MASK)) as usize,
             locals: deopt_buffer[1..deopt_stack_depth_index].to_vec(),
             stack: deopt_buffer[deopt_stack_base..stack_end].to_vec(),
+            inlined_frames: vec![],
         });
         clear_current_vm();
         result
@@ -2155,6 +2185,7 @@ impl JitContext {
             pc: (deopt_flags & !(DEOPT_PENDING_MARKER | DEOPT_REASON_MASK)) as usize,
             locals: deopt_buffer[1..deopt_stack_depth_index].to_vec(),
             stack: deopt_buffer[deopt_stack_base..stack_end].to_vec(),
+            inlined_frames: vec![],
         });
         clear_current_vm();
         result

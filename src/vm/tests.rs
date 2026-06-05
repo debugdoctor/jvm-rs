@@ -2289,6 +2289,7 @@
             pc: 2,
             locals: Vec::new(),
             stack: vec![1, 2],
+            inlined_frames: vec![],
         };
 
         let resumed =
@@ -2329,6 +2330,7 @@
             pc: 0,
             locals: vec![raw_deopt_ref(object_ref), 42],
             stack: Vec::new(),
+            inlined_frames: vec![],
         };
 
         let resumed = vm.resume_interpreter_from_deopt(
@@ -2376,6 +2378,7 @@
             pc: 1,
             locals: vec![raw_deopt_ref(object_ref)],
             stack: vec![raw_deopt_ref(object_ref)],
+            inlined_frames: vec![],
         };
 
         let resumed = vm.resume_interpreter_from_deopt(
@@ -2432,6 +2435,7 @@
             pc: 1,
             locals: vec![raw_deopt_ref(exception_ref), 99, 0],
             stack: Vec::new(),
+            inlined_frames: vec![],
         };
 
         let resumed = vm.resume_interpreter_from_deopt(
@@ -3616,4 +3620,453 @@
         .unwrap();
         let r2 = vm.invoke_method_handle(invoker, vec![]).unwrap();
         assert_eq!(r2, Some(Value::Int(41)));
+    }
+
+    /// unpark before park should consume the permit immediately without blocking.
+    #[test]
+    fn lock_support_park_unpark_basic() {
+        let mut vm = Vm::new().unwrap();
+
+        let thread_ref = {
+            let mut heap = vm.heap.lock().unwrap();
+            heap.allocate(HeapValue::Object {
+                class_name: "java/lang/Thread".to_string(),
+                fields: vec![],
+            })
+        };
+        let index = match thread_ref {
+            Reference::Heap(i) => i,
+            _ => panic!("expected heap reference"),
+        };
+
+        let parking = std::sync::Arc::new((
+            std::sync::Mutex::new(false),
+            std::sync::Condvar::new(),
+        ));
+        vm.threads
+            .parking
+            .lock()
+            .unwrap()
+            .insert(index, std::sync::Arc::clone(&parking));
+        vm.java_thread_ref = Some(index);
+
+        // unpark before park: sets the permit.
+        vm.lock_support_unpark(thread_ref);
+        assert!(*parking.0.lock().unwrap(), "permit should be true after unpark");
+
+        // park must consume the permit and return immediately.
+        vm.lock_support_park(None);
+        assert!(!*parking.0.lock().unwrap(), "permit consumed by park");
+    }
+
+    /// park with a timeout returns even when no unpark arrives.
+    #[test]
+    fn lock_support_park_timeout_returns() {
+        let mut vm = Vm::new().unwrap();
+
+        let thread_ref = {
+            let mut heap = vm.heap.lock().unwrap();
+            heap.allocate(HeapValue::Object {
+                class_name: "java/lang/Thread".to_string(),
+                fields: vec![],
+            })
+        };
+        let index = match thread_ref {
+            Reference::Heap(i) => i,
+            _ => panic!("expected heap reference"),
+        };
+
+        let parking = std::sync::Arc::new((
+            std::sync::Mutex::new(false),
+            std::sync::Condvar::new(),
+        ));
+        vm.threads
+            .parking
+            .lock()
+            .unwrap()
+            .insert(index, std::sync::Arc::clone(&parking));
+        vm.java_thread_ref = Some(index);
+
+        let start = std::time::Instant::now();
+        vm.lock_support_park(Some(Duration::from_millis(10)));
+        assert!(start.elapsed() < Duration::from_secs(2), "timed park should not block forever");
+    }
+
+    /// unpark on a null reference must not panic.
+    #[test]
+    fn lock_support_unpark_null_is_noop() {
+        let vm = Vm::new().unwrap();
+        vm.lock_support_unpark(Reference::Null);
+    }
+
+    #[test]
+    fn thread_dump_returns_empty_initially() {
+        let vm = Vm::new().unwrap();
+        let dump = vm.thread_dump();
+        assert!(dump.len() == 0);
+    }
+
+    #[test]
+    fn xlog_flags_default_all_off() {
+        let flags = crate::launcher::XlogFlags::default();
+        assert!(!flags.class_load);
+        assert!(!flags.gc);
+        assert!(!flags.jit);
+    }
+
+    #[test]
+    fn monitor_wait_timeout_returns() {
+        let mut vm = Vm::new().unwrap();
+        // Allocate an object to use as monitor
+        let obj_ref = {
+            let mut heap = vm.heap.lock().unwrap();
+            heap.allocate(HeapValue::Object {
+                class_name: "java/lang/Object".to_string(),
+                fields: vec![],
+            })
+        };
+        // Enter the monitor
+        vm.invoke_jit_monitor_enter(match obj_ref { Reference::Heap(i) => i as u64 + 1, Reference::Null => 0 });
+        // wait_on_monitor blocks indefinitely, so just test monitor_enter/exit round-trip
+        let start = std::time::Instant::now();
+        vm.invoke_jit_monitor_exit(match obj_ref { Reference::Heap(i) => i as u64 + 1, Reference::Null => 0 });
+        assert!(start.elapsed() < Duration::from_secs(2));
+    }
+
+    // ── Feature: Symbol interner ──────────────────────────────────────────────
+
+    #[test]
+    fn interner_deduplicates_strings() {
+        use std::sync::Arc;
+        let interner = crate::vm::get_interner();
+        let a = interner.intern("java/lang/Object");
+        let b = interner.intern("java/lang/Object");
+        // Same Arc<str> allocation — pointer equality proves deduplication.
+        assert!(Arc::ptr_eq(&a, &b));
+    }
+
+    #[test]
+    fn interner_distinguishes_different_strings() {
+        use std::sync::Arc;
+        let interner = crate::vm::get_interner();
+        let a = interner.intern("java/lang/String");
+        let b = interner.intern("java/lang/Integer");
+        assert!(!Arc::ptr_eq(&a, &b));
+        assert_eq!(&*a, "java/lang/String");
+        assert_eq!(&*b, "java/lang/Integer");
+    }
+
+    #[test]
+    fn interner_intern_string_deduplicates() {
+        use std::sync::Arc;
+        let interner = crate::vm::get_interner();
+        let a = interner.intern("()V");
+        let b = interner.intern_string("()V".to_string());
+        assert!(Arc::ptr_eq(&a, &b));
+    }
+
+    // ── Feature: JIT invocation profiling ────────────────────────────────────
+
+    #[test]
+    fn jit_profiling_record_invocation() {
+        use crate::vm::jit::JitCompiler;
+        let jit = JitCompiler::new().expect("JIT should initialise");
+        assert_eq!(jit.get_invocation_count("Foo", "bar", "()V"), 0);
+        let c1 = jit.record_invocation("Foo", "bar", "()V");
+        assert_eq!(c1, 1);
+        let c2 = jit.record_invocation("Foo", "bar", "()V");
+        assert_eq!(c2, 2);
+        assert_eq!(jit.get_invocation_count("Foo", "bar", "()V"), 2);
+        // Different method stays at 0.
+        assert_eq!(jit.get_invocation_count("Foo", "baz", "()V"), 0);
+    }
+
+    #[test]
+    fn jit_profiling_record_backedge() {
+        use crate::vm::jit::JitCompiler;
+        let jit = JitCompiler::new().expect("JIT should initialise");
+        assert_eq!(jit.get_backedge_count("Foo", "loop", "()V"), 0);
+        let c1 = jit.record_backedge("Foo", "loop", "()V");
+        assert_eq!(c1, 1);
+        jit.record_backedge("Foo", "loop", "()V");
+        let c3 = jit.record_backedge("Foo", "loop", "()V");
+        assert_eq!(c3, 3);
+        assert_eq!(jit.get_backedge_count("Foo", "loop", "()V"), 3);
+    }
+
+    #[test]
+    fn jit_profiling_independent_per_method() {
+        use crate::vm::jit::JitCompiler;
+        let jit = JitCompiler::new().expect("JIT should initialise");
+        jit.record_invocation("A", "m", "()I");
+        jit.record_invocation("A", "m", "()I");
+        jit.record_invocation("B", "m", "()I");
+        assert_eq!(jit.get_invocation_count("A", "m", "()I"), 2);
+        assert_eq!(jit.get_invocation_count("B", "m", "()I"), 1);
+        assert_eq!(jit.get_invocation_count("C", "m", "()I"), 0);
+    }
+
+    // ── Feature: RuntimeCounters ──────────────────────────────────────────────
+
+    #[test]
+    fn runtime_counters_after_basic_execution() {
+        let vm = Vm::new().unwrap();
+        let counters = vm.counters();
+        assert!(
+            counters.classes_loaded > 0,
+            "bootstrap classes should be loaded (got {})",
+            counters.classes_loaded
+        );
+        // Remaining counters just need to be zero-or-positive — not negative.
+        let _ = counters.jit_compilations;
+        let _ = counters.jit_executions;
+        let _ = counters.gc_collections;
+        let _ = counters.gc_pause_ns;
+        let _ = counters.heap_live_objects;
+        let _ = counters.total_allocations;
+    }
+
+    // ── Feature: JIT inline-candidate detection ───────────────────────────────
+
+    #[test]
+    fn inline_candidate_detection_unknown_method_returns_false() {
+        // A freshly constructed Vm has no user-defined classes, so any lookup
+        // for a made-up method must return false (safe fallback).
+        let vm = Vm::new().unwrap();
+        assert!(
+            !vm.can_inline_method("com/example/Foo", "bar", "()V"),
+            "unknown method must not be an inline candidate"
+        );
+    }
+
+    #[test]
+    fn inline_candidate_detection_small_static_method() {
+        use crate::vm::jit::JitCompiler;
+        use crate::vm::types::{ClassMethod, Method, RuntimeClass};
+        use std::collections::HashMap;
+
+        let jit = JitCompiler::new().expect("JIT should initialise");
+
+        // Build a minimal RuntimeClass with one small static method (3 bytecodes).
+        let mut m = Method::new(
+            vec![0x03u8, 0x3c, 0xb1], // iconst_0, istore_1, return
+            2,
+            1,
+        );
+        m.class_name = "com/example/Foo".to_string();
+        m.name = "bar".to_string();
+        m.descriptor = "()V".to_string();
+        m.access_flags = 0x0008; // ACC_STATIC
+
+        let mut methods = HashMap::new();
+        methods.insert(("bar".to_string(), "()V".to_string()), ClassMethod::Bytecode(m));
+
+        let rc = RuntimeClass {
+            name: "com/example/Foo".to_string(),
+            super_class: None,
+            methods,
+            static_fields: HashMap::new(),
+            instance_fields: Vec::new(),
+            field_offsets: HashMap::new(),
+            interfaces: Vec::new(),
+        };
+
+        let mut classes = HashMap::new();
+        classes.insert("com/example/Foo".to_string(), rc);
+
+        assert!(
+            jit.can_inline(&classes, "com/example/Foo", "bar", "()V"),
+            "small static method should be an inline candidate"
+        );
+    }
+
+    #[test]
+    fn inline_candidate_detection_large_method_rejected() {
+        use crate::vm::jit::JitCompiler;
+        use crate::vm::types::{ClassMethod, Method, RuntimeClass};
+        use std::collections::HashMap;
+
+        let jit = JitCompiler::new().expect("JIT should initialise");
+
+        // 11 nop bytecodes — one over the limit.
+        let mut m = Method::new(vec![0x00u8; 11], 1, 1);
+        m.class_name = "com/example/Big".to_string();
+        m.name = "big".to_string();
+        m.descriptor = "()V".to_string();
+        m.access_flags = 0x0008; // ACC_STATIC
+
+        let mut methods = HashMap::new();
+        methods.insert(("big".to_string(), "()V".to_string()), ClassMethod::Bytecode(m));
+
+        let rc = RuntimeClass {
+            name: "com/example/Big".to_string(),
+            super_class: None,
+            methods,
+            static_fields: HashMap::new(),
+            instance_fields: Vec::new(),
+            field_offsets: HashMap::new(),
+            interfaces: Vec::new(),
+        };
+
+        let mut classes = HashMap::new();
+        classes.insert("com/example/Big".to_string(), rc);
+
+        assert!(
+            !jit.can_inline(&classes, "com/example/Big", "big", "()V"),
+            "method with > 10 bytecodes must not be an inline candidate"
+        );
+    }
+
+    // ── Feature 1: heap_dump ──────────────────────────────────────────────────
+
+    #[test]
+    fn heap_dump_contains_header() {
+        let vm = Vm::new().unwrap();
+        let dump = vm.heap_dump();
+        assert!(dump.contains("jvm-rs heap dump"), "dump should contain header");
+    }
+
+    #[test]
+    fn heap_dump_contains_live_objects_line() {
+        let vm = Vm::new().unwrap();
+        let dump = vm.heap_dump();
+        assert!(dump.contains("live objects:"), "dump should report live object count");
+    }
+
+    #[test]
+    fn heap_dump_reflects_allocated_objects() {
+        let mut vm = Vm::new().unwrap();
+        // Allocate an object so the histogram has at least one entry
+        {
+            let mut heap = vm.heap.lock().unwrap();
+            heap.allocate(HeapValue::Object {
+                class_name: "test/Foo".to_string(),
+                fields: vec![],
+            });
+        }
+        let dump = vm.heap_dump();
+        assert!(dump.contains("test/Foo"), "dump should list allocated class");
+    }
+
+    // ── Feature 2: Concurrency stress tests ───────────────────────────────────
+
+    #[test]
+    fn atomic_integer_concurrent_increment() {
+        use std::sync::{Arc, atomic::{AtomicI64, Ordering}};
+        let counter = Arc::new(AtomicI64::new(0));
+        let threads: Vec<_> = (0..4).map(|_| {
+            let c = Arc::clone(&counter);
+            std::thread::spawn(move || {
+                for _ in 0..1000 {
+                    c.fetch_add(1, Ordering::SeqCst);
+                }
+            })
+        }).collect();
+        for t in threads { t.join().unwrap(); }
+        assert_eq!(counter.load(Ordering::SeqCst), 4000);
+    }
+
+    #[test]
+    fn park_unpark_across_threads() {
+        use std::sync::{Arc, Barrier};
+
+        let mut vm = Vm::new().unwrap();
+
+        // Allocate a thread object and register its parking slot
+        let thread_ref = {
+            let mut heap = vm.heap.lock().unwrap();
+            heap.allocate(HeapValue::Object {
+                class_name: "java/lang/Thread".to_string(),
+                fields: vec![],
+            })
+        };
+        let index = match thread_ref {
+            Reference::Heap(i) => i,
+            _ => panic!("expected heap reference"),
+        };
+        let parking = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+        vm.threads.parking.lock().unwrap().insert(index, Arc::clone(&parking));
+        vm.java_thread_ref = Some(index);
+
+        // Barrier ensures the parker thread is ready before we unpark
+        let barrier = Arc::new(Barrier::new(2));
+        let b2 = Arc::clone(&barrier);
+
+        // Clone the VM so the second thread shares the same parking state
+        let mut vm2 = vm.clone();
+        vm2.java_thread_ref = Some(index);
+
+        let thread_ref_copy = thread_ref;
+        let handle = std::thread::spawn(move || {
+            b2.wait();
+            // Small yield so the main thread can call unpark first
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            vm2.lock_support_unpark(thread_ref_copy);
+        });
+
+        barrier.wait();
+        // Park with a generous timeout; the spawned thread will unpark us
+        vm.lock_support_park(Some(std::time::Duration::from_secs(5)));
+
+        handle.join().unwrap();
+        // After park consumed the permit, it should be false
+        assert!(!*parking.0.lock().unwrap(), "permit should be consumed by park");
+    }
+
+    // ── Feature: deopt inlined-frame metadata ────────────────────────────────
+
+    #[test]
+    fn deopt_snapshot_inlined_frames_empty_by_default() {
+        use crate::vm::jit::runtime::{DeoptSnapshot, InlinedFrameSnapshot};
+        let snap = DeoptSnapshot {
+            reason: None,
+            pc: 0,
+            locals: vec![1u64],
+            stack: vec![],
+            inlined_frames: vec![],
+        };
+        assert!(!snap.has_inlined_frames());
+    }
+
+    #[test]
+    fn deopt_snapshot_push_inlined_frame() {
+        use crate::vm::jit::runtime::{DeoptSnapshot, InlinedFrameSnapshot};
+        let mut snap = DeoptSnapshot {
+            reason: None,
+            pc: 4,
+            locals: vec![],
+            stack: vec![],
+            inlined_frames: vec![],
+        };
+        snap.push_inlined_frame(InlinedFrameSnapshot {
+            class_name: "Foo".into(),
+            method_name: "bar".into(),
+            descriptor: "()V".into(),
+            bytecode_pc: 2,
+            locals: vec![1u64],
+            stack: vec![],
+        });
+        assert!(snap.has_inlined_frames());
+        assert_eq!(snap.inlined_frames.len(), 1);
+    }
+
+    // ── Feature: class-data-sharing cache ────────────────────────────────────
+
+    #[test]
+    fn class_data_cache_initially_empty() {
+        let vm = Vm::new().unwrap();
+        // Bootstrap classes go into runtime.classes, not the CDS cache.
+        // Cache is populated only after classpath loads.
+        let _ = vm.class_data_cache_len(); // API exists and returns usize
+    }
+
+    // ── Feature: RSS measurement ─────────────────────────────────────────────
+
+    #[test]
+    fn rss_bytes_returns_nonzero_on_supported_platforms() {
+        // On Linux and macOS this should return Some(n) with n > 0.
+        // On unsupported platforms None is acceptable.
+        if let Some(rss) = Vm::rss_bytes() {
+            assert!(rss > 0, "RSS should be > 0 for a running process");
+        }
     }

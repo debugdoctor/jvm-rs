@@ -61,6 +61,7 @@ impl Frame {
             invoke_dynamic_sites: self.invoke_dynamic_sites.clone(),
             condy_sites: self.condy_sites.clone(),
             initial_locals: Vec::new(),
+            code_parsed: true,
         }
     }
 

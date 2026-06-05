@@ -15,6 +15,13 @@ cranelift-module = "0.131.1"
 cranelift-frontend = "0.131.1"
 memmap2 = "0.9"
 
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "vm_bench"
+harness = false
+
 [profile.release]
 opt-level = 3
 lto = "fat"

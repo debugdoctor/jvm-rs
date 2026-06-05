@@ -1,5 +1,18 @@
 //! Heap storage: `HeapValue` variants, `Heap` with mark-and-sweep GC, and
 //! `GcStats` counters. Accessed through `Vm::heap` (behind a `Mutex`).
+//!
+//! # Reference model and compressed-reference plan
+//!
+//! Current: `Reference::Heap(usize)` — a plain index into `Heap.values`
+//! (`Vec<Option<HeapValue>>`). Each reference is 8 bytes on 64-bit platforms.
+//!
+//! HotSpot compressed oops encode references as 32-bit offsets from a heap
+//! base pointer, halving reference size when the heap fits in 32 GB. Migration
+//! path for jvm-rs when RSS pressure warrants it:
+//! 1. Replace `Reference::Heap(usize)` with `Reference::Heap(u32)`.
+//! 2. Store a `base_addr: *mut u8` in `Heap`; decode as `base + offset * 8`.
+//! 3. Cap max heap size at `u32::MAX * 8` bytes (~32 GB).
+//! Deferred until heap profiling shows reference size is the bottleneck.
 
 use std::collections::HashMap;
 

@@ -1,7 +1,9 @@
+pub mod arena;
 mod builtin;
 mod classloader;
 mod frame;
 mod heap;
+pub mod intern;
 pub mod interpreter;
 pub mod jit;
 mod thread;
@@ -11,6 +13,29 @@ pub mod verify;
 pub use crate::classfile::ClassFile;
 use frame::Frame;
 pub use heap::GcStats;
+
+/// A snapshot of runtime metrics collected from the VM at a point in time.
+#[derive(Debug, Default, Clone)]
+pub struct RuntimeCounters {
+    /// Total classes currently registered (bootstrap + classpath combined).
+    pub classes_loaded: u64,
+    /// Total bytecode-interpreter invocations recorded (currently 0 — no global
+    /// interpreter-invocation counter exists; per-method counts live in JIT profiles).
+    pub interpreter_invocations: u64,
+    /// Total JIT compilations performed (compiled method count in the code cache).
+    pub jit_compilations: u64,
+    /// Total times execution reached the JIT tier.
+    pub jit_executions: u64,
+    /// GC collections performed.
+    pub gc_collections: u64,
+    /// GC total pause time in nanoseconds.
+    pub gc_pause_ns: u64,
+    /// Current live heap objects.
+    pub heap_live_objects: usize,
+    /// Total heap allocations since start.
+    pub total_allocations: u64,
+}
+pub use intern::{get_interner, Interner};
 use heap::{Heap, HeapValue};
 use interpreter::{
     execute_aconst_null, execute_aload, execute_areturn_full, execute_astore, execute_bipush,
@@ -155,12 +180,25 @@ pub struct Vm {
     class_loader: Option<LazyClassLoader<BootstrapClassLoader>>,
     trace: bool,
     fail_fast: bool,
+    verify_mode: crate::launcher::VerifyMode,
+    xlog: crate::launcher::XlogFlags,
+    jit_dump: bool,
     thread_id: u64,
+    /// Heap index of this thread's `java/lang/Thread` object, set when a new
+    /// Java thread is started via `start_java_thread`. Used by LockSupport
+    /// park/unpark to locate the parking permit for this thread.
+    java_thread_ref: Option<usize>,
     output: Arc<Mutex<Vec<String>>>,
     jit: Option<JitCompiler>,
     jit_context: Option<JitContext>,
     string_pool: Arc<Mutex<HashMap<String, Reference>>>,
     io_resources: Arc<IoResources>,
+    /// Cache of resolved constant-pool values keyed by (class_name, cp_index).
+    /// Infrastructure for quickened bytecode; populated lazily on LDC resolution.
+    quickened_cp: Arc<Mutex<HashMap<(String, u16), Value>>>,
+    /// Pre-parsed class data cache. Classes stored here skip re-parsing on
+    /// repeated loads within a session. Foundation for mmap-backed CDS.
+    class_data_cache: Arc<Mutex<HashMap<String, Arc<RuntimeClass>>>>,
 }
 
 impl fmt::Debug for Vm {
@@ -190,12 +228,18 @@ impl Clone for Vm {
             class_loader: None,
             trace: self.trace,
             fail_fast: self.fail_fast,
+            verify_mode: self.verify_mode,
+            xlog: self.xlog,
+            jit_dump: self.jit_dump,
             thread_id: NEXT_THREAD_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            java_thread_ref: None,
             output: self.output.clone(),
             jit: None,
             jit_context: None,
             string_pool: self.string_pool.clone(),
             io_resources: self.io_resources.clone(),
+            quickened_cp: self.quickened_cp.clone(),
+            class_data_cache: self.class_data_cache.clone(),
         }
     }
 }
@@ -223,12 +267,18 @@ impl Vm {
             class_loader: Some(classloader::create_bootstrap_loader()),
             trace: false,
             fail_fast: false,
+            verify_mode: crate::launcher::VerifyMode::default(),
+            xlog: crate::launcher::XlogFlags::default(),
+            jit_dump: false,
             thread_id: NEXT_THREAD_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            java_thread_ref: None,
             output: Arc::new(Mutex::new(Vec::new())),
             jit,
             jit_context,
             string_pool: Arc::new(Mutex::new(HashMap::new())),
             io_resources: Arc::new(IoResources::default()),
+            quickened_cp: Arc::new(Mutex::new(HashMap::new())),
+            class_data_cache: Arc::new(Mutex::new(HashMap::new())),
         };
         vm.bootstrap();
         Ok(vm)
@@ -236,6 +286,58 @@ impl Vm {
 
     pub fn set_fail_fast(&mut self, enabled: bool) {
         self.fail_fast = enabled;
+    }
+
+    pub fn set_verify_mode(&mut self, mode: crate::launcher::VerifyMode) {
+        self.verify_mode = mode;
+    }
+
+    pub fn verify_mode(&self) -> crate::launcher::VerifyMode {
+        self.verify_mode
+    }
+
+    pub fn set_xlog(&mut self, flags: crate::launcher::XlogFlags) {
+        self.xlog = flags;
+    }
+
+    pub fn xlog(&self) -> crate::launcher::XlogFlags {
+        self.xlog
+    }
+
+    pub fn set_jit_dump(&mut self, enabled: bool) {
+        self.jit_dump = enabled;
+    }
+
+    #[inline(always)]
+    fn log_class_load(&self, class_name: &str, source: &str) {
+        if self.xlog.class_load {
+            eprintln!("[class+load] Loaded {} from {}", class_name, source);
+        }
+    }
+
+    #[inline(always)]
+    fn log_gc(&self, pause_ms: f64, freed_bytes: usize, live_bytes: usize) {
+        if self.xlog.gc {
+            eprintln!("[gc] Pause {:.2}ms freed {}KB live {}KB", pause_ms, freed_bytes / 1024, live_bytes / 1024);
+        }
+    }
+
+    #[inline(always)]
+    fn log_jit(&self, class_name: &str, method_name: &str, code_bytes: usize) {
+        if self.xlog.jit || self.jit_dump {
+            eprintln!("[jit] Compiled {}.{} {} bytes", class_name, method_name, code_bytes);
+        }
+    }
+
+    pub fn thread_dump(&self) -> Vec<(usize, String, String)> {
+        let states = self.threads.states.lock().unwrap();
+        let mut result = Vec::new();
+        for (idx, state) in states.iter() {
+            let name = format!("Thread-{}", idx);
+            let status = format!("{:?}", state.status);
+            result.push((*idx, name, status));
+        }
+        result
     }
 
     pub fn get_stub_stats(&self) -> (usize, usize, usize) {
@@ -261,10 +363,12 @@ impl Vm {
         start_class: &str,
         method_name: &str,
         descriptor: &str,
+        java_thread_ref: Option<usize>,
         args: Vec<Value>,
     ) -> Result<JvmThread, VmError> {
         let mut child_vm = self.clone();
         child_vm.thread_id = NEXT_THREAD_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        child_vm.java_thread_ref = java_thread_ref;
 
         let start_class = start_class.to_string();
         let method_name = method_name.to_string();
@@ -355,7 +459,13 @@ impl Vm {
             roots.push(r);
         }
 
+        let t0 = std::time::Instant::now();
         self.heap.lock().unwrap().gc(&roots);
+        if self.xlog.gc {
+            let stats = self.gc_stats();
+            let pause_ms = t0.elapsed().as_secs_f64() * 1000.0;
+            self.log_gc(pause_ms, stats.last_collection_freed * 32, stats.total_heap_bytes);
+        }
     }
 
     pub fn set_trace(&mut self, enabled: bool) {
@@ -381,6 +491,25 @@ impl Vm {
     /// failed to build a host ISA).
     pub fn has_jit(&self) -> bool {
         self.jit.is_some() && self.jit_context.is_some()
+    }
+
+    /// Returns `true` if the JIT considers the named method a candidate for
+    /// inlining at call sites (small body, no exception handlers, static/private/final).
+    /// Always returns `false` when no JIT is available.
+    pub fn can_inline_method(&self, class: &str, method: &str, desc: &str) -> bool {
+        let rt = self.runtime.lock().unwrap();
+        self.jit
+            .as_ref()
+            .map(|j| j.can_inline(&rt.classes, class, method, desc))
+            .unwrap_or(false)
+    }
+
+    /// Returns JIT code-cache statistics: `(compiled_methods, total_code_bytes, interpreter_only_methods)`.
+    pub fn jit_code_cache_stats(&self) -> (usize, usize, usize) {
+        self.jit
+            .as_ref()
+            .map(|j| j.code_cache_stats())
+            .unwrap_or((0, 0, 0))
     }
 
     /// Test hook: how many times execution reached the JIT tier. Methods that
@@ -484,6 +613,98 @@ impl Vm {
     /// Snapshot current GC counters.
     pub fn gc_stats(&self) -> GcStats {
         self.heap.lock().unwrap().stats
+    }
+
+    /// Number of classes currently held in the class-data-sharing cache.
+    pub fn class_data_cache_len(&self) -> usize {
+        self.class_data_cache.lock().unwrap().len()
+    }
+
+    /// Emit a human-readable heap snapshot (jvm-rs native text format).
+    pub fn heap_dump(&self) -> String {
+        use std::fmt::Write as _;
+        let heap = self.heap.lock().unwrap();
+        let stats = heap.stats;
+        let mut out = String::new();
+        let _ = writeln!(out, "=== jvm-rs heap dump ===");
+        let _ = writeln!(out, "live objects: {}", stats.live);
+        let _ = writeln!(out, "total allocations: {}", stats.total_allocations);
+        let _ = writeln!(out, "gc collections: {}", stats.collections);
+        let _ = writeln!(out, "heap bytes: {}", stats.total_heap_bytes);
+
+        // Build histogram: count per class/kind name
+        let mut histogram: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        for slot in &heap.values {
+            if let Some(obj) = slot {
+                let key = match obj {
+                    HeapValue::Object { class_name, .. } => class_name.clone(),
+                    other => other.kind_name().to_string(),
+                };
+                *histogram.entry(key).or_insert(0) += 1;
+            }
+        }
+
+        let _ = writeln!(out, "--- class histogram (top 10) ---");
+        let mut entries: Vec<(String, usize)> = histogram.into_iter().collect();
+        entries.sort_by(|a, b| b.1.cmp(&a.1));
+        for (name, count) in entries.iter().take(10) {
+            let _ = writeln!(out, "  {:>6}  {}", count, name);
+        }
+        let _ = writeln!(out, "--- end heap dump ---");
+        out
+    }
+
+    /// Snapshot all runtime counters in a single consistent read.
+    pub fn counters(&self) -> RuntimeCounters {
+        let rt = self.runtime.lock().unwrap();
+        let gc = self.heap.lock().unwrap().stats;
+        let (jit_compilations, _, _) = self
+            .jit
+            .as_ref()
+            .map(|j| j.code_cache_stats())
+            .unwrap_or((0, 0, 0));
+        RuntimeCounters {
+            classes_loaded: rt.classes.len() as u64,
+            interpreter_invocations: 0, // no single global counter; profiled per-method via JIT
+            jit_compilations: jit_compilations as u64,
+            jit_executions: rt.jit_executions,
+            gc_collections: gc.collections,
+            gc_pause_ns: gc.pause_time_ns,
+            heap_live_objects: gc.live,
+            total_allocations: gc.total_allocations,
+        }
+    }
+
+    /// Resident set size of the current process in bytes, or `None` if
+    /// the platform does not provide a simple `/proc/self/status` interface.
+    /// Used by benchmarks to record memory footprint alongside `RuntimeCounters`.
+    pub fn rss_bytes() -> Option<usize> {
+        #[cfg(target_os = "linux")]
+        {
+            let text = std::fs::read_to_string("/proc/self/status").ok()?;
+            for line in text.lines() {
+                if let Some(rest) = line.strip_prefix("VmRSS:") {
+                    let kb: usize = rest.split_whitespace().next()?.parse().ok()?;
+                    return Some(kb * 1024);
+                }
+            }
+            None
+        }
+        #[cfg(target_os = "macos")]
+        {
+            // getrusage ru_maxrss is bytes on macOS
+            let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
+            if unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) } == 0 {
+                Some(usage.ru_maxrss as usize)
+            } else {
+                None
+            }
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            None
+        }
     }
 
     /// Set the classpath entries used for on-demand class loading.
@@ -890,6 +1111,7 @@ impl Vm {
     ) -> Option<JitInvocationResult> {
         let method_key = format!("{}.{}{}", method.class_name, method.name, method.descriptor);
         let code = self.jit.as_ref()?.get_or_compile(method)?;
+        self.log_jit(&method.class_name, &method.name, code.code_buffer.len());
         let vm_ptr = self as *mut Vm as u64;
         let jit_context = self.jit_context.as_mut()?;
         let deopt_local_kinds = code.deopt_info.local_kinds.clone();
@@ -4220,6 +4442,13 @@ impl Vm {
             return Ok(());
         }
 
+        // CDS fast path: restore pre-parsed class from cache instead of re-parsing.
+        if let Some(cached) = self.class_data_cache.lock().unwrap().get(class_name).cloned() {
+            self.runtime.lock().unwrap().classes.insert(class_name.to_string(), (*cached).clone());
+            self.log_class_load(class_name, "cds-cache");
+            return Ok(());
+        }
+
         // Array classes (e.g., [I, [Ljava/lang/Object;) are synthesized at runtime
         if class_name.starts_with('[') {
             return self.register_synthetic_array_class(class_name);
@@ -4228,6 +4457,7 @@ impl Vm {
         if let Some(ref mut loader) = self.class_loader {
             if let Ok(Some(class_file)) = ClassLoader::load_classfile(loader, class_name) {
                 self.register_classfile(class_name, &class_file);
+                self.log_class_load(class_name, "bootstrap");
                 return Ok(());
             }
         }
@@ -4244,7 +4474,13 @@ impl Vm {
                 VmError::ClassNotFound {
                     class_name: class_name.to_string(),
                 }
-            })
+            })?;
+            self.log_class_load(class_name, "classpath");
+            // Populate CDS cache so subsequent loads skip re-parsing.
+            if let Some(class) = self.runtime.lock().unwrap().classes.get(class_name).cloned() {
+                self.class_data_cache.lock().unwrap().insert(class_name.to_string(), Arc::new(class));
+            }
+            Ok(())
         } else {
             Err(VmError::ClassNotFound {
                 class_name: class_name.to_string(),
@@ -4585,13 +4821,26 @@ impl Vm {
             }
         }
 
-        let handle = self.spawn_invocation(start_class, method_name, descriptor, args)?;
+        // Create a parking permit for the new thread and register it.
+        let parking = std::sync::Arc::new((
+            std::sync::Mutex::new(false),
+            std::sync::Condvar::new(),
+        ));
+        self.threads
+            .parking
+            .lock()
+            .unwrap()
+            .insert(index, std::sync::Arc::clone(&parking));
+
+        let handle =
+            self.spawn_invocation(start_class, method_name, descriptor, Some(index), args)?;
         self.threads.states.lock().unwrap().insert(
             index,
             JavaThreadState {
                 started: true,
                 interrupted: false,
                 handle: Some(handle),
+                status: thread::ThreadStatus::Runnable,
             },
         );
         Ok(())
@@ -4839,6 +5088,57 @@ impl Vm {
         Ok(())
     }
 
+    pub(crate) fn lock_support_park(&self, timeout: Option<std::time::Duration>) {
+        let Some(idx) = self.java_thread_ref else {
+            return;
+        };
+        let arc = {
+            self.threads
+                .parking
+                .lock()
+                .unwrap()
+                .get(&idx)
+                .map(std::sync::Arc::clone)
+        };
+        let Some(arc) = arc else { return };
+        let (permit_mutex, cvar) = &*arc;
+        let mut permit = permit_mutex.lock().unwrap();
+        if *permit {
+            *permit = false;
+            return;
+        }
+        match timeout {
+            Some(dur) => {
+                let (mut g, _) =
+                    cvar.wait_timeout_while(permit, dur, |p| !*p).unwrap();
+                *g = false;
+            }
+            None => {
+                let mut g = cvar.wait_while(permit, |p| !*p).unwrap();
+                *g = false;
+            }
+        }
+    }
+
+    pub(crate) fn lock_support_unpark(&self, thread_ref: Reference) {
+        let Reference::Heap(index) = thread_ref else {
+            return;
+        };
+        let arc = {
+            self.threads
+                .parking
+                .lock()
+                .unwrap()
+                .get(&index)
+                .map(std::sync::Arc::clone)
+        };
+        let Some(arc) = arc else { return };
+        let (permit_mutex, cvar) = &*arc;
+        let mut permit = permit_mutex.lock().unwrap();
+        *permit = true;
+        cvar.notify_one();
+    }
+
     pub fn new_string(&mut self, value: impl Into<String>) -> Value {
         Value::Reference(self.heap.lock().unwrap().allocate_string(value))
     }
@@ -4978,6 +5278,10 @@ impl Vm {
 
         let mut thread = Thread::new(method);
         thread.current_frame_mut().increment_invocation_count();
+        // Record per-method invocation in the JIT profiling subsystem.
+        if let Some(ref jit) = self.jit {
+            jit.record_invocation(&class_name, &method_name, &descriptor);
+        }
 
         let vm_ptr = self as *mut Vm as u64;
         set_current_vm(vm_ptr);

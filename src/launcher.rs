@@ -14,6 +14,26 @@ use crate::vm::{
 };
 use zip::ZipArchive;
 
+/// Controls bytecode verifier strictness, matching the `-Xverify` JVM flag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum VerifyMode {
+    /// Skip verification entirely (fastest startup, no safety net).
+    None,
+    /// Log verification failures as warnings but continue.
+    #[default]
+    Warn,
+    /// Abort class loading on any verification failure.
+    All,
+}
+
+/// Controls which structured log categories are emitted to stderr, matching `-Xlog:*` JVM flags.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct XlogFlags {
+    pub class_load: bool,
+    pub gc: bool,
+    pub jit: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LaunchOptions {
     pub class_path: Vec<PathBuf>,
@@ -22,6 +42,9 @@ pub struct LaunchOptions {
     pub trace: bool,
     pub jit_enabled: bool,
     pub jit_threshold: Option<u32>,
+    pub verify: VerifyMode,
+    pub xlog: XlogFlags,
+    pub jit_dump: bool,
 }
 
 impl LaunchOptions {
@@ -37,6 +60,9 @@ impl LaunchOptions {
             trace: false,
             jit_enabled: true,
             jit_threshold: None,
+            verify: VerifyMode::default(),
+            xlog: XlogFlags::default(),
+            jit_dump: false,
         }
     }
 
@@ -52,6 +78,9 @@ impl LaunchOptions {
             trace: false,
             jit_enabled: true,
             jit_threshold: None,
+            verify: VerifyMode::default(),
+            xlog: XlogFlags::default(),
+            jit_dump: false,
         }
     }
 }
@@ -152,6 +181,10 @@ pub fn parse_launch_options(args: &[String]) -> Result<LaunchOptions, LaunchErro
     let mut trace = false;
     let mut jit_enabled = true;
     let mut jit_threshold = None;
+    let mut verify = VerifyMode::default();
+
+    let mut xlog = XlogFlags::default();
+    let mut jit_dump = false;
 
     let mut index = 0;
     while index < args.len() {
@@ -171,12 +204,38 @@ pub fn parse_launch_options(args: &[String]) -> Result<LaunchOptions, LaunchErro
             "-Xjit:off" => {
                 jit_enabled = false;
             }
+            "-Xjit:dump" => {
+                jit_dump = true;
+            }
+            "-Xverify:none" => {
+                verify = VerifyMode::None;
+            }
+            "-Xverify:all" | "-Xverify" => {
+                verify = VerifyMode::All;
+            }
+            "-Xlog:class+load" => {
+                xlog.class_load = true;
+            }
+            "-Xlog:gc" => {
+                xlog.gc = true;
+            }
+            "-Xlog:jit" => {
+                xlog.jit = true;
+            }
+            "-Xlog:all" => {
+                xlog.class_load = true;
+                xlog.gc = true;
+                xlog.jit = true;
+            }
             option if option.starts_with("-Xjit:threshold=") => {
                 let value = option.trim_start_matches("-Xjit:threshold=");
                 let threshold = value
                     .parse::<u32>()
                     .map_err(|_| LaunchError::InvalidJitThreshold(value.to_string()))?;
                 jit_threshold = Some(threshold);
+            }
+            option if option.starts_with("-Xlog:") => {
+                // silently ignore unrecognized -Xlog: categories
             }
             "-h" | "--help" | "help" => {
                 return Err(LaunchError::UnsupportedOption(arg.clone()));
@@ -199,6 +258,9 @@ pub fn parse_launch_options(args: &[String]) -> Result<LaunchOptions, LaunchErro
     options.trace = trace;
     options.jit_enabled = jit_enabled;
     options.jit_threshold = jit_threshold;
+    options.verify = verify;
+    options.xlog = xlog;
+    options.jit_dump = jit_dump;
     Ok(options)
 }
 
@@ -218,6 +280,9 @@ pub fn launch(options: &LaunchOptions) -> Result<ExecutionResult, LaunchError> {
 fn configure_vm_for_launch(vm: &mut Vm, options: &LaunchOptions) {
     vm.set_class_path(options.class_path.clone());
     vm.set_trace(options.trace);
+    vm.set_verify_mode(options.verify);
+    vm.set_xlog(options.xlog);
+    vm.set_jit_dump(options.jit_dump);
     if !options.jit_enabled {
         vm.set_jit_thresholds(u32::MAX, u32::MAX);
     } else if let Some(threshold) = options.jit_threshold {
@@ -432,12 +497,26 @@ pub(crate) fn register_class(
             .with_invoke_dynamic_sites(extract_invoke_dynamic_sites(class_file))
             .with_condy_sites(extract_condy_sites(class_file));
 
-            // Best-effort verification: log but don't fail on verification errors
-            // since some javac output may use patterns the verifier doesn't handle yet.
-            if let Err(e) = Vm::verify_method(&method) {
-                eprintln!(
-                    "warning: bytecode verification failed for {class_name}.{name}{descriptor}: {e}"
-                );
+            match vm.verify_mode() {
+                VerifyMode::None => {}
+                VerifyMode::Warn => {
+                    if let Err(e) = Vm::verify_method(&method) {
+                        eprintln!(
+                            "warning: bytecode verification failed for \
+                             {class_name}.{name}{descriptor}: {e}"
+                        );
+                    }
+                }
+                VerifyMode::All => {
+                    Vm::verify_method(&method).map_err(|e| LaunchError::ClassFileParse {
+                        path: PathBuf::new(),
+                        source: crate::classfile::ClassFileError::VerificationFailed {
+                            class_name: class_name.to_string(),
+                            method_name: format!("{name}{descriptor}"),
+                            reason: e.to_string(),
+                        },
+                    })?;
+                }
             }
 
             methods.insert((name, descriptor), ClassMethod::Bytecode(method));

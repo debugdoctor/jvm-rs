@@ -654,6 +654,42 @@ pub(super) fn invoke_other(
             "putReferenceVolatile",
             "(Ljava/lang/Object;JLjava/lang/Object;)V",
         ) => unsafe_put_reference(vm, args),
+        // Non-volatile field accessors — same semantics as volatile in our single-threaded
+        // heap model, so reuse the same helper functions.
+        ("jdk/internal/misc/Unsafe", "getInt", "(Ljava/lang/Object;J)I") => {
+            unsafe_get_int(vm, args)
+        }
+        ("jdk/internal/misc/Unsafe", "putInt", "(Ljava/lang/Object;JI)V") => {
+            unsafe_put_int(vm, args)
+        }
+        ("jdk/internal/misc/Unsafe", "getLong", "(Ljava/lang/Object;J)J") => {
+            unsafe_get_long(vm, args)
+        }
+        ("jdk/internal/misc/Unsafe", "putLong", "(Ljava/lang/Object;JJ)V") => {
+            unsafe_put_long(vm, args)
+        }
+        (
+            "jdk/internal/misc/Unsafe",
+            "getReference" | "getObject",
+            "(Ljava/lang/Object;J)Ljava/lang/Object;",
+        ) => unsafe_get_reference(vm, args),
+        (
+            "jdk/internal/misc/Unsafe",
+            "putReference" | "putObject",
+            "(Ljava/lang/Object;JLjava/lang/Object;)V",
+        ) => unsafe_put_reference(vm, args),
+        ("jdk/internal/misc/Unsafe", "getByte", "(Ljava/lang/Object;J)B") => {
+            unsafe_get_int(vm, args)
+        }
+        ("jdk/internal/misc/Unsafe", "putByte", "(Ljava/lang/Object;JB)V") => {
+            unsafe_put_int(vm, args)
+        }
+        ("jdk/internal/misc/Unsafe", "getBoolean", "(Ljava/lang/Object;J)Z") => {
+            unsafe_get_int(vm, args)
+        }
+        ("jdk/internal/misc/Unsafe", "putBoolean", "(Ljava/lang/Object;JZ)V") => {
+            unsafe_put_int(vm, args)
+        }
         ("jdk/internal/misc/Unsafe", _, _) => {
             let classification = classify_unsafe_method(method_name, descriptor);
             if classification == UnsafeClassification::DangerousStub {

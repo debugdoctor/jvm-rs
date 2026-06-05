@@ -3,13 +3,15 @@ pub mod emitter;
 pub mod optimizer;
 pub mod runtime;
 
+pub use optimizer::constant_fold_bytecode;
+
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 use std::sync::RwLock;
 
 use crate::vm::Frame;
-use crate::vm::types::Method;
+use crate::vm::types::{ClassMethod, Method, RuntimeClass};
 use cranelift::codegen::isa::TargetIsa;
 use cranelift_native;
 use runtime::DeoptReason;
@@ -77,6 +79,33 @@ pub enum TrapType {
     ClassCast,
 }
 
+/// Per-method invocation and backedge counters used by the JIT profiling
+/// subsystem. These feed the tier-up threshold decision.
+#[derive(Debug, Default, Clone)]
+pub struct MethodProfile {
+    pub invocations: u64,
+    pub backedge_count: u64,
+}
+
+/// Describes a method that the JIT has identified as a candidate for inlining
+/// at its call sites.
+///
+/// Candidate detection is implemented; bytecode-level inlining into the
+/// Cranelift IR is pending (requires recursive compilation + deopt metadata
+/// for inlined frames).
+// TODO: bytecode-level inlining into Cranelift IR pending.
+#[derive(Debug, Clone)]
+pub struct InlineCandidate {
+    /// Declaring class internal name (e.g. `com/example/Foo`).
+    pub class: String,
+    /// Simple method name.
+    pub method: String,
+    /// Method descriptor (e.g. `(I)V`).
+    pub descriptor: String,
+    /// Raw bytecodes of the callee (≤ 10 bytes).
+    pub bytecodes: Vec<u8>,
+}
+
 pub struct JitCompiler {
     compiled_code: RwLock<HashMap<String, CompiledCode>>,
     deopt_counts: RwLock<HashMap<String, HashMap<DeoptReason, u64>>>,
@@ -85,6 +114,8 @@ pub struct JitCompiler {
     invocation_threshold: u32,
     backedge_threshold: u32,
     isa: Arc<dyn TargetIsa>,
+    /// Per-method profiles keyed by (class_name, method_name, descriptor).
+    profiles: RwLock<HashMap<(String, String, String), MethodProfile>>,
 }
 
 impl fmt::Debug for JitCompiler {
@@ -113,6 +144,7 @@ impl JitCompiler {
             invocation_threshold: 1000,
             backedge_threshold: 2000,
             isa,
+            profiles: RwLock::new(HashMap::new()),
         })
     }
 
@@ -141,6 +173,46 @@ impl JitCompiler {
 
     pub fn invocation_threshold(&self) -> u32 {
         self.invocation_threshold
+    }
+
+    /// Record one invocation of the given method. Returns the updated count.
+    pub fn record_invocation(&self, class: &str, method: &str, desc: &str) -> u64 {
+        let mut map = self.profiles.write().unwrap();
+        let profile = map
+            .entry((class.to_string(), method.to_string(), desc.to_string()))
+            .or_default();
+        profile.invocations += 1;
+        profile.invocations
+    }
+
+    /// Record one backedge (loop iteration) in the given method. Returns the updated count.
+    pub fn record_backedge(&self, class: &str, method: &str, desc: &str) -> u64 {
+        let mut map = self.profiles.write().unwrap();
+        let profile = map
+            .entry((class.to_string(), method.to_string(), desc.to_string()))
+            .or_default();
+        profile.backedge_count += 1;
+        profile.backedge_count
+    }
+
+    /// Return the current invocation count for a method (0 if not yet profiled).
+    pub fn get_invocation_count(&self, class: &str, method: &str, desc: &str) -> u64 {
+        self.profiles
+            .read()
+            .unwrap()
+            .get(&(class.to_string(), method.to_string(), desc.to_string()))
+            .map(|p| p.invocations)
+            .unwrap_or(0)
+    }
+
+    /// Return the current backedge count for a method (0 if not yet profiled).
+    pub fn get_backedge_count(&self, class: &str, method: &str, desc: &str) -> u64 {
+        self.profiles
+            .read()
+            .unwrap()
+            .get(&(class.to_string(), method.to_string(), desc.to_string()))
+            .map(|p| p.backedge_count)
+            .unwrap_or(0)
     }
 
     pub fn install_code(&self, method_key: String, code: CompiledCode) {
@@ -285,12 +357,83 @@ impl JitCompiler {
             .copied()
     }
 
+    /// Returns `(compiled_method_count, total_code_bytes, interpreter_only_count)`.
+    pub fn code_cache_stats(&self) -> (usize, usize, usize) {
+        let cache = self.compiled_code.read().unwrap();
+        let count = cache.len();
+        let bytes: usize = cache.values().map(|c| c.code_buffer.len()).sum();
+        let io_count = self.interpreter_only.read().unwrap().len();
+        (count, bytes, io_count)
+    }
+
     pub fn get_compiled_code(&self, method_key: &str) -> Option<CompiledCode> {
         self.compiled_code.read().unwrap().get(method_key).cloned()
     }
 
     pub fn isa(&self) -> &dyn TargetIsa {
         &*self.isa
+    }
+
+    /// Maximum bytecode length for an inline candidate.
+    const INLINE_BYTECODE_LIMIT: usize = 10;
+
+    /// Access flags: ACC_STATIC, ACC_PRIVATE, ACC_FINAL.
+    const ACC_STATIC: u16 = 0x0008;
+    const ACC_PRIVATE: u16 = 0x0002;
+    const ACC_FINAL: u16 = 0x0010;
+
+    /// Try to locate `class::method desc` in `classes` and return an
+    /// [`InlineCandidate`] if the method is eligible for inlining:
+    ///   - has bytecode (not native)
+    ///   - is static, private, or final
+    ///   - has ≤ 10 bytecodes
+    ///   - has no exception handlers
+    pub fn find_inline_candidate(
+        &self,
+        classes: &std::collections::HashMap<String, RuntimeClass>,
+        class: &str,
+        method: &str,
+        desc: &str,
+    ) -> Option<InlineCandidate> {
+        let rc = classes.get(class)?;
+        let cm = rc.methods.get(&(method.to_string(), desc.to_string()))?;
+        let m = match cm {
+            ClassMethod::Bytecode(m) => m,
+            ClassMethod::Native => return None,
+        };
+        let is_eligible = (m.access_flags & Self::ACC_STATIC != 0)
+            || (m.access_flags & Self::ACC_PRIVATE != 0)
+            || (m.access_flags & Self::ACC_FINAL != 0);
+        if !is_eligible {
+            return None;
+        }
+        if m.code.len() > Self::INLINE_BYTECODE_LIMIT {
+            return None;
+        }
+        if !m.exception_handlers.is_empty() {
+            return None;
+        }
+        Some(InlineCandidate {
+            class: class.to_string(),
+            method: method.to_string(),
+            descriptor: desc.to_string(),
+            bytecodes: m.code.clone(),
+        })
+    }
+
+    /// Returns `true` when the named method is eligible for inlining.
+    ///
+    /// Delegates to [`Self::find_inline_candidate`]; see that function for the
+    /// eligibility criteria.
+    pub fn can_inline(
+        &self,
+        classes: &std::collections::HashMap<String, RuntimeClass>,
+        class: &str,
+        method: &str,
+        desc: &str,
+    ) -> bool {
+        self.find_inline_candidate(classes, class, method, desc)
+            .is_some()
     }
 
     pub fn compile(&self, method: &Method) -> Result<CompiledCode, String> {
@@ -1012,5 +1155,52 @@ mod tests {
             Some(DeoptReason::NullCheck),
             "second call should overwrite the first reason"
         );
+    }
+
+    // ── constant_fold_bytecode tests ──────────────────────────────────────────
+
+    #[test]
+    fn constant_fold_no_change_returns_none() {
+        use super::constant_fold_bytecode;
+        // iconst_0, iadd — only one iconst before iadd, nothing to fold
+        let no_fold = &[0x03u8, 0x60];
+        assert!(constant_fold_bytecode(no_fold).is_none());
+    }
+
+    #[test]
+    fn constant_fold_iconst_add() {
+        use super::constant_fold_bytecode;
+        // iconst_2 (0x05), iconst_3 (0x06), iadd (0x60) => iconst_5 (0x08), nop, nop
+        let code = &[0x05u8, 0x06, 0x60];
+        let result = constant_fold_bytecode(code).expect("should fold iconst_2 + iconst_3");
+        assert_eq!(result[0], 0x08, "result should be iconst_5");
+        assert_eq!(result[1], 0x00, "slot 1 should be nop");
+        assert_eq!(result[2], 0x00, "slot 2 should be nop");
+    }
+
+    #[test]
+    fn constant_fold_iconst_sub() {
+        use super::constant_fold_bytecode;
+        // iconst_5 (0x08), iconst_2 (0x05), isub (0x64) => iconst_3 (0x06), nop, nop
+        let code = &[0x08u8, 0x05, 0x64];
+        let result = constant_fold_bytecode(code).expect("should fold iconst_5 - iconst_2");
+        assert_eq!(result[0], 0x06, "result should be iconst_3");
+    }
+
+    #[test]
+    fn constant_fold_iconst_mul() {
+        use super::constant_fold_bytecode;
+        // iconst_1 (0x04), iconst_4 (0x07), imul (0x68) => iconst_4 (0x07), nop, nop
+        let code = &[0x04u8, 0x07, 0x68];
+        let result = constant_fold_bytecode(code).expect("should fold iconst_1 * iconst_4");
+        assert_eq!(result[0], 0x07, "result should be iconst_4");
+    }
+
+    #[test]
+    fn constant_fold_out_of_range_returns_none() {
+        use super::constant_fold_bytecode;
+        // iconst_5 (0x08), iconst_5 (0x08), imul (0x68) => 25, not in [-1,5], no fold
+        let code = &[0x08u8, 0x08, 0x68];
+        assert!(constant_fold_bytecode(code).is_none(), "25 is out of iconst range, should not fold");
     }
 }

@@ -459,6 +459,11 @@ pub enum ClassFileError {
         attribute: String,
         reason: String,
     },
+    VerificationFailed {
+        class_name: String,
+        method_name: String,
+        reason: String,
+    },
 }
 
 impl fmt::Display for ClassFileError {
@@ -491,6 +496,12 @@ impl fmt::Display for ClassFileError {
             Self::InvalidModifiedUtf8 => write!(f, "invalid modified UTF-8 in class file"),
             Self::InvalidAttribute { attribute, reason } => {
                 write!(f, "invalid {attribute} attribute: {reason}")
+            }
+            Self::VerificationFailed { class_name, method_name, reason } => {
+                write!(
+                    f,
+                    "bytecode verification failed for {class_name}.{method_name}: {reason}"
+                )
             }
         }
     }

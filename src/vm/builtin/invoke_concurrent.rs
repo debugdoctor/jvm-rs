@@ -1578,6 +1578,42 @@ pub(super) fn invoke_concurrent(
             Ok(Some(Value::Double(0.0)))
         }
         ("java/util/concurrent/atomic/DoubleAdder", "<init>", "()V") => Ok(None),
+        // --- LockSupport ---
+        ("java/util/concurrent/locks/LockSupport", "park", "()V")
+        | ("java/util/concurrent/locks/LockSupport", "park", "(Ljava/lang/Object;)V") => {
+            vm.lock_support_park(None);
+            Ok(None)
+        }
+        ("java/util/concurrent/locks/LockSupport", "parkNanos", "(J)V") => {
+            let nanos = args[0].as_long().unwrap_or(0).max(0) as u64;
+            vm.lock_support_park(Some(std::time::Duration::from_nanos(nanos)));
+            Ok(None)
+        }
+        ("java/util/concurrent/locks/LockSupport", "parkNanos", "(Ljava/lang/Object;J)V") => {
+            let nanos = args[1].as_long().unwrap_or(0).max(0) as u64;
+            vm.lock_support_park(Some(std::time::Duration::from_nanos(nanos)));
+            Ok(None)
+        }
+        ("java/util/concurrent/locks/LockSupport", "parkUntil", "(J)V")
+        | ("java/util/concurrent/locks/LockSupport", "parkUntil", "(Ljava/lang/Object;J)V") => {
+            vm.lock_support_park(Some(std::time::Duration::from_secs(1)));
+            Ok(None)
+        }
+        ("java/util/concurrent/locks/LockSupport", "unpark", "(Ljava/lang/Thread;)V") => {
+            let thread_ref = args[0].as_reference().unwrap_or(Reference::Null);
+            vm.lock_support_unpark(thread_ref);
+            Ok(None)
+        }
+        (
+            "java/util/concurrent/locks/LockSupport",
+            "getBlocker",
+            "(Ljava/lang/Thread;)Ljava/lang/Object;",
+        ) => Ok(Some(Value::Reference(Reference::Null))),
+        (
+            "java/util/concurrent/locks/LockSupport",
+            "setCurrentBlocker",
+            "(Ljava/lang/Object;)V",
+        ) => Ok(None),
         _ => Err(VmError::UnhandledException {
             class_name: "".to_string(),
         }),
